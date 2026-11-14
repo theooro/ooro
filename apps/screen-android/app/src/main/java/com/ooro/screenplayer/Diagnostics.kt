@@ -49,6 +49,8 @@ data class DiagnosticsState(
     val verifiedAssets: Int = 0,
     val missingAssets: Int = 0,
     val proofQueued: Int = 0,
+    val activeLayout: String? = null,
+    val activeLayoutVersion: Int? = null,
     val lastDiagnosis: String? = null,
     val message: String? = null
 )
@@ -88,6 +90,37 @@ fun sanitizeDiagnosticError(message: String?): String = (message ?: "Unknown net
     .take(180)
 
 data class DeviceNetworkInfo(val type: String, val internet: Boolean, val localNetwork: Boolean, val ip: String?)
+
+data class DeviceManagementStatus(
+    val homeResolution: String,
+    val deviceOwner: Boolean,
+    val lockTaskAllowlisted: Boolean,
+    val lockTaskActive: Boolean,
+)
+
+fun deviceManagementStatus(context: Context): DeviceManagementStatus {
+    val packageName = context.packageName
+    val home = runCatching {
+        val intent = android.content.Intent(android.content.Intent.ACTION_MAIN).addCategory(android.content.Intent.CATEGORY_HOME)
+        context.packageManager.resolveActivity(intent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+            ?.activityInfo?.packageName
+    }.getOrNull()
+    val owner = runCatching { context.getSystemService(android.app.admin.DevicePolicyManager::class.java).isDeviceOwnerApp(packageName) }.getOrDefault(false)
+    val allowlisted = owner && runCatching { context.getSystemService(android.app.admin.DevicePolicyManager::class.java).isLockTaskPermitted(packageName) }.getOrDefault(false)
+    val active = runCatching {
+        val manager = context.getSystemService(android.app.ActivityManager::class.java)
+        manager.lockTaskModeState != android.app.ActivityManager.LOCK_TASK_MODE_NONE &&
+            manager.appTasks.any { it.taskInfo.topActivity?.packageName == packageName }
+    }.getOrDefault(false)
+    return deviceManagementStatus(packageName, home, owner, allowlisted, active)
+}
+
+internal fun deviceManagementStatus(packageName: String, resolvedHomePackage: String?, owner: Boolean, allowlisted: Boolean, lockTaskActive: Boolean) = DeviceManagementStatus(
+    homeResolution = when (resolvedHomePackage) { packageName -> "OORO"; null -> "Unverified"; else -> "Other app" },
+    deviceOwner = owner,
+    lockTaskAllowlisted = owner && allowlisted,
+    lockTaskActive = lockTaskActive,
+)
 
 fun networkInfo(context: Context): DeviceNetworkInfo {
     val cm = context.getSystemService(ConnectivityManager::class.java)

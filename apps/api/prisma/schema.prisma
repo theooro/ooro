@@ -428,6 +428,7 @@ model Display {
   batteryLevel              Int?
   chargingState             String?
   lastNetworkType           String?
+  supportsSponsoredSlot     Boolean                     @default(false)
   createdAt                 DateTime                    @default(now())
   updatedAt                 DateTime                    @updatedAt
   pairingCodes              DisplayPairingCode[]
@@ -830,6 +831,8 @@ model DisplayHeartbeat {
   networkType        String?
   networkConnected   Boolean?
   manifestVersion    Int?
+  activeLayout       String?
+  layoutContractVersion Int?
   currentCreativeId  String?
   playbackState      String?
   screenState        String?
@@ -874,6 +877,7 @@ model DisplayLocationEvent {
 model DisplayCommand {
   id             String    @id @default(uuid()) @db.Uuid
   displayId      String    @db.Uuid
+  idempotencyKey String?
   commandType    String
   payload        Json?
   status         String    @default("QUEUED")
@@ -881,10 +885,12 @@ model DisplayCommand {
   deliveredAt    DateTime?
   acknowledgedAt DateTime?
   failedAt       DateTime?
+  cancelledAt    DateTime?
   expiresAt      DateTime?
   error          String?
   display        Display   @relation(fields: [displayId], references: [id], onDelete: Cascade)
 
+  @@unique([displayId, idempotencyKey])
   @@index([displayId, status])
 }
 

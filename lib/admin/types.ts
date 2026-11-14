@@ -16,7 +16,10 @@ export interface Screen {
   currentCampaignId?: string | null; currentCampaignName?: string | null; currentCreativeId?: string | null; currentCreativeName?: string | null;
   currentCreativeUrl?: string | null; currentCreativeMimeType?: string | null; currentCreativeFileName?: string | null;
   playbackState?: string | null; playbackStartedAt?: string | null; playbackPositionMs?: number | null; expectedDurationMs?: number | null;
-  manifestVersion?: number | null; networkType?: string | null; appVersion?: string | null;
+  manifestVersion?: number | null; networkType?: string | null; appVersion?: string | null; playerUpdateStatus?: "UP_TO_DATE" | "UPDATE_AVAILABLE" | "UNKNOWN";
+  currentCreativeTrust?: "VERIFIED_RECENT_PROOF" | "UNKNOWN"; currentLayout?: string | null; currentLayoutVersion?: number | null; layoutReportStatus?: "CURRENT" | "STALE" | "UNREPORTED"; assignedLayout?: string | null; assignedLayoutVersion?: number | null;
+  lastSuccessfulSync?: string | null; latestProof?: { creativeId?: string | null; campaignId?: string | null; playbackStartedAt?: string; slot?: string; status?: string } | null;
+  latestCommand?: DeviceCommand | null; diagnostics?: { networkType?: string | null; networkConnected?: boolean | null; storageFreeBytes?: number | null; storageTotalBytes?: number | null; playerState?: string | null; manifestVersion?: number | null; activeLayout?: string | null; layoutContractVersion?: number | null; layoutReportedAt?: string | null } | null;
 }
 export interface DeviceHeartbeat {
   id: string; screenId: string; deviceId: string; timestamp: string; appVersion: string; appVersionCode?: number;
@@ -35,5 +38,5 @@ export interface DeviceHealth extends DeviceHeartbeat { connectivity: Connectivi
 export interface DeviceActivity { id: string; screenId: string; type: string; timestamp: string; detail?: string }
 export interface PairingCode { code: string; screenId: string; status: "ACTIVE" | "USED" | "EXPIRED" | "REVOKED"; expiresAt: string; createdAt: string }
 export interface CreateScreenInput { screenName: string; screenType: ScreenType; city: string; area: string; vehicleId?: string; inventoryId?: string; notes?: string }
-export interface DeviceCommand { id: string; screenId: string; type: "SYNC_NOW" | "REFRESH_MANIFEST" | "RESTART_PLAYER" | "REBOOT_DEVICE" | "UNPAIR"; status: "QUEUED" | "DELIVERED" | "ACKNOWLEDGED" | "SUCCESS" | "FAILED" | "EXPIRED"; createdAt: string }
+export interface DeviceCommand { id: string; screenId: string; type: "SYNC_NOW" | "SYNC_MANIFEST" | "REFRESH_MANIFEST" | "HEALTH_CHECK" | "RESTART_PLAYER" | "REBOOT_DEVICE" | "UNPAIR"; status: "QUEUED" | "DELIVERED" | "RECEIVED" | "PROCESSING" | "ACKNOWLEDGED" | "SUCCESS" | "SUCCEEDED" | "FAILED" | "EXPIRED" | "CANCELLED"; createdAt: string; deliveredAt?: string | null; acknowledgedAt?: string | null; failedAt?: string | null; cancelledAt?: string | null; expiresAt?: string | null; error?: string | null }
 export interface ScreenFilters { search?: string; status?: ConnectivityStatus; pairing?: PairingStatus; screenType?: ScreenType; city?: string; area?: string; appVersion?: string; manifestVersion?: string; issuesOnly?: boolean; sort?: "heartbeat" | "name" | "app" | "storage" | "created" | "status" }

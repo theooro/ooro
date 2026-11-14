@@ -18,7 +18,14 @@ import java.time.Instant
 import java.time.DayOfWeek
 import java.time.LocalTime
 
-data class DeviceCommand(val id: String, val type: String, val payload: JSONObject?, val expiresAt: Instant?)
+data class DeviceCommand(
+    val id: String,
+    val type: String,
+    val payload: JSONObject?,
+    val expiresAt: Instant?,
+    val displayId: String? = null,
+    val status: String? = null,
+)
 data class CommandResult(val commandId: String, val deviceId: String, val status: String, val receivedAt: Instant, val startedAt: Instant?, val completedAt: Instant?, val errorCode: String? = null, val errorMessage: String? = null)
 data class ProofUploadResult(val accepted: Int, val acceptedEventIds: Set<String> = emptySet())
 enum class DeviceFailureKind { DNS_ERROR, CONNECTION_REFUSED, TIMEOUT, TLS_ERROR, NETWORK_UNAVAILABLE, AUTH_EXPIRED, AUTH_INVALID, AUTH_REVOKED, DEVICE_NOT_FOUND, PAIRING_REQUIRED, SERVER_UNAVAILABLE, REQUEST_FAILED }
@@ -71,7 +78,28 @@ class HttpDeviceApi(private val baseUrl: String) : DeviceApi {
     override suspend fun health() { request("/api/health", "GET", null) }
     override suspend fun pair(request: PairRequest): PairResponse { val json = request.toJson(); val body = request("/api/device/pair", "POST", null, json); val envelope = JSONObject(body); val obj = envelope.optJSONObject("data") ?: envelope; return PairResponse(DeviceCredentials(request.deviceId, obj.getString("screenId"), obj.optString("workspaceId"), obj.getString("deviceToken"), obj.optString("deviceName", "OORO Screen"))) }
     override suspend fun manifest(credentials: DeviceCredentials): DeviceManifest { com.ooro.screenplayer.RuntimeDiagnostics.increment(com.ooro.screenplayer.RuntimeDiagnostics.Counter.MANIFEST_REQUEST); val envelope = JSONObject(request("/api/device/manifest", "GET", credentials.token)); return ManifestCodec.parse((envelope.optJSONObject("data") ?: envelope).toString()) }
-    override suspend fun heartbeat(credentials: DeviceCredentials, status: PlayerStatus, manifestVersion: Long, telemetry: HeartbeatTelemetry) { com.ooro.screenplayer.RuntimeDiagnostics.increment(com.ooro.screenplayer.RuntimeDiagnostics.Counter.HEARTBEAT_REQUEST); val location = telemetry.location; request("/api/device/heartbeat", "POST", credentials.token, JSONObject().put("screenId", credentials.screenId).put("deviceId", credentials.deviceId).put("status", status.name).put("screenState", status.name).put("playbackState", telemetry.playbackState).put("manifestVersion", manifestVersion).put("appVersion", BuildConfig.VERSION_NAME).put("androidVersion", android.os.Build.VERSION.RELEASE).put("manufacturer", android.os.Build.MANUFACTURER).put("model", android.os.Build.MODEL).put("currentCampaignId", telemetry.campaignId).put("currentCreativeId", telemetry.creativeId).put("currentAssetId", telemetry.assetId).put("playbackStartedAt", telemetry.playbackStartedAt?.toString()).put("playbackPositionMs", telemetry.playbackPositionMs).put("expectedDurationMs", telemetry.expectedDurationMs).put("latitude", location?.latitude).put("longitude", location?.longitude).put("accuracyMeters", location?.accuracyMeters).put("speedMps", location?.speedMps).put("headingDegrees", location?.headingDegrees).put("locationOccurredAt", location?.occurredAt?.let { Instant.ofEpochMilli(it).toString() }).put("timestamp", Instant.now().toString()).toString()) }
+    override suspend fun heartbeat(credentials: DeviceCredentials, status: PlayerStatus, manifestVersion: Long, telemetry: HeartbeatTelemetry) {
+        com.ooro.screenplayer.RuntimeDiagnostics.increment(com.ooro.screenplayer.RuntimeDiagnostics.Counter.HEARTBEAT_REQUEST)
+        val location = telemetry.location
+        request("/api/device/heartbeat", "POST", credentials.token, JSONObject()
+            .put("screenId", credentials.screenId).put("deviceId", credentials.deviceId)
+            .put("status", status.name).put("screenState", status.name).put("playbackState", telemetry.playbackState)
+            .put("manifestVersion", manifestVersion).put("appVersion", BuildConfig.VERSION_NAME)
+            .put("supportsSponsoredSlot", true)
+            .put("deviceVersion", android.os.Build.DISPLAY.takeIf(String::isNotBlank))
+            .put("androidVersion", android.os.Build.VERSION.RELEASE).put("manufacturer", android.os.Build.MANUFACTURER)
+            .put("model", android.os.Build.MODEL).put("storageFree", telemetry.storageFreeBytes)
+            .put("storageTotal", telemetry.storageTotalBytes).put("networkType", telemetry.networkType)
+            .put("networkConnected", telemetry.networkConnected).put("activeLayout", telemetry.activeLayout)
+            .put("layoutContractVersion", telemetry.layoutContractVersion).put("currentCampaignId", telemetry.campaignId)
+            .put("currentCreativeId", telemetry.creativeId).put("currentAssetId", telemetry.assetId)
+            .put("playbackStartedAt", telemetry.playbackStartedAt?.toString()).put("playbackPositionMs", telemetry.playbackPositionMs)
+            .put("expectedDurationMs", telemetry.expectedDurationMs).put("latitude", location?.latitude)
+            .put("longitude", location?.longitude).put("accuracyMeters", location?.accuracyMeters)
+            .put("speedMps", location?.speedMps).put("headingDegrees", location?.headingDegrees)
+            .put("locationOccurredAt", location?.occurredAt?.let { Instant.ofEpochMilli(it).toString() })
+            .put("timestamp", Instant.now().toString()).toString())
+    }
     override suspend fun uploadProof(credentials: DeviceCredentials, events: List<ProofOfPlay>): ProofUploadResult {
         val payload = JSONArray().apply {
             events.forEach { event ->
@@ -87,8 +115,23 @@ class HttpDeviceApi(private val baseUrl: String) : DeviceApi {
         } ?: if (accepted >= events.size) events.map { it.eventId }.toSet() else emptySet()
         return ProofUploadResult(accepted, acceptedIds)
     }
-    override suspend fun pendingCommands(credentials: DeviceCredentials): List<DeviceCommand> { val root = JSONObject(request("/api/device/commands", "GET", credentials.token)); val values = root.optJSONArray("data") ?: root.optJSONArray("commands") ?: org.json.JSONArray(); return (0 until values.length()).map { val j = values.getJSONObject(it); val expiresAt = j.optString("expiresAt").takeIf { value -> value.isNotBlank() && value != "null" }?.let(Instant::parse); DeviceCommand(j.getString("id"), j.getString("commandType"), j.optJSONObject("payload"), expiresAt) } }
-    override suspend fun acknowledgeCommand(credentials: DeviceCredentials, result: CommandResult) { request("/api/device/commands/${result.commandId}/ack", "POST", credentials.token, JSONObject().put("status", result.status).put("receivedAt", result.receivedAt.toString()).put("startedAt", result.startedAt?.toString()).put("completedAt", result.completedAt?.toString()).put("errorCode", result.errorCode).put("errorMessage", result.errorMessage).toString()) }
+    override suspend fun pendingCommands(credentials: DeviceCredentials): List<DeviceCommand> {
+        val root = JSONObject(request("/api/device/commands", "GET", credentials.token))
+        val values = root.optJSONArray("data") ?: root.optJSONArray("commands") ?: JSONArray()
+        return (0 until values.length()).map { index ->
+            val item = values.getJSONObject(index)
+            val expiresAt = item.optString("expiresAt").takeIf { it.isNotBlank() && it != "null" }?.let(Instant::parse)
+            DeviceCommand(item.getString("id"), item.getString("commandType"), item.optJSONObject("payload"), expiresAt,
+                item.optString("displayId").takeIf(String::isNotBlank), item.optString("status").takeIf(String::isNotBlank))
+        }
+    }
+    override suspend fun acknowledgeCommand(credentials: DeviceCredentials, result: CommandResult) {
+        require(result.commandId.matches(Regex("^[0-9a-fA-F-]{36}$"))) { "invalid command id" }
+        request("/api/device/commands/${result.commandId}/ack", "POST", credentials.token, JSONObject()
+            .put("status", result.status).put("receivedAt", result.receivedAt.toString())
+            .put("startedAt", result.startedAt?.toString()).put("completedAt", result.completedAt?.toString())
+            .put("errorCode", result.errorCode).put("errorMessage", result.errorMessage?.take(180)).toString())
+    }
     override suspend fun unpair(credentials: DeviceCredentials) { request("/api/device/unpair", "POST", credentials.token) }
     private fun PairRequest.toJson() = JSONObject().put("pairingCode", pairingCode).put("deviceId", deviceId).put("manufacturer", manufacturer).put("model", model).put("androidVersion", androidVersion).put("appVersion", BuildConfig.VERSION_NAME).toString()
 }

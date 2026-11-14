@@ -15,6 +15,7 @@ import com.ooro.deviceagent.install.ApkInstaller
 import com.ooro.deviceagent.install.installedPackageCertificateSha256
 import com.ooro.deviceagent.install.installedPackageMatches
 import com.ooro.deviceagent.install.validateApk
+import com.ooro.deviceagent.install.validateReleaseMetadata
 import com.ooro.deviceagent.model.DeviceCredentials
 import com.ooro.deviceagent.network.DeviceOsApi
 import kotlinx.coroutines.Dispatchers
@@ -43,9 +44,11 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         }
     }
     private suspend fun process(credentials: DeviceCredentials, target: com.ooro.deviceagent.model.DeploymentTarget) {
+        if (!target.id.matches(Regex("^[0-9a-fA-F-]{36}$")) || !runCatching { java.util.UUID.fromString(target.id) }.isSuccess) return
         if (deploymentWorkDeferred(target.campaignState)) return
         target.nextAttemptAt?.let { runCatching { java.time.Instant.parse(it) }.getOrNull()?.let { next -> if (next.isAfter(java.time.Instant.now())) return } }
         if (target.release.packageName == "com.ooro.screenplayer" && !withinMaintenanceWindow(target.maintenanceWindowStart, target.maintenanceWindowEnd)) return
+        validateReleaseMetadata(target.release, android.os.Build.VERSION.SDK_INT)
         val dao = db.installStates(); val existing = dao.get(target.id); val id = "${target.id}:${target.attemptNumber}"
         val retryingLocalFailure = reopensLocalFailureForRetry(existing?.state.orEmpty(), target.state)
         if (target.state == "RETRY_WAIT") {
@@ -66,11 +69,6 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                 api.report(credentials, target.id, "FAILED", "$id:installer-failed", JSONObject().put("errorCode", errorCode).put("errorMessage", errorCode).put("installerStatus", errorCode))
             }.onFailure { if (isCredentialTerminal(it)) store.clear() }
             return
-        }
-        if (existing?.state == "INSTALLED" && target.state in setOf("INSTALLING", "PENDING_USER_ACTION")) {
-            runCatching {
-                api.report(credentials, target.id, "INSTALLED", "$id:installed", JSONObject().put("installerStatus", "SUCCESS"))
-            }.onFailure { if (isCredentialTerminal(it)) store.clear() }
         }
         if (existing?.state == "INSTALLING") {
             val sessionInfo = existing.sessionId?.let { runCatching { applicationContext.packageManager.packageInstaller.getSessionInfo(it) }.getOrNull() }
@@ -93,27 +91,41 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             return
         }
         if (existing?.state == "INSTALLED" || existing?.state == "HEALTH_CHECK") {
-            api.report(credentials, target.id, "HEALTH_CHECK", "$id:health-check")
             val packageInfo = runCatching { applicationContext.packageManager.getPackageInfo(target.release.packageName, 0) }.getOrNull()
             val installedVersion = packageInfo?.let { if (android.os.Build.VERSION.SDK_INT >= 28) it.longVersionCode else @Suppress("DEPRECATION") it.versionCode.toLong() }
             if (installedVersion != null && installedPackageMatches(applicationContext, target.release)) {
-                dao.put(InstallStateEntity(target.id, "HEALTHY", localPath = existing.localPath)); api.report(credentials, target.id, "HEALTHY", "$id:healthy", org.json.JSONObject().put("healthStatus", "HEALTHY").put("installedVersionCode", installedVersion).put("installedCertificateSha256", installedPackageCertificateSha256(applicationContext, target.release.packageName)))
+                val installedCertificate = installedPackageCertificateSha256(applicationContext, target.release.packageName)
+                if (target.state in setOf("INSTALLING", "PENDING_USER_ACTION")) {
+                    api.report(credentials, target.id, "INSTALLED", "$id:installed-verified", JSONObject().put("installerStatus", "SUCCESS").put("installedVersionCode", installedVersion).put("installedCertificateSha256", installedCertificate))
+                }
+                api.report(credentials, target.id, "HEALTH_CHECK", "$id:health-check")
+                dao.put(InstallStateEntity(target.id, "HEALTHY", localPath = existing.localPath)); api.report(credentials, target.id, "HEALTHY", "$id:healthy", org.json.JSONObject().put("healthStatus", "HEALTHY").put("installedVersionCode", installedVersion).put("installedCertificateSha256", installedCertificate))
             } else {
                 dao.put(InstallStateEntity(target.id, "FAILED", localPath = existing.localPath, error = "HEALTH_CHECK_VERSION_MISMATCH")); api.report(credentials, target.id, "FAILED", "$id:health-failed", org.json.JSONObject().put("errorCode", "HEALTH_CHECK_VERSION_MISMATCH").put("healthStatus", "FAILED"))
             }
             return
         }
-        val dir = File(applicationContext.filesDir, "deviceos-apks").apply { mkdirs() }; val apk = File(dir, "${target.release.id}.apk")
+        val dir = File(applicationContext.filesDir, "deviceos-apks").apply { mkdirs() }
+        val apk = File(dir, "${target.release.id}-${target.id}.apk")
+        val stagedApk = File(dir, "${target.release.id}-${target.id}.apk.part")
         try {
             if (existing?.state != "DOWNLOADED" && existing?.state != "VERIFIED" && existing?.state != "INSTALLING") {
-                dao.put(InstallStateEntity(target.id, "DOWNLOADING", localPath = apk.absolutePath)); api.report(credentials, target.id, "DOWNLOADING", "$id:downloading")
+                dao.put(InstallStateEntity(target.id, "DOWNLOADING", localPath = stagedApk.absolutePath)); api.report(credentials, target.id, "DOWNLOADING", "$id:downloading")
                 val free = StatFs(applicationContext.filesDir.absolutePath).availableBytes
                 if (free < target.release.sizeBytes * 2) error("INSUFFICIENT_STORAGE")
-                api.download(credentials, target.release.id, apk, target.release.sizeBytes); dao.put(InstallStateEntity(target.id, "DOWNLOADED", localPath = apk.absolutePath)); api.report(credentials, target.id, "DOWNLOADED", "$id:downloaded", JSONObject().put("bytesDownloaded", apk.length()))
+                api.download(credentials, target.release.id, stagedApk, target.release.sizeBytes); dao.put(InstallStateEntity(target.id, "DOWNLOADED", localPath = stagedApk.absolutePath)); api.report(credentials, target.id, "DOWNLOADED", "$id:downloaded", JSONObject().put("bytesDownloaded", stagedApk.length()))
             }
-            validateApk(applicationContext, apk, target.release); dao.put(InstallStateEntity(target.id, "VERIFIED", localPath = apk.absolutePath)); api.report(credentials, target.id, "VERIFIED", "$id:verified", JSONObject().put("checksumVerified", true))
+            val candidate = existing?.localPath?.let(::File)?.takeIf { it.exists() } ?: stagedApk
+            validateApk(applicationContext, candidate, target.release)
+            if (candidate.absolutePath != apk.absolutePath) {
+                if (apk.exists()) apk.delete()
+                if (!candidate.renameTo(apk)) error("APK_STAGE_PROMOTION_FAILED")
+            }
+            validateApk(applicationContext, apk, target.release)
+            dao.put(InstallStateEntity(target.id, "VERIFIED", localPath = apk.absolutePath)); api.report(credentials, target.id, "VERIFIED", "$id:verified", JSONObject().put("checksumVerified", true).put("packageVerified", true).put("versionVerified", true).put("signingIdentityVerified", true))
             val sessionId = ApkInstaller(applicationContext, db).install(target.id, apk, target.release); api.report(credentials, target.id, "INSTALLING", "$id:installing", JSONObject().put("installerSessionId", sessionId.toString()))
         } catch (error: Throwable) {
+            if (stagedApk.exists()) stagedApk.delete()
             if (isCredentialTerminal(error)) {
                 store.clear()
                 return
@@ -139,13 +151,15 @@ internal fun withinMaintenanceWindow(start: String?, end: String?): Boolean {
 internal fun restartInstallSessionRequiresReconciliation(sessionExists: Boolean, sessionActive: Boolean): Boolean = !sessionExists || !sessionActive
 
 internal fun reopensLocalFailureForRetry(localState: String, targetState: String): Boolean = localState == "FAILED" && targetState in setOf("ASSIGNED", "RETRY_WAIT")
-internal fun deploymentWorkDeferred(campaignState: String): Boolean = campaignState == "PAUSED"
+internal fun deploymentWorkDeferred(campaignState: String): Boolean = campaignState != "ACTIVE"
 
 object WorkScheduler {
     fun enqueue(context: Context) { val networkType = if (BuildConfig.DEBUG && BuildConfig.API_BASE_URL.startsWith("http://127.0.0.1")) NetworkType.NOT_REQUIRED else NetworkType.CONNECTED; val constraints = Constraints.Builder().setRequiredNetworkType(networkType).build(); val request = PeriodicWorkRequestBuilder<SyncWorker>(15, java.util.concurrent.TimeUnit.MINUTES).setConstraints(constraints).build(); WorkManager.getInstance(context).enqueueUniquePeriodicWork("deviceos-sync", ExistingPeriodicWorkPolicy.KEEP, request); WorkManager.getInstance(context).enqueueUniqueWork("deviceos-sync-now", ExistingWorkPolicy.REPLACE, OneTimeWorkRequestBuilder<SyncWorker>().setConstraints(constraints).build()) }
 }
 
-fun capabilities(context: Context): JSONObject { val cm = context.getSystemService(ConnectivityManager::class.java); val network = cm.activeNetwork; val caps = network?.let(cm::getNetworkCapabilities); val stat = StatFs(context.filesDir.absolutePath); val memory = ActivityManager.MemoryInfo().also { context.getSystemService(ActivityManager::class.java).getMemoryInfo(it) }; val loadAverage = runCatching { java.io.File("/proc/loadavg").bufferedReader().use { it.readLine().substringBefore(' ').toDouble() } }.getOrNull(); return JSONObject().put("deviceOwner", context.getSystemService(android.app.admin.DevicePolicyManager::class.java).isDeviceOwnerApp(context.packageName)).put("androidSdkInt", android.os.Build.VERSION.SDK_INT).put("networkConnected", caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true).put("networkType", when { caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true -> "WIFI"; caps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true -> "CELLULAR"; else -> "OTHER" }).put("storageFreeBytes", stat.availableBytes).put("storageTotalBytes", stat.totalBytes).put("memoryAvailableBytes", memory.availMem).put("memoryTotalBytes", memory.totalMem).put("lowMemory", memory.lowMemory).put("cpuLoad1m", loadAverage).put("cpuProcessorCount", Runtime.getRuntime().availableProcessors()).put("observationMode", !context.getSystemService(android.app.admin.DevicePolicyManager::class.java).isDeviceOwnerApp(context.packageName)) }
+fun silentInstallCapability(deviceOwnerConfirmed: Boolean): Boolean? = true.takeIf { deviceOwnerConfirmed }
+
+fun capabilities(context: Context): JSONObject { val cm = context.getSystemService(ConnectivityManager::class.java); val network = cm.activeNetwork; val caps = network?.let(cm::getNetworkCapabilities); val stat = StatFs(context.filesDir.absolutePath); val memory = ActivityManager.MemoryInfo().also { context.getSystemService(ActivityManager::class.java).getMemoryInfo(it) }; val loadAverage = runCatching { java.io.File("/proc/loadavg").bufferedReader().use { it.readLine().substringBefore(' ').toDouble() } }.getOrNull(); val owner = context.getSystemService(android.app.admin.DevicePolicyManager::class.java).isDeviceOwnerApp(context.packageName); val capabilities = JSONObject().put("deviceOwner", owner).put("androidSdkInt", android.os.Build.VERSION.SDK_INT).put("networkConnected", caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true).put("networkType", when { caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true -> "WIFI"; caps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true -> "CELLULAR"; else -> "OTHER" }).put("storageFreeBytes", stat.availableBytes).put("storageTotalBytes", stat.totalBytes).put("memoryAvailableBytes", memory.availMem).put("memoryTotalBytes", memory.totalMem).put("lowMemory", memory.lowMemory).put("cpuLoad1m", loadAverage).put("cpuProcessorCount", Runtime.getRuntime().availableProcessors()).put("observationMode", !owner); silentInstallCapability(owner)?.let { capabilities.put("silentInstall", it) }; return capabilities }
 
 fun inventoryJson(context: Context): JSONArray { val values = JSONArray(); val flags = if (android.os.Build.VERSION.SDK_INT >= 28) android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES else @Suppress("DEPRECATION") android.content.pm.PackageManager.GET_SIGNATURES; val packages = if (android.os.Build.VERSION.SDK_INT >= 33) context.packageManager.getInstalledPackages(android.content.pm.PackageManager.PackageInfoFlags.of(flags.toLong())) else @Suppress("DEPRECATION") context.packageManager.getInstalledPackages(flags); packages.filter { it.packageName != context.packageName }.forEach { info -> values.put(JSONObject().put("packageName", info.packageName).put("versionCode", if (android.os.Build.VERSION.SDK_INT >= 28) info.longVersionCode else @Suppress("DEPRECATION") info.versionCode.toLong()).put("versionName", info.versionName).put("certificateSha256", packageCertificateSha256(info)).put("installSource", "PACKAGE_MANAGER")) }; return values }
 
