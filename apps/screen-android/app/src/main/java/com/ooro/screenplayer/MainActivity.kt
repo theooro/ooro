@@ -9,6 +9,9 @@ import android.graphics.Bitmap
 import android.util.LruCache
 import android.os.SystemClock
 import android.content.Intent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.IntentFilter
 import android.net.Uri
 import android.provider.Settings
 import android.view.WindowManager
@@ -61,6 +64,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.content.ContextCompat
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.media3.ui.PlayerView
 import android.util.Log
@@ -68,6 +72,7 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.MultiFormatWriter
 import com.ooro.screenplayer.kiosk.OoroDeviceAdminReceiver
+import com.ooro.screenplayer.sync.RestartPlayerCoordinator
 import com.ooro.screenplayer.model.*
 import com.ooro.screenplayer.player.Media3CreativePlayer
 import com.ooro.screenplayer.player.CreativeScaleBehavior
@@ -110,6 +115,14 @@ class MainActivity : ComponentActivity() {
     private lateinit var permissionHistory: LocationPermissionHistory
     private lateinit var presentationPreferenceStore: PresentationPreferenceStore
     private var presentationPreference by mutableStateOf(PresentationPreference.AUTO_FROM_MANIFEST)
+    private var restartReceiverRegistered = false
+    private val playerRestartReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == RestartPlayerCoordinator.ACTION && RestartPlayerCoordinator.shouldRestart(this@MainActivity, intent.getStringExtra("requestId"))) {
+                recreate()
+            }
+        }
+    }
     private val locationPermission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         locationPermissionRequestGate.complete()
         if (result.values.any { it }) permissionHistory.recordGranted() else permissionHistory.recordDenied()
@@ -139,6 +152,7 @@ class MainActivity : ComponentActivity() {
     }
     override fun onResume() {
         super.onResume()
+        RestartPlayerCoordinator.activityResumed(applicationContext)
         if (::permissionHistory.isInitialized) {
             val previous = locationPermissionGranted
             refreshLocationState()
@@ -147,6 +161,20 @@ class MainActivity : ComponentActivity() {
                 vm.refreshLocationPermission()
             }
         }
+    }
+    override fun onStart() {
+        super.onStart()
+        if (!restartReceiverRegistered) {
+            ContextCompat.registerReceiver(this, playerRestartReceiver, IntentFilter(RestartPlayerCoordinator.ACTION), ContextCompat.RECEIVER_NOT_EXPORTED)
+            restartReceiverRegistered = true
+        }
+    }
+    override fun onStop() {
+        if (restartReceiverRegistered) {
+            unregisterReceiver(playerRestartReceiver)
+            restartReceiverRegistered = false
+        }
+        super.onStop()
     }
     private fun hasLocationPermission() = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED || checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
     private fun refreshLocationState() {
@@ -1116,6 +1144,7 @@ internal fun technicianStateSubscriptions(section: TechnicianSection): Technicia
     onRepair: () -> Unit
 ) {
     val context = LocalContext.current
+    val management = remember(section) { deviceManagementStatus(context) }
     val sectionScrollState = rememberScrollState()
     var thermalSensors by remember { mutableStateOf<List<String>>(emptyList()) }
     LaunchedEffect(Unit) { thermalSensors = withContext(Dispatchers.IO) { readThermalSensors() } }
@@ -1251,6 +1280,10 @@ internal fun technicianStateSubscriptions(section: TechnicianSection): Technicia
                         TechnicianLine("Backend", backendEnvironment())
                         TechnicianLine("Mock backend", if (BuildConfig.USE_MOCK_BACKEND) "Enabled" else "Disabled")
                         TechnicianLine("DeviceOS Agent", if (agentInstalled) "Installed" else "Not detected")
+                        TechnicianLine("Resolved HOME app", management.homeResolution)
+                        TechnicianLine("OORO Device Owner", if (management.deviceOwner) "Confirmed" else "Not confirmed")
+                        TechnicianLine("OORO Lock Task allowlist", if (management.lockTaskAllowlisted) "Confirmed" else "Not confirmed")
+                        TechnicianLine("OORO Lock Task active", if (management.lockTaskActive) "Active" else "Inactive / unverified")
                         Text("THERMAL SENSORS", color = Color(0xFF9AA4AE), fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 7.dp))
                         if (thermalSensors.isEmpty()) Text("No readable system sensors", color = Color(0xFFB6C0CA), fontSize = 11.sp)
                         else thermalSensors.forEach { Text(it, color = Color(0xFFB6C0CA), fontSize = 11.sp, maxLines = 1) }

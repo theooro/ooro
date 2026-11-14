@@ -48,6 +48,8 @@ class SyncPolicyTest {
     @Test
     fun pausedCampaignDefersAgentWork() {
         assertTrue(deploymentWorkDeferred("PAUSED"))
+        assertTrue(deploymentWorkDeferred("CANCELLED"))
+        assertTrue(deploymentWorkDeferred("UNKNOWN"))
         assertFalse(deploymentWorkDeferred("ACTIVE"))
     }
 }

@@ -9,12 +9,33 @@ import com.ooro.deviceagent.data.AgentDatabase
 import com.ooro.deviceagent.data.AgentDatabaseProvider
 import com.ooro.deviceagent.data.InstallStateEntity
 import com.ooro.deviceagent.model.Release
-import com.ooro.deviceagent.network.sha256
+import com.ooro.deviceagent.network.validateDownloadedArtifact
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.security.MessageDigest
 
 data class ApkValidation(val packageName: String, val versionCode: Long, val certificateSha256: String)
+
+fun validateReleaseMetadata(release: Release, deviceSdk: Int) {
+    if (!release.id.matches(Regex("^[0-9a-fA-F-]{36}$")) || !runCatching { java.util.UUID.fromString(release.id) }.isSuccess) error("RELEASE_ID_INVALID")
+    if (!release.packageName.matches(Regex("^[a-zA-Z][a-zA-Z0-9_]*(?:\\.[a-zA-Z0-9_]+)+$"))) error("RELEASE_PACKAGE_INVALID")
+    if (release.versionCode <= 0L || release.versionName.isBlank()) error("RELEASE_VERSION_INVALID")
+    if (release.minSdk <= 0 || deviceSdk < release.minSdk) error("APK_MIN_SDK_UNSUPPORTED")
+    if (release.sizeBytes <= 0L) error("RELEASE_SIZE_INVALID")
+    if (!release.sha256.matches(Regex("^[0-9a-fA-F]{64}$"))) error("RELEASE_SHA256_INVALID")
+    if (!release.certificateSha256.matches(Regex("^[0-9a-fA-F]{64}$"))) error("RELEASE_SIGNING_IDENTITY_INVALID")
+}
+
+fun validateApkArtifactMetadata(packageName: String, versionCode: Long, certificateSha256: String, release: Release) {
+    if (packageName != release.packageName) error("APK_PACKAGE_MISMATCH")
+    if (versionCode != release.versionCode) error("APK_VERSION_MISMATCH")
+    if (!certificateSha256.equals(release.certificateSha256, true)) error("APK_CERTIFICATE_MISMATCH")
+}
+
+fun validateInstalledSigner(installedCertificateSha256: String?, release: Release) {
+    if (installedCertificateSha256 == null) error("APK_INSTALLED_SIGNER_UNVERIFIED")
+    if (!installedCertificateSha256.equals(release.certificateSha256, true)) error("APK_INSTALLED_SIGNER_MISMATCH")
+}
 
 fun installerCallbackState(status: Int): String = when (status) {
     PackageInstaller.STATUS_SUCCESS -> "INSTALLED"
@@ -37,28 +58,26 @@ fun installedPackageCertificateSha256(context: Context, packageName: String): St
 }
 
 fun validateApk(context: Context, file: File, release: Release): ApkValidation {
-    if (!file.exists() || file.length() != release.sizeBytes) error("APK_SIZE_MISMATCH")
-    if (!sha256(file).equals(release.sha256, true)) error("APK_SHA256_MISMATCH")
-    if (Build.VERSION.SDK_INT < release.minSdk) error("APK_MIN_SDK_UNSUPPORTED")
+    validateReleaseMetadata(release, Build.VERSION.SDK_INT)
+    validateDownloadedArtifact(file, release.sizeBytes, release.sha256)
     val info = context.packageManager.getPackageArchiveInfo(file.absolutePath, if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES) ?: error("APK_PACKAGE_INVALID")
     val packageName = info.packageName ?: error("APK_PACKAGE_MISSING")
-    if (packageName != release.packageName) error("APK_PACKAGE_MISMATCH")
     val versionCode = if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
-    if (versionCode != release.versionCode) error("APK_VERSION_MISMATCH")
     val installed = runCatching { context.packageManager.getPackageInfo(release.packageName, 0) }.getOrNull()
     val installedVersion = installed?.let { if (Build.VERSION.SDK_INT >= 28) it.longVersionCode else @Suppress("DEPRECATION") it.versionCode.toLong() }
     if (installedVersion != null && release.versionCode < installedVersion) error("APK_DOWNGRADE_BLOCKED")
+    if (installed != null) validateInstalledSigner(installedPackageCertificateSha256(context, release.packageName), release)
     if (Build.VERSION.SDK_INT >= 28) {
         val signer = info.signingInfo?.apkContentsSigners?.firstOrNull() ?: error("APK_SIGNATURE_MISSING")
         val cert = MessageDigest.getInstance("SHA-256").digest(signer.toByteArray()).joinToString("") { "%02x".format(it) }
-        if (!cert.equals(release.certificateSha256, true)) error("APK_CERTIFICATE_MISMATCH")
+        validateApkArtifactMetadata(packageName, versionCode, cert, release)
         return ApkValidation(packageName, versionCode, cert)
     }
     @Suppress("DEPRECATION")
     val signer = info.signatures?.firstOrNull() ?: error("APK_SIGNATURE_MISSING")
     @Suppress("DEPRECATION")
     val cert = MessageDigest.getInstance("SHA-256").digest(signer.toByteArray()).joinToString("") { "%02x".format(it) }
-    if (!cert.equals(release.certificateSha256, true)) error("APK_CERTIFICATE_MISMATCH")
+    validateApkArtifactMetadata(packageName, versionCode, cert, release)
     return ApkValidation(packageName, versionCode, cert)
 }
 

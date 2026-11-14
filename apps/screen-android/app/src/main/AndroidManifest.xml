@@ -6,6 +6,13 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+            <category android:name="android.intent.category.DEFAULT" />
+        </intent>
+    </queries>
     <application android:name=".OoroApplication" android:theme="@style/Theme.Ooro" android:label="OORO Screen Player" android:icon="@drawable/ooro_logo" android:roundIcon="@drawable/ooro_logo" android:allowBackup="false" android:supportsRtl="true" android:usesCleartextTraffic="${allowCleartext}">
         <provider android:name="androidx.startup.InitializationProvider" android:authorities="${applicationId}.androidx-startup" android:exported="false" tools:node="merge">
             <meta-data android:name="androidx.work.WorkManagerInitializer" tools:node="remove" />

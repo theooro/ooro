@@ -47,6 +47,12 @@ test('campaign mutations deny finance, support and non-admin roles', () => {
   }
 })
 
+test('fleet write controls require the device write permission', () => {
+  for (const role of ['SUPER_ADMIN', 'ADMIN', 'OPERATIONS']) assert.equal(canAdmin(role, 'device:write'), true)
+  for (const role of ['FINANCE', 'SUPPORT', 'DRIVER', undefined]) assert.equal(canAdmin(role, 'device:write'), false)
+  for (const role of ['SUPER_ADMIN', 'ADMIN', 'OPERATIONS']) assert.equal(canAdmin(role, 'device:read'), true)
+})
+
 test('administrator account management requires SUPER_ADMIN', () => {
   assert.equal(canAdmin('SUPER_ADMIN', 'admin-users:manage'), true)
   for (const role of ['ADMIN', 'OPERATIONS', 'FINANCE', 'SUPPORT', 'DRIVER', undefined]) {

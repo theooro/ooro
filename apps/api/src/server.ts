@@ -26,13 +26,14 @@ import { sendOrderConfirmation } from './domain/transactional-email.js'
 import { receiptPdf } from './domain/receipt.js'
 import { boundedLocationLimit, shouldRecordDisplayLocation, validDisplayLocation } from './domain/display-location.js'
 import { getDisplayConnectivity } from './domain/display-health.js'
+import { assertCommandCanBeAcknowledged, commandBelongsToDevice, commandExpiresAt, commandStatusFromDeviceAck, DISPLAY_COMMAND_DELIVERY_LEASE_MS, isCommandExpired, safeCommandError, sameIdempotentCommand } from './domain/display-command.js'
 import { canonicalProofId, canonicalProofStatus, proofIdentityBelongsToDisplay } from './domain/proof-policy.js'
 import { adminRoles, deviceOsDeploymentRoles, deviceOsReleaseRoles, deviceOsWriteRoles } from './domain/admin-auth.js'
 import { asDeviceOsJson } from './domain/deviceos-http.js'
-import { assertSigningCertificateContinuity, decodeApkBase64, inspectApk } from './domain/apk-release.js'
+import { assertApprovedScreenPlayerRelease, assertHttpsDownloadUrl, assertSigningCertificateContinuity, decodeApkBase64, inspectApk } from './domain/apk-release.js'
 import { deviceOsStorage, parseDeviceOsRange, sliceDeviceOsContent, verifyLocalDownloadSignature } from './domain/deviceos-storage.js'
 import { campaignHealthGate, createDeviceOsCampaign, deploymentTargetingModes, isWithinMaintenanceWindow, pauseDeviceOsCampaign, resumeDeviceOsCampaign } from './domain/deviceos-deployment.js'
-import { isHealthyInstallationReportValid, retryDelayMs, validateDeviceOsEventTransition } from './domain/deviceos.js'
+import { isHealthyInstallationReportValid, isManagedDeviceReleaseCompatible, retryDelayMs, validateDeviceOsEventTransition } from './domain/deviceos.js'
 import { assertAdminUser, clearAdminLoginRateLimit, consumePasswordToken, enforceAdminLoginRateLimit, findAdminByEmail, issuePasswordReset, markAdminLoginFailure, normalizeAdminEmail, resetAdminLoginFailures, validateAdminPassword, verifyPassword } from './domain/admin-password-auth.js'
 import { MOBILITY_EVENT_TYPES, MOBILITY_PROVIDERS, classifyEvidence, isApprovedNotificationSource } from './domain/mobility-contract.js'
 import { getDriverActivationEligibility } from './domain/driver-activation.js'
@@ -1075,6 +1076,7 @@ app.get('/api/deviceos/releases/:releaseId/download-url', async (request, reply)
   if (!target || target.campaign.release.approvalStatus !== 'APPROVED') throw forbidden('Release is not assigned to this device')
   if (target.campaign.release.packageName === 'com.ooro.screenplayer' && !isWithinMaintenanceWindow(new Date(), target.campaign.maintenanceWindowStart, target.campaign.maintenanceWindowEnd)) throw new ApiError('MAINTENANCE_WINDOW_CLOSED', 'Screen Player updates are outside the approved maintenance window', 409)
   const url = await deviceOsStorage().signedDownloadUrl(target.campaign.release.storageKey, 300)
+  assertHttpsDownloadUrl(url)
   return ok(request, { url, expiresInSeconds: 300, releaseId }, reply)
 })
 
@@ -1198,14 +1200,14 @@ app.post('/api/admin/deviceos/deployments/:campaignId/resume', async (request, r
 app.post('/api/device/heartbeat', async (request, reply) => {
   const display = await authenticateDisplay(request)
   const coordinate = (value: number | undefined, min: number, max: number) => value === undefined ? undefined : Number.isFinite(value) && value >= min && value <= max ? value : undefined
-  const input = bodyOf(request, z.object({ timestamp: z.coerce.date().optional(), appVersion: z.string().optional(), deviceVersion: z.string().optional(), androidVersion: z.string().optional(), manufacturer: z.string().optional(), model: z.string().optional(), storageFree: z.coerce.bigint().optional(), storageTotal: z.coerce.bigint().optional(), networkType: z.string().optional(), networkConnected: z.boolean().optional(), manifestVersion: z.number().int().optional(), currentCampaignId: z.string().optional(), currentCreativeId: z.string().optional(), currentAssetId: z.string().optional(), playbackState: z.enum(['IDLE', 'LOADING', 'PLAYING', 'PAUSED', 'FAILED', 'READY', 'DEGRADED', 'OFFLINE_PLAYBACK']).optional(), screenState: z.string().optional(), playbackStartedAt: z.coerce.date().optional(), playbackPositionMs: z.number().finite().int().nonnegative().optional(), expectedDurationMs: z.number().finite().int().nonnegative().optional(), latitude: z.number().finite().optional(), longitude: z.number().finite().optional(), accuracyMeters: z.number().finite().nonnegative().optional(), speedMps: z.number().finite().nonnegative().optional(), headingDegrees: z.number().finite().optional(), locationOccurredAt: z.coerce.date().optional(), batteryLevel: z.number().int().min(0).max(100).optional(), chargingState: z.string().optional(), temperature: z.number().finite().optional() }))
+  const input = bodyOf(request, z.object({ timestamp: z.coerce.date().optional(), appVersion: z.string().optional(), deviceVersion: z.string().optional(), androidVersion: z.string().optional(), manufacturer: z.string().optional(), model: z.string().optional(), storageFree: z.coerce.bigint().optional(), storageTotal: z.coerce.bigint().optional(), networkType: z.string().optional(), networkConnected: z.boolean().optional(), supportsSponsoredSlot: z.boolean().optional(), manifestVersion: z.number().int().optional(), activeLayout: z.enum(['FULLSCREEN_AD', 'FOUR_ZONE', 'AD_NAV_OFFER', 'SPLIT_50_25_25', 'FULLSCREEN_SERVICE', 'SPECIAL_CAMPAIGN']).optional(), layoutContractVersion: z.number().int().positive().max(100).optional(), currentCampaignId: z.string().optional(), currentCreativeId: z.string().optional(), currentAssetId: z.string().optional(), playbackState: z.enum(['IDLE', 'LOADING', 'PLAYING', 'PAUSED', 'FAILED', 'READY', 'DEGRADED', 'OFFLINE_PLAYBACK']).optional(), screenState: z.string().optional(), playbackStartedAt: z.coerce.date().optional(), playbackPositionMs: z.number().finite().int().nonnegative().optional(), expectedDurationMs: z.number().finite().int().nonnegative().optional(), latitude: z.number().finite().optional(), longitude: z.number().finite().optional(), accuracyMeters: z.number().finite().nonnegative().optional(), speedMps: z.number().finite().nonnegative().optional(), headingDegrees: z.number().finite().optional(), locationOccurredAt: z.coerce.date().optional(), batteryLevel: z.number().int().min(0).max(100).optional(), chargingState: z.string().optional(), temperature: z.number().finite().optional() }))
   const latitude = coordinate(input.latitude, -90, 90); const longitude = coordinate(input.longitude, -180, 180)
   const locationCandidate = { latitude, longitude, accuracyMeters: input.accuracyMeters, occurredAt: input.locationOccurredAt ?? input.timestamp ?? new Date() }
   const hasLocation = latitude !== undefined && longitude !== undefined && validDisplayLocation(locationCandidate)
   const occurredAt = input.timestamp ?? new Date(); const locationOccurredAt = hasLocation ? (input.locationOccurredAt ?? occurredAt) : undefined
   const previousLocation = await prisma.displayLocationEvent.findFirst({ where: { displayId: display.id }, orderBy: { occurredAt: 'desc' } })
   const movedEnough = hasLocation && shouldRecordDisplayLocation(previousLocation ? { latitude: previousLocation.latitude, longitude: previousLocation.longitude, accuracyMeters: previousLocation.accuracyMeters, occurredAt: previousLocation.occurredAt } : null, { latitude: latitude!, longitude: longitude!, accuracyMeters: input.accuracyMeters!, occurredAt: locationOccurredAt! })
-  const { timestamp: _timestamp, latitude: _lat, longitude: _lng, accuracyMeters: _accuracy, speedMps: _speed, headingDegrees: _heading, locationOccurredAt: _locationAt, ...heartbeat } = input
+  const { timestamp: _timestamp, latitude: _lat, longitude: _lng, accuracyMeters: _accuracy, speedMps: _speed, headingDegrees: _heading, locationOccurredAt: _locationAt, supportsSponsoredSlot, ...heartbeat } = input
   const hb = await prisma.$transaction(async (tx) => {
     const row = await tx.displayHeartbeat.create({ data: { displayId: display.id, occurredAt, ...heartbeat, latitude, longitude, accuracyMeters: hasLocation ? input.accuracyMeters : undefined, speedMps: input.speedMps, headingDegrees: input.headingDegrees, locationOccurredAt } as any })
     if (hasLocation && movedEnough) await tx.displayLocationEvent.create({ data: { displayId: display.id, latitude: latitude!, longitude: longitude!, accuracyMeters: input.accuracyMeters!, speedMps: input.speedMps, headingDegrees: input.headingDegrees, occurredAt: locationOccurredAt! } })
@@ -1213,7 +1215,7 @@ app.post('/api/device/heartbeat', async (request, reply) => {
       const playbackLocation = hasLocation ? { latitude, longitude, locationAccuracy: input.accuracyMeters, locationOccurredAt } : previousLocation ? { latitude: previousLocation.latitude, longitude: previousLocation.longitude, locationAccuracy: previousLocation.accuracyMeters, locationOccurredAt: previousLocation.occurredAt } : {}
       await tx.playbackEvent.create({ data: { eventId: randomSecret(16), displayId: display.id, campaignId: input.currentCampaignId, creativeId: input.currentCreativeId, assetId: input.currentAssetId, eventType: input.playbackState === 'PLAYING' ? 'PLAY_STARTED' : 'PLAY_FAILED', occurredAt: input.playbackStartedAt ?? occurredAt, position: input.playbackPositionMs, duration: input.expectedDurationMs, manifestVersion: input.manifestVersion, playerVersion: input.appVersion, errorCode: input.playbackState === 'FAILED' ? 'DEVICE_PLAYBACK_FAILED' : undefined, ...playbackLocation } as any })
     }
-      await tx.display.update({ where: { id: display.id }, data: { appVersion: input.appVersion, manifestVersion: input.manifestVersion, state: ['DISABLED','BLOCKED','MAINTENANCE','UNPAIRED'].includes(display.state) ? display.state : input.screenState ?? input.playbackState ?? 'READY', lastHeartbeatAt: new Date(), ...(hasLocation ? { lastLatitude: latitude, lastLongitude: longitude, lastLocationAccuracy: input.accuracyMeters, lastLocationAt: locationOccurredAt } : {}), currentCampaignId: input.currentCampaignId, currentCreativeId: input.currentCreativeId, currentAssetId: input.currentAssetId, currentPlaybackState: input.playbackState, currentPlaybackStartedAt: input.playbackStartedAt, currentPlaybackPositionMs: input.playbackPositionMs, currentExpectedDurationMs: input.expectedDurationMs, manufacturer: input.manufacturer, model: input.model, androidVersion: input.androidVersion ?? input.deviceVersion, batteryLevel: input.batteryLevel, chargingState: input.chargingState, lastNetworkType: input.networkType } })
+      await tx.display.update({ where: { id: display.id }, data: { appVersion: input.appVersion, manifestVersion: input.manifestVersion, ...(supportsSponsoredSlot === true ? { supportsSponsoredSlot: true } : {}), state: ['DISABLED','BLOCKED','MAINTENANCE','UNPAIRED'].includes(display.state) ? display.state : input.screenState ?? input.playbackState ?? 'READY', lastHeartbeatAt: new Date(), ...(hasLocation ? { lastLatitude: latitude, lastLongitude: longitude, lastLocationAccuracy: input.accuracyMeters, lastLocationAt: locationOccurredAt } : {}), currentCampaignId: input.currentCampaignId, currentCreativeId: input.currentCreativeId, currentAssetId: input.currentAssetId, currentPlaybackState: input.playbackState, currentPlaybackStartedAt: input.playbackStartedAt, currentPlaybackPositionMs: input.playbackPositionMs, currentExpectedDurationMs: input.expectedDurationMs, manufacturer: input.manufacturer, model: input.model, androidVersion: input.androidVersion ?? input.deviceVersion, batteryLevel: input.batteryLevel, chargingState: input.chargingState, lastNetworkType: input.networkType } })
     return row
   })
   const latest = await buildDisplayManifest(display.id); if (!['UNPAIRED','DISABLED'].includes(display.state) && latest.manifest.version !== (input.manifestVersion ?? -1)) { try { await prisma.$transaction(async (tx) => { const pending = await tx.displayCommand.findFirst({ where: { displayId: display.id, commandType: { in: ['REFRESH_MANIFEST', 'SYNC_MANIFEST'] }, status: { in: ['QUEUED', 'DELIVERED'] } }, select: { id: true } }); if (!pending) await tx.displayCommand.create({ data: { displayId: display.id, commandType: 'REFRESH_MANIFEST', payload: { manifestVersion: latest.manifest.version }, expiresAt: null } }); }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }); } catch (error) { if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2034') throw error } }
@@ -1225,22 +1227,21 @@ app.get('/api/admin/displays/:displayId/manifest-debug', async (request, reply) 
 app.get('/api/device/commands', async (request, reply) => {
   const display = await authenticateDisplay(request)
   const now = new Date()
-  // Refresh commands are safe to retry. Recover one if the app received it but
-  // exited before applying the new manifest or acknowledging completion.
-  const refreshLeaseExpiredAt = new Date(now.getTime() - 5 * 60_000)
+  await prisma.displayCommand.updateMany({
+    where: { displayId: display.id, status: { in: ['QUEUED', 'DELIVERED'] }, expiresAt: { lte: now } },
+    data: { status: 'EXPIRED', failedAt: now, error: 'Command expired before acknowledgement' },
+  })
+  // Re-deliver after a lease timeout. The player persists command execution
+  // results so duplicate delivery retries acknowledgement without repeating effects.
+  const refreshLeaseExpiredAt = new Date(now.getTime() - DISPLAY_COMMAND_DELIVERY_LEASE_MS)
   await prisma.displayCommand.updateMany({
     where: {
       displayId: display.id,
-      commandType: { in: ['REFRESH_MANIFEST', 'SYNC_MANIFEST'] },
       status: 'DELIVERED',
       deliveredAt: { lt: refreshLeaseExpiredAt },
       OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
     },
     data: { status: 'QUEUED', deliveredAt: null },
-  })
-  await prisma.displayCommand.updateMany({
-    where: { displayId: display.id, status: 'QUEUED', expiresAt: { lt: now } },
-    data: { status: 'FAILED', failedAt: now, error: 'EXPIRED' },
   })
   const commands = await prisma.displayCommand.findMany({
     where: { displayId: display.id, status: 'QUEUED', OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
@@ -1265,10 +1266,12 @@ app.post('/api/device/commands/:commandId/ack', async (request, reply) => {
   const { commandId } = request.params as { commandId: string }
   const input = bodyOf(request, z.object({ status: z.enum(['RECEIVED','PROCESSING','SUCCEEDED','FAILED','UNSUPPORTED']), receivedAt: z.coerce.date().optional(), startedAt: z.coerce.date().optional(), completedAt: z.coerce.date().optional(), errorCode: z.string().optional(), errorMessage: z.string().optional() }))
   const command = await prisma.displayCommand.findFirst({ where: { id: commandId, displayId: display.id } })
-  if (!command) throw notFound('Command not found')
-  const terminal = ['SUCCEEDED', 'FAILED', 'UNSUPPORTED'].includes(input.status)
+  if (!command || !commandBelongsToDevice(command.displayId, display.id)) throw notFound('Command not found')
+  const nextStatus = commandStatusFromDeviceAck(input.status)
+  if (isCommandExpired(command.expiresAt, new Date()) && command.status !== 'ACKNOWLEDGED' && command.status !== 'FAILED') throw new ApiError('COMMAND_EXPIRED', 'Command expired before acknowledgement', 409)
+  assertCommandCanBeAcknowledged(command.status, nextStatus)
   const updated = await prisma.$transaction(async (tx) => {
-    const acknowledged = await tx.displayCommand.update({ where: { id: commandId }, data: { status: input.status, acknowledgedAt: terminal || input.status === 'RECEIVED' || input.status === 'PROCESSING' ? new Date() : command.acknowledgedAt, failedAt: input.status === 'FAILED' ? new Date() : undefined, error: input.errorMessage } })
+    const acknowledged = await tx.displayCommand.update({ where: { id: commandId }, data: { status: nextStatus, acknowledgedAt: new Date(), failedAt: nextStatus === 'FAILED' ? new Date() : undefined, error: safeCommandError(input.errorMessage) } })
     if (command.commandType === 'UNPAIR' && input.status === 'SUCCEEDED') {
       const deleteAfterUnpair = Boolean(command.payload && typeof command.payload === 'object' && 'deleteAfterUnpair' in command.payload && command.payload.deleteAfterUnpair === true)
       await tx.display.update({ where: { id: display.id }, data: { deviceTokenHash: null, state: deleteAfterUnpair ? 'DELETED' : 'UNPAIRED' } })
@@ -1591,21 +1594,56 @@ app.get('/api/admin/displays', async (request, reply) => {
       lastLocationAt: true, lastHeartbeatAt: true, currentCampaignId: true, currentCreativeId: true, currentAssetId: true,
       currentPlaybackState: true, currentPlaybackStartedAt: true, currentPlaybackPositionMs: true, currentExpectedDurationMs: true,
       vehicle: { select: { registrationNumber: true, city: true, area: true, type: true, routeId: true, depotId: true } },
+      zoneConfig: { select: { layoutContractVersion: true } },
+      layoutAssignments: { where: { revokedAt: null }, orderBy: { assignedAt: 'desc' }, take: 1, select: { id: true, state: true, template: { select: { name: true } }, revision: { select: { revision: true } } } },
+      deviceOsDevice: { select: { enrollmentStatus: true, lastSeenAt: true, capabilities: true, inventory: { where: { packageName: 'com.ooro.screenplayer' }, take: 1, select: { versionName: true, versionCode: true, lastSeenAt: true } } } },
       createdAt: true, updatedAt: true,
-      heartbeats: { select: { occurredAt: true, receivedAt: true, networkType: true }, orderBy: { receivedAt: 'desc' }, take: 1 },
+      heartbeats: { select: { occurredAt: true, receivedAt: true, networkType: true, networkConnected: true, storageFree: true, storageTotal: true, appVersion: true, manifestVersion: true, activeLayout: true, layoutContractVersion: true, playbackState: true, currentCreativeId: true }, orderBy: { receivedAt: 'desc' }, take: 1 },
+      proofs: { where: { status: 'VALID', playbackCompleted: true }, select: { creativeId: true, campaignId: true, playbackStartedAt: true, slot: true, status: true }, orderBy: { playbackStartedAt: 'desc' }, take: 1 },
+      commands: { select: { id: true, commandType: true, status: true, createdAt: true, deliveredAt: true, acknowledgedAt: true, failedAt: true, expiresAt: true, error: true }, orderBy: { createdAt: 'desc' }, take: 20 },
     },
   })
   const uuid = (value?: string | null) => Boolean(value && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value))
-  const creativeIds = [...new Set(rows.map((display) => display.currentCreativeId).filter((id): id is string => uuid(id)))]
-  const creatives = creativeIds.length ? await prisma.creative.findMany({
-    where: { id: { in: creativeIds } },
-    select: { id: true, name: true, campaign: { select: { id: true, name: true } }, asset: { select: { url: true, mimeType: true, fileName: true } } },
-  }) : []
+  const now = new Date()
+  const recentVerifiedPlayback = (display: typeof rows[number]) => {
+    const proof = display.proofs[0]
+    const heartbeat = display.heartbeats[0]
+    const heartbeatAt = heartbeat?.receivedAt ?? display.lastHeartbeatAt
+    return Boolean(proof && heartbeat && proof.creativeId && proof.creativeId === heartbeat.currentCreativeId && heartbeat.playbackState === 'PLAYING' && heartbeatAt && getDisplayConnectivity(heartbeatAt, now, config.heartbeatOnlineSeconds, config.heartbeatDegradedSeconds) === 'ONLINE' && proof.playbackStartedAt.getTime() <= now.getTime() + 30_000 && now.getTime() - proof.playbackStartedAt.getTime() <= 5 * 60_000)
+  }
+  const trustedCreativeIds = [...new Set(rows.filter(recentVerifiedPlayback).map(display => display.proofs[0]?.creativeId).filter((id): id is string => uuid(id)))]
+  const creativeIds = [...new Set([...trustedCreativeIds, ...rows.map((display) => display.currentCreativeId).filter((id): id is string => uuid(id))])]
+  const [creatives, latestOoroRelease] = await Promise.all([
+    creativeIds.length ? prisma.creative.findMany({ where: { id: { in: creativeIds } }, select: { id: true, name: true, campaign: { select: { id: true, name: true } }, asset: { select: { url: true, mimeType: true, fileName: true } } } }) : Promise.resolve([]),
+    prisma.applicationRelease.findFirst({ where: { packageName: 'com.ooro.screenplayer', approvalStatus: 'APPROVED', application: { allowed: true } }, orderBy: { versionCode: 'desc' }, select: { versionName: true, versionCode: true, sha256: true, certificateSha256: true, minSdk: true } }),
+  ])
   const creativeById = new Map(creatives.map((creative) => [creative.id, creative]))
+  const latestForDisplay = (display: typeof rows[number]) => {
+    const capabilities = display.deviceOsDevice?.capabilities && typeof display.deviceOsDevice.capabilities === 'object' && !Array.isArray(display.deviceOsDevice.capabilities) ? display.deviceOsDevice.capabilities as Record<string, unknown> : {}
+    const deviceSdk = typeof capabilities.androidSdkInt === 'number' && Number.isInteger(capabilities.androidSdkInt) ? capabilities.androidSdkInt : null
+    const installed = display.deviceOsDevice?.inventory[0]
+    if (!installed || !latestOoroRelease) return 'UNKNOWN'
+    if (!display.deviceOsDevice?.lastSeenAt || Date.now() - display.deviceOsDevice.lastSeenAt.getTime() > 24 * 60 * 60_000 || !installed.lastSeenAt || Date.now() - installed.lastSeenAt.getTime() > 24 * 60 * 60_000) return 'UNKNOWN'
+    if (installed.versionCode >= latestOoroRelease.versionCode) return 'UP_TO_DATE'
+    return deviceSdk !== null && isManagedDeviceReleaseCompatible({ currentVersionCode: installed.versionCode, targetVersionCode: latestOoroRelease.versionCode, minSdk: latestOoroRelease.minSdk, deviceSdk }) ? 'UPDATE_AVAILABLE' : 'UNKNOWN'
+  }
   return ok(request, asJson(rows.map((display) => ({
     ...display,
     connectivity: getDisplayConnectivity(display.lastHeartbeatAt ?? display.heartbeats[0]?.receivedAt, new Date(), config.heartbeatOnlineSeconds, config.heartbeatDegradedSeconds),
-    currentCreative: display.currentCreativeId ? creativeById.get(display.currentCreativeId) ?? null : null,
+    currentCreative: recentVerifiedPlayback(display) ? creativeById.get(display.proofs[0]!.creativeId!) ?? null : null,
+    currentCreativeTrust: recentVerifiedPlayback(display) ? 'VERIFIED_RECENT_PROOF' : 'UNKNOWN',
+    latestProof: display.proofs[0] ?? null,
+    lastSuccessfulSync: display.commands.find(command => ['SYNC_MANIFEST', 'REFRESH_MANIFEST'].includes(command.commandType) && command.status === 'ACKNOWLEDGED')?.acknowledgedAt ?? null,
+    latestCommand: display.commands[0] ? { ...display.commands[0], error: safeCommandError(display.commands[0].error) ?? null } : null,
+    currentLayout: display.heartbeats[0]?.activeLayout ?? null,
+    currentLayoutVersion: display.heartbeats[0]?.layoutContractVersion ?? null,
+    layoutReportStatus: !display.heartbeats[0]?.activeLayout ? 'UNREPORTED' : getDisplayConnectivity(display.heartbeats[0].receivedAt, new Date(), config.heartbeatOnlineSeconds, config.heartbeatDegradedSeconds) === 'ONLINE' ? 'CURRENT' : 'STALE',
+    assignedLayout: display.layoutAssignments[0]?.template.name ?? 'FOUR_ZONE',
+    assignedLayoutVersion: display.layoutAssignments[0]?.revision.revision ?? display.zoneConfig?.layoutContractVersion ?? null,
+    diagnostics: display.heartbeats[0] ? { networkType: display.heartbeats[0].networkType, networkConnected: display.heartbeats[0].networkConnected, storageFreeBytes: display.heartbeats[0].storageFree, storageTotalBytes: display.heartbeats[0].storageTotal, playerState: display.heartbeats[0].playbackState, manifestVersion: display.heartbeats[0].manifestVersion, activeLayout: display.heartbeats[0].activeLayout, layoutContractVersion: display.heartbeats[0].layoutContractVersion, layoutReportedAt: display.heartbeats[0].receivedAt } : null,
+    installedPlayer: display.deviceOsDevice?.inventory[0] ?? null,
+    playerUpdateStatus: latestForDisplay(display),
+    latestApprovedPlayerRelease: latestOoroRelease,
   }))), reply)
 })
 app.get('/api/admin/displays/:displayId/live-state', async (request, reply) => {
@@ -1624,6 +1662,82 @@ app.get('/api/admin/displays/:displayId/live-state', async (request, reply) => {
   const connection = getDisplayConnectivity(heartbeat?.receivedAt, new Date(), config.heartbeatOnlineSeconds, config.heartbeatDegradedSeconds)
   const { deviceTokenHash: _tokenHash, ...safeDisplay } = display
   return ok(request, asJson({ ...safeDisplay, connectivity: connection, lastHeartbeat: heartbeat ?? null, currentCampaign: creative?.campaign ?? campaign, currentCreative: creative, lastProof: recentEvent && (!recentProof || recentEvent.occurredAt > recentProof.playbackStartedAt) ? recentEvent : recentProof }), reply)
+})
+app.get('/api/admin/displays/:displayId/fleet-detail', async (request, reply) => {
+  await requirePermission(request, 'device:read')
+  const { displayId } = request.params as { displayId: string }
+  const display = await prisma.display.findUnique({
+    where: { id: displayId },
+    select: {
+      id: true, deviceId: true, name: true, state: true, ownershipType: true, vehicleId: true, appVersion: true,
+      manifestVersion: true, lastHeartbeatAt: true, currentCampaignId: true, currentCreativeId: true,
+      currentAssetId: true, currentPlaybackState: true, currentPlaybackStartedAt: true, currentPlaybackPositionMs: true,
+      currentExpectedDurationMs: true, manufacturer: true, model: true, androidVersion: true,
+      vehicle: { select: { registrationNumber: true, city: true, area: true } },
+      zoneConfig: { select: { layoutContractVersion: true, primaryWidthPercent: true, adHeightPercent: true, qrHeightPercent: true, newsScrollSpeed: true } },
+      layoutAssignments: { where: { revokedAt: null }, orderBy: { assignedAt: 'desc' }, take: 1, select: { id: true, state: true, assignedAt: true, template: { select: { id: true, name: true } }, revision: { select: { id: true, revision: true, contractHash: true, publishedAt: true } } } },
+      heartbeats: { orderBy: { receivedAt: 'desc' }, take: 50, select: { id: true, occurredAt: true, receivedAt: true, appVersion: true, deviceVersion: true, storageFree: true, storageTotal: true, networkType: true, networkConnected: true, manifestVersion: true, activeLayout: true, layoutContractVersion: true, currentCreativeId: true, playbackState: true, screenState: true, temperature: true, playbackStartedAt: true, playbackPositionMs: true, expectedDurationMs: true, manufacturer: true, model: true, androidVersion: true, batteryLevel: true, chargingState: true } },
+      proofs: { orderBy: { playbackStartedAt: 'desc' }, take: 50, select: { id: true, campaignId: true, creativeId: true, assetId: true, scheduleItemId: true, slot: true, playbackStartedAt: true, playbackEndedAt: true, expectedDuration: true, actualDuration: true, playbackCompleted: true, status: true, invalidReason: true, manifestVersion: true, playerVersion: true } },
+      playbackEvents: { orderBy: { occurredAt: 'desc' }, take: 50, select: { id: true, campaignId: true, creativeId: true, assetId: true, eventType: true, occurredAt: true, receivedAt: true, duration: true, manifestVersion: true, playerVersion: true, errorCode: true } },
+      commands: { orderBy: { createdAt: 'desc' }, take: 100, select: { id: true, commandType: true, status: true, createdAt: true, deliveredAt: true, acknowledgedAt: true, failedAt: true, cancelledAt: true, expiresAt: true, error: true } },
+      deviceOsDevice: { select: {
+        id: true, enrollmentStatus: true, lastSeenAt: true, capabilities: true,
+        inventory: { where: { packageName: 'com.ooro.screenplayer' }, orderBy: { lastSeenAt: 'desc' }, take: 1, select: { versionName: true, versionCode: true, certificateSha256: true, lastSeenAt: true } },
+        deploymentTargets: { orderBy: { updatedAt: 'desc' }, take: 20, select: {
+          id: true, state: true, lastErrorCode: true, lastErrorMessage: true, updatedAt: true,
+          campaign: { select: { id: true, name: true, state: true, release: { select: { id: true, packageName: true, versionName: true, versionCode: true, sha256: true, certificateSha256: true, minSdk: true, approvalStatus: true } } } },
+          attempts: { orderBy: { attemptNumber: 'desc' }, take: 1, select: { state: true, checksumVerified: true, errorCode: true, completedAt: true } },
+        } },
+      } },
+    },
+  })
+  if (!display) throw notFound('Display not found')
+  const { manifest: desiredManifest } = await buildDisplayManifest(displayId)
+  const capabilityData = display.deviceOsDevice?.capabilities && typeof display.deviceOsDevice.capabilities === 'object' && !Array.isArray(display.deviceOsDevice.capabilities) ? display.deviceOsDevice.capabilities as Record<string, unknown> : {}
+  const playerManagement = {
+    deviceOwner: capabilityData.deviceOwner === true ? 'CONFIRMED' : capabilityData.deviceOwner === false ? 'UNSUPPORTED' : 'UNCONFIRMED',
+    silentInstall: capabilityData.silentInstall === true ? 'CONFIRMED' : capabilityData.silentInstall === false ? 'UNSUPPORTED' : 'UNCONFIRMED',
+  }
+  const commands = display.commands.map(command => ({ ...command, error: safeCommandError(command.error) ?? null }))
+  const latestHeartbeat = display.heartbeats[0]
+  const cacheIsFresh = Boolean(latestHeartbeat && getDisplayConnectivity(latestHeartbeat.receivedAt, new Date(), config.heartbeatOnlineSeconds, config.heartbeatDegradedSeconds) === 'ONLINE')
+  const manifestState = { desiredVersion: desiredManifest.version, validUntil: desiredManifest.expiresAt, primaryItems: desiredManifest.items.length, sponsoredItemAvailable: Boolean(desiredManifest.sponsoredItem), deviceCachedVersion: latestHeartbeat?.manifestVersion ?? null, activeLayout: latestHeartbeat?.activeLayout ?? null, layoutContractVersion: latestHeartbeat?.layoutContractVersion ?? null, lastReportedAt: latestHeartbeat?.receivedAt ?? null, layoutReportStatus: !latestHeartbeat?.activeLayout ? 'UNREPORTED' : cacheIsFresh ? 'CURRENT' : 'STALE', cacheMatchesServer: cacheIsFresh ? latestHeartbeat?.manifestVersion === desiredManifest.version : null }
+  return ok(request, asJson({ ...display, commands, playerManagement, manifestState, connectivityThresholds: { onlineSeconds: config.heartbeatOnlineSeconds, staleSeconds: config.heartbeatDegradedSeconds } }), reply)
+})
+app.get('/api/admin/displays/:displayId/player-releases', async (request, reply) => {
+  await requirePermission(request, 'device:read')
+  const { displayId } = request.params as { displayId: string }
+  const managed = await prisma.managedDevice.findUnique({ where: { displayId }, select: { id: true, enrollmentStatus: true, capabilities: true, inventory: { where: { packageName: 'com.ooro.screenplayer' }, select: { versionCode: true, versionName: true }, take: 1 } } })
+  if (!managed) return ok(request, { management: 'UNENROLLED', releases: [] }, reply)
+  const capabilities = managed.capabilities && typeof managed.capabilities === 'object' && !Array.isArray(managed.capabilities) ? managed.capabilities as Record<string, unknown> : {}
+  const deviceSdk = typeof capabilities.androidSdkInt === 'number' && Number.isInteger(capabilities.androidSdkInt) ? capabilities.androidSdkInt : null
+  const releases = await prisma.applicationRelease.findMany({ where: { packageName: 'com.ooro.screenplayer', approvalStatus: 'APPROVED', application: { allowed: true } }, orderBy: { versionCode: 'desc' }, take: 25, select: { id: true, applicationId: true, packageName: true, versionCode: true, versionName: true, minSdk: true, sha256: true, certificateSha256: true, approvalStatus: true, application: { select: { allowed: true } } } })
+  const compatible = deviceSdk === null ? [] : releases.filter(release => isManagedDeviceReleaseCompatible({ currentVersionCode: managed.inventory[0]?.versionCode, targetVersionCode: release.versionCode, minSdk: release.minSdk, deviceSdk }))
+  return ok(request, asDeviceOsJson({ managedDeviceId: managed.id, enrollmentStatus: managed.enrollmentStatus, deviceSdk, compatibility: deviceSdk === null ? 'UNVERIFIED' : 'VERIFIED', silentInstall: capabilities.silentInstall === true ? 'CONFIRMED' : capabilities.silentInstall === false ? 'UNSUPPORTED' : 'UNCONFIRMED', releases: compatible }), reply)
+})
+app.post('/api/admin/displays/:displayId/player-release', async (request, reply) => {
+  const auth = await requireRoles(request, deviceOsDeploymentRoles)
+  const { displayId } = request.params as { displayId: string }
+  const input = bodyOf(request, z.object({ releaseId: z.string().uuid() }))
+  const headerKey = request.headers['idempotency-key']
+  if (typeof headerKey !== 'string' || headerKey.trim().length < 8 || headerKey.trim().length > 200) throw new ApiError('IDEMPOTENCY_KEY_INVALID', 'Idempotency-Key must be between 8 and 200 characters', 422)
+  const idempotencyKey = headerKey.trim()
+  const [display, managed] = await Promise.all([
+    prisma.display.findUnique({ where: { id: displayId }, select: { id: true, name: true, state: true } }),
+    prisma.managedDevice.findUnique({ where: { displayId }, include: { inventory: { where: { packageName: 'com.ooro.screenplayer' }, take: 1 } } }),
+  ])
+  if (!display || ['DELETED', 'DISABLED'].includes(display.state)) throw notFound('Screen not found')
+  if (!managed || managed.enrollmentStatus !== 'ENROLLED' || managed.revokedAt) throw new ApiError('DEVICEOS_NOT_ENROLLED', 'Screen must have an enrolled DeviceOS agent before an update can be requested', 409)
+  const release = await prisma.applicationRelease.findUnique({ where: { id: input.releaseId }, include: { application: true } })
+  if (!release) throw notFound('Approved OORO Screen Player release not found')
+  const capabilities = managed.capabilities && typeof managed.capabilities === 'object' && !Array.isArray(managed.capabilities) ? managed.capabilities as Record<string, unknown> : {}
+  const deviceSdk = typeof capabilities.androidSdkInt === 'number' && Number.isInteger(capabilities.androidSdkInt) ? capabilities.androidSdkInt : null
+  if (deviceSdk === null) throw new ApiError('DEVICE_COMPATIBILITY_UNVERIFIED', 'The screen has not reported its Android SDK version; release compatibility cannot be verified', 409)
+  assertApprovedScreenPlayerRelease({ packageName: release.packageName, approvalStatus: release.approvalStatus, versionCode: release.versionCode, versionName: release.versionName, sha256: release.sha256, signingIdentity: release.certificateSha256, minSdk: release.minSdk, deviceSdk })
+  if (!release.application.allowed || release.applicationId !== release.application.id) throw new ApiError('APPLICATION_NOT_ALLOWED', 'OORO Screen Player application is not allowlisted', 409)
+  if (!isManagedDeviceReleaseCompatible({ currentVersionCode: managed.inventory[0]?.versionCode, targetVersionCode: release.versionCode, minSdk: release.minSdk, deviceSdk })) throw new ApiError('RELEASE_DEVICE_INCOMPATIBLE', 'Release is not compatible with this screen or would downgrade it', 409)
+  const deployment = await createDeviceOsCampaign(prisma, { name: `Fleet update · ${display.name} · ${release.versionName}`, applicationId: release.applicationId, releaseId: release.id, targetingMode: 'DEVICES', deviceIds: [managed.id], idempotencyKey, createdBy: auth.userId })
+  return ok(request, asDeviceOsJson({ ...deployment, silentInstall: capabilities.silentInstall === true ? 'CONFIRMED' : capabilities.silentInstall === false ? 'UNSUPPORTED' : 'UNCONFIRMED' }), reply)
 })
 app.get('/api/admin/displays/live-map', async (request, reply) => { await requireRoles(request, adminRoles); const now = new Date(); const rows = await prisma.display.findMany({ where: { lastLatitude: { not: null }, lastLongitude: { not: null }, lastLocationAt: { gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) } }, select: { id: true, name: true, deviceId: true, vehicleId: true, vehicle: { select: { registrationNumber: true, city: true, area: true, type: true, routeId: true, depotId: true } }, lastLatitude: true, lastLongitude: true, lastLocationAccuracy: true, lastLocationAt: true, lastHeartbeatAt: true, currentCampaignId: true, currentCreativeId: true, currentAssetId: true, currentPlaybackState: true, currentPlaybackStartedAt: true, currentPlaybackPositionMs: true, currentExpectedDurationMs: true, manifestVersion: true } }); return ok(request, asJson(rows.map((display) => ({ ...display, connectivity: getDisplayConnectivity(display.lastHeartbeatAt ?? undefined, now, config.heartbeatOnlineSeconds, config.heartbeatDegradedSeconds) }))), reply) })
 app.get('/api/admin/displays/:displayId/location-history', async (request, reply) => { await requireRoles(request, adminRoles); const { displayId } = request.params as { displayId: string }; const query = request.query as { from?: string; to?: string; limit?: string }; const limit = boundedLocationLimit(query.limit); const from = query.from ? new Date(query.from) : new Date(Date.now() - 24 * 60 * 60 * 1000); const to = query.to ? new Date(query.to) : new Date(); if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from > to) throw new ApiError('VALIDATION_ERROR', 'Invalid history range', 422); const points = await prisma.displayLocationEvent.findMany({ where: { displayId, occurredAt: { gte: from, lte: to } }, orderBy: { occurredAt: 'desc' }, take: limit }); return ok(request, asJson(points.reverse()), reply) })
@@ -1644,7 +1758,58 @@ app.get('/api/admin/earnings', async (request, reply) => { await requirePermissi
 app.get('/api/admin/payouts', async (request, reply) => { await requirePermission(request, 'finance:read'); return ok(request, asJson(await prisma.payout.findMany({ orderBy: { createdAt: 'desc' }, take: 500 })), reply) })
 app.post('/api/admin/drivers/:driverId/restrict', async (request, reply) => { const auth = await requireRoles(request, ['ADMIN','SUPER_ADMIN']); const { driverId } = request.params as { driverId: string }; const driver = await prisma.driver.findUnique({ where: { id: driverId } }); if (!driver) throw notFound('Driver not found'); await prisma.$transaction(async (tx) => { await tx.user.update({ where: { id: driver.userId }, data: { accountStatus: 'SUSPENDED' } }); await tx.driver.update({ where: { id: driverId }, data: { onboardingStatus: 'SUSPENDED' } }); await tx.auditLog.create({ data: { actorId: auth.userId, actorRole: auth.role, action: 'DRIVER_SUSPENDED', entityType: 'Driver', entityId: driverId, requestId: request.id } }) }); return ok(request, { suspended: true }, reply) })
 app.post('/api/admin/drivers/:driverId/reactivate', async (request, reply) => { const auth = await requireRoles(request, ['ADMIN','SUPER_ADMIN']); const { driverId } = request.params as { driverId: string }; const driver = await prisma.driver.findUnique({ where: { id: driverId } }); if (!driver) throw notFound('Driver not found'); transitionDriverOnboarding(driver.onboardingStatus, 'APPROVED'); await prisma.$transaction(async (tx) => { await tx.user.update({ where: { id: driver.userId }, data: { accountStatus: 'ACTIVE' } }); await tx.driver.update({ where: { id: driverId }, data: { onboardingStatus: 'APPROVED' } }); await tx.auditLog.create({ data: { actorId: auth.userId, actorRole: auth.role, action: 'DRIVER_REACTIVATED', entityType: 'Driver', entityId: driverId, requestId: request.id } }) }); return ok(request, { reactivated: true }, reply) })
-app.post('/api/admin/displays/:displayId/commands', async (request, reply) => { const auth = await requireRoles(request, ['ADMIN','SUPER_ADMIN','OPERATIONS']); const { displayId } = request.params as { displayId: string }; const input = bodyOf(request, z.object({ commandType: z.enum(['WAKE','SLEEP','START_SESSION','STOP_SESSION','SYNC_MANIFEST','REFRESH_MANIFEST','HEALTH_CHECK','RESTART_PLAYER','RESTART_APP','CLEAR_CACHE','UNPAIR']), payload: z.record(z.string(), z.unknown()).optional() })); const display = await prisma.display.findUnique({ where: { id: displayId } }); if (!display || ['DELETED','DISABLED'].includes(display.state)) throw notFound('Screen not found'); if (display.state === 'UNPAIRED' && input.commandType !== 'UNPAIR') throw new ApiError('DISPLAY_UNPAIRED', 'Pair this screen before sending device commands', 409); const command = await prisma.displayCommand.create({ data: { displayId, commandType: input.commandType, payload: input.payload as any, expiresAt: input.commandType === 'UNPAIR' ? null : new Date(Date.now() + 120000) } }); await prisma.auditLog.create({ data: { actorId: auth.userId, actorRole: auth.role, action: 'DISPLAY_COMMAND_QUEUED', entityType: 'DisplayCommand', entityId: command.id, after: { commandType: input.commandType } as any, requestId: request.id } }); return ok(request, command, reply) })
+app.get('/api/admin/displays/:displayId/commands', async (request, reply) => {
+  await requirePermission(request, 'device:read')
+  const { displayId } = request.params as { displayId: string }
+  const display = await prisma.display.findUnique({ where: { id: displayId }, select: { id: true } })
+  if (!display) throw notFound('Screen not found')
+  const now = new Date()
+  await prisma.displayCommand.updateMany({ where: { displayId, status: { in: ['QUEUED', 'DELIVERED'] }, expiresAt: { lte: now } }, data: { status: 'EXPIRED', failedAt: now, error: 'Command expired before acknowledgement' } })
+  const commands = await prisma.displayCommand.findMany({ where: { displayId }, orderBy: { createdAt: 'desc' }, take: 100, select: { id: true, displayId: true, commandType: true, status: true, createdAt: true, deliveredAt: true, acknowledgedAt: true, failedAt: true, cancelledAt: true, expiresAt: true, error: true } })
+  return ok(request, asJson(commands.map(command => ({ ...command, error: safeCommandError(command.error) ?? null }))), reply)
+})
+app.post('/api/admin/displays/:displayId/commands', async (request, reply) => {
+  const auth = await requirePermission(request, 'device:write')
+  const { displayId } = request.params as { displayId: string }
+  const input = bodyOf(request, z.object({ commandType: z.enum(['SYNC_MANIFEST', 'REFRESH_MANIFEST', 'HEALTH_CHECK', 'RESTART_PLAYER']), idempotencyKey: z.string().trim().min(8).max(200) }))
+  const display = await prisma.display.findUnique({ where: { id: displayId } })
+  if (!display || ['DELETED', 'DISABLED'].includes(display.state)) throw notFound('Screen not found')
+  if (!display.deviceTokenHash || display.state === 'UNPAIRED') throw new ApiError('DISPLAY_UNPAIRED', 'Pair this screen before sending device commands', 409)
+  const requested = { commandType: input.commandType, payload: null }
+  const existing = await prisma.displayCommand.findUnique({ where: { displayId_idempotencyKey: { displayId, idempotencyKey: input.idempotencyKey } } })
+  if (existing) {
+    if (!sameIdempotentCommand(existing, requested)) throw new ApiError('COMMAND_IDEMPOTENCY_CONFLICT', 'Idempotency key was used for a different command', 409)
+    return ok(request, existing, reply)
+  }
+  try {
+    const command = await prisma.$transaction(async tx => {
+      const created = await tx.displayCommand.create({ data: { displayId, idempotencyKey: input.idempotencyKey, commandType: input.commandType, expiresAt: commandExpiresAt() } })
+      await tx.auditLog.create({ data: { actorId: auth.userId, actorRole: auth.role, action: 'DISPLAY_COMMAND_QUEUED', entityType: 'DisplayCommand', entityId: created.id, after: { commandType: input.commandType, idempotencyKey: input.idempotencyKey, expiresAt: created.expiresAt } as any, requestId: request.id } })
+      return created
+    })
+    return ok(request, command, reply)
+  } catch (error: any) {
+    if (error?.code !== 'P2002') throw error
+    const duplicate = await prisma.displayCommand.findUnique({ where: { displayId_idempotencyKey: { displayId, idempotencyKey: input.idempotencyKey } } })
+    if (!duplicate || !sameIdempotentCommand(duplicate, requested)) throw new ApiError('COMMAND_IDEMPOTENCY_CONFLICT', 'Idempotency key was used for a different command', 409)
+    return ok(request, duplicate, reply)
+  }
+})
+app.post('/api/admin/displays/:displayId/commands/:commandId/cancel', async (request, reply) => {
+  const auth = await requirePermission(request, 'device:write')
+  const { displayId, commandId } = request.params as { displayId: string; commandId: string }
+  const command = await prisma.displayCommand.findFirst({ where: { id: commandId, displayId } })
+  if (!command) throw notFound('Command not found')
+  if (command.status !== 'QUEUED') throw new ApiError('COMMAND_STATE_CONFLICT', 'Only commands not yet delivered to the screen can be cancelled', 409)
+  const cancelled = await prisma.$transaction(async tx => {
+    const updated = await tx.displayCommand.updateMany({ where: { id: commandId, displayId, status: 'QUEUED' }, data: { status: 'CANCELLED', cancelledAt: new Date() } })
+    if (updated.count !== 1) throw new ApiError('COMMAND_STATE_CONFLICT', 'Command was delivered before cancellation completed', 409)
+    const saved = await tx.displayCommand.findUniqueOrThrow({ where: { id: commandId } })
+    await tx.auditLog.create({ data: { actorId: auth.userId, actorRole: auth.role, action: 'DISPLAY_COMMAND_CANCELLED', entityType: 'DisplayCommand', entityId: commandId, before: { status: command.status } as any, after: { status: saved.status, cancelledAt: saved.cancelledAt } as any, requestId: request.id } })
+    return saved
+  })
+  return ok(request, cancelled, reply)
+})
 
 registerOperations(app)
 registerAdminManagement(app)

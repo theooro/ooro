@@ -114,7 +114,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
                     runCatching {
                         api.heartbeat(credentials, if (current != null) PlayerStatus.PLAYING else PlayerStatus.READY,
                             db.manifestDao().active()?.version ?: 0,
-                            HeartbeatTelemetry(fix, current?.campaignId, current?.creativeId, current?.assetId,
+                            heartbeatTelemetry(fix, current?.campaignId, current?.creativeId, current?.assetId,
                                 current?.let { "PLAYING" } ?: "IDLE", current?.startedAt,
                                 if (current != null) playbackPositionMs else null, current?.expectedDurationMs))
                     }.onSuccess {
@@ -210,6 +210,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             val cachedIds = cachedMainIds + if (sponsorCached) setOfNotNull(incoming.sponsoredItem?.id) else emptySet()
             if (!canCommitManifestResponse(incoming, required.size, cachedMainIds.size, Instant.now())) error("manifest is expired or required assets are unavailable")
             db.manifestDao().put(ManifestEntity(version=incoming.version,timezone=incoming.timezone,validUntil=incoming.validUntil?.toString(),json=ManifestCodec.encode(incoming)))
+            store.recordSuccessfulManifestSync()
             active=incoming
             _verifiedAssetIds.value = cachedIds
             assets.cleanup(retainedAssetIds(cachedIds, session?.itemId))
@@ -227,7 +228,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
         runCatching {
             Log.w("OoroScreen", "heartbeat sending displayId=${c.screenId} tokenPresent=true paired=true")
             val current = session
-            api.heartbeat(c, if (current != null) PlayerStatus.PLAYING else if (manifestResult.isSuccess) PlayerStatus.READY else PlayerStatus.DEGRADED, active?.version ?: 0, HeartbeatTelemetry(location.current(), current?.campaignId, current?.creativeId, current?.assetId, current?.let { "PLAYING" } ?: "IDLE", current?.startedAt, playbackPositionMs, current?.expectedDurationMs))
+            api.heartbeat(c, if (current != null) PlayerStatus.PLAYING else if (manifestResult.isSuccess) PlayerStatus.READY else PlayerStatus.DEGRADED, active?.version ?: 0, heartbeatTelemetry(location.current(), current?.campaignId, current?.creativeId, current?.assetId, current?.let { "PLAYING" } ?: "IDLE", current?.startedAt, playbackPositionMs, current?.expectedDurationMs))
             Log.w("OoroScreen", "heartbeat accepted displayId=${c.screenId} tokenPresent=true paired=true")
             _diagnostic.value = if (manifestResult.isSuccess) "Manifest accepted · heartbeat accepted" else "LKG/fallback active · heartbeat accepted"
         }.onFailure { error ->
@@ -306,7 +307,19 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
     }
     fun setNavigationState(state: NavigationState) { _navigation.value = state.copy(currentLatitude = _location.value?.latitude, currentLongitude = _location.value?.longitude) }
     fun reportMapHealth(rendered: Boolean, error: String? = null) { _mapTilesRendered.value = rendered; _mapTileError.value = error }
-    private fun reportPlayback(item: ManifestItem, state: String, positionMs: Long? = null) { viewModelScope.launch { store.credentials()?.let { credentials -> runCatching { api.heartbeat(credentials, if (state == "PLAYING") PlayerStatus.PLAYING else if (state == "FAILED") PlayerStatus.ERROR else PlayerStatus.READY, db.manifestDao().active()?.version ?: 0, HeartbeatTelemetry(location.current(), item.campaignId, item.creativeId, item.assetId, state, session?.startedAt, positionMs, item.durationSeconds * 1000L)) } } } }
+    private fun reportPlayback(item: ManifestItem, state: String, positionMs: Long? = null) { viewModelScope.launch { store.credentials()?.let { credentials -> runCatching { api.heartbeat(credentials, if (state == "PLAYING") PlayerStatus.PLAYING else if (state == "FAILED") PlayerStatus.ERROR else PlayerStatus.READY, db.manifestDao().active()?.version ?: 0, heartbeatTelemetry(location.current(), item.campaignId, item.creativeId, item.assetId, state, session?.startedAt, positionMs, item.durationSeconds * 1000L)) } } } }
+
+    private fun heartbeatTelemetry(
+        location: LocationSnapshot?, campaignId: String? = null, creativeId: String? = null,
+        assetId: String? = null, playbackState: String? = null, startedAt: Instant? = null,
+        positionMs: Long? = null, expectedDurationMs: Long? = null,
+    ): HeartbeatTelemetry {
+        val storage = runCatching { storageSummary(context) }.getOrNull()
+        val network = runCatching { networkInfo(context) }.getOrNull()
+        return HeartbeatTelemetry(location, campaignId, creativeId, assetId, playbackState, startedAt,
+            positionMs, expectedDurationMs, storage?.second, storage?.first, network?.type,
+            network?.internet, active?.layout?.name, active?.layoutContractVersion)
+    }
     suspend fun localFile(item: ManifestItem): String? = assets.ensure(item)?.absolutePath
     fun showAdmin() {
         _state.value = ScreenState.Admin(active)
@@ -323,6 +336,9 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
                 verifiedAssets = counts.first,
                 missingAssets = counts.second,
                 proofQueued = queued,
+                manifestLastSyncAt = store.lastSuccessfulManifestSyncAt(),
+                activeLayout = manifest?.layout?.name,
+                activeLayoutVersion = manifest?.layoutContractVersion,
             )
         }
     }
@@ -343,7 +359,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
         val credentials = store.credentials()
         result = result.copy(heartbeatLastAttemptAt = System.currentTimeMillis())
         if (credentials != null && probe.connected) {
-            runCatching { api.heartbeat(credentials, PlayerStatus.DEGRADED, active?.version ?: db.manifestDao().active()?.version ?: 0, HeartbeatTelemetry(location.current())) }
+            runCatching { api.heartbeat(credentials, PlayerStatus.DEGRADED, active?.version ?: db.manifestDao().active()?.version ?: 0, heartbeatTelemetry(location.current())) }
                 .onSuccess { result = result.copy(heartbeatLastSuccessAt = System.currentTimeMillis(), heartbeatStatus = probe.httpStatus, heartbeatError = null) }
                 .onFailure { error -> result = result.copy(heartbeatStatus = Regex("HTTP\\s+(\\d{3})").find(error.message.orEmpty())?.groupValues?.getOrNull(1)?.toIntOrNull(), heartbeatError = sanitizeDiagnosticError(error.message)) }
         } else if (credentials == null) result = result.copy(heartbeatError = "Device is not paired")
@@ -351,7 +367,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
         val manifest = active ?: stored?.let { runCatching { ManifestCodec.parse(it.json) }.getOrNull() }
         val counts = manifest?.let { assets.verify(it.items) } ?: (0 to 0)
         val queued = db.proofDao().pendingCount()
-        _diagnostics.value = result.copy(manifestLastSyncAt = stored?.let { System.currentTimeMillis() }, manifestLastAttemptAt = System.currentTimeMillis(), manifestError = if (manifest == null) "No cached manifest" else null, verifiedAssets = counts.first, missingAssets = counts.second, proofQueued = queued, lastDiagnosis = diagnose(probe, credentials != null, result.heartbeatStatus, result.heartbeatError, manifest, counts.second, queued))
+        _diagnostics.value = result.copy(manifestLastSyncAt = store.lastSuccessfulManifestSyncAt(), manifestLastAttemptAt = System.currentTimeMillis(), manifestError = if (manifest == null) "No cached manifest" else null, verifiedAssets = counts.first, missingAssets = counts.second, proofQueued = queued, lastDiagnosis = diagnose(probe, credentials != null, result.heartbeatStatus, result.heartbeatError, manifest, counts.second, queued), activeLayout = manifest?.layout?.name, activeLayoutVersion = manifest?.layoutContractVersion)
     } }
     private fun diagnose(probe: ApiProbe, paired: Boolean, heartbeatStatus: Int?, heartbeatError: String?, manifest: DeviceManifest?, missingAssets: Int, queued: Int): String = when {
         !probe.connected && probe.failureKind == "DNS_ERROR" -> "DNS_ERROR · API host could not be resolved"
@@ -367,9 +383,47 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
         queued > 0 && !probe.connected -> "Proofs waiting for connection"
         else -> "No blocking issue detected"
     }
-    fun diagnosticReport(): String { val d = _diagnostics.value; val n = networkInfo(context); val l = locationDiagnostics(context); val c = store.credentials(); return buildString {
-        appendLine("OORO DIAGNOSTIC"); appendLine("Screen ID       ${c?.screenId ?: "UNPAIRED"}"); appendLine("Device ID       $deviceId"); appendLine("App version     ${BuildConfig.VERSION_NAME}"); appendLine("Android         ${android.os.Build.VERSION.RELEASE}"); appendLine("Device model    ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}"); appendLine("API host        ${BuildConfig.API_BASE_URL}"); appendLine("Environment     ${backendEnvironment()}"); appendLine("Mock backend    ${if (BuildConfig.USE_MOCK_BACKEND) "ON" else "OFF"}"); appendLine("Network         ${n.type}"); appendLine("Device IP       ${n.ip ?: "unavailable"}"); appendLine("API             ${if (d.probe?.connected == true) "CONNECTED" else "UNREACHABLE"}"); appendLine("Pairing         ${if (c != null) "PAIRED" else "UNPAIRED"}"); appendLine("GPS             ${if (l.permission && (l.gps || l.network)) "AVAILABLE" else "UNAVAILABLE"}"); appendLine("Manifest        ${if (d.manifestLastSyncAt != null) "CACHED" else "UNKNOWN"}"); appendLine("Assets          ${d.verifiedAssets} verified, ${d.missingAssets} missing"); appendLine("Proof queue     ${d.proofQueued} waiting"); appendLine("Primary issue   ${d.lastDiagnosis ?: "Not run"}")
-    } }
+    fun diagnosticReport(): String {
+        val d = _diagnostics.value
+        val network = networkInfo(context)
+        val locationStatus = locationDiagnostics(context)
+        val management = deviceManagementStatus(context)
+        val credentials = store.credentials()
+        val storage = runCatching { storageSummary(context) }.getOrNull()
+        val manifest = active
+        val current = _currentCreative.value.takeIf { session != null }
+        val recentError = (d.manifestError ?: d.heartbeatError)?.let(::sanitizeDiagnosticError)
+        return buildString {
+            appendLine("OORO DIAGNOSTIC")
+            appendLine("Screen ID       ${credentials?.screenId ?: "UNPAIRED"}")
+            appendLine("Device ID       $deviceId")
+            appendLine("App version     ${BuildConfig.VERSION_NAME}")
+            appendLine("Android         ${android.os.Build.VERSION.RELEASE}")
+            appendLine("Device build    ${android.os.Build.DISPLAY.ifBlank { "Unknown" }}")
+            appendLine("Build identity  ${android.os.Build.FINGERPRINT.ifBlank { "Unknown" }}")
+            appendLine("Device model    ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}")
+            appendLine("API host        ${runCatching { java.net.URL(BuildConfig.API_BASE_URL).host }.getOrDefault("Unknown")}")
+            appendLine("Environment     ${backendEnvironment()}")
+            appendLine("Mock backend    ${if (BuildConfig.USE_MOCK_BACKEND) "ON" else "OFF"}")
+            appendLine("Network         ${network.type} · internet ${if (network.internet) "connected" else "unavailable"}")
+            appendLine("API             ${if (d.probe?.connected == true) "CONNECTED" else "UNREACHABLE / UNVERIFIED"}")
+            appendLine("Storage         ${storage?.let { "${it.second} free of ${it.first} bytes" } ?: "Unknown"}")
+            appendLine("Pairing         ${if (credentials != null) "PAIRED" else "UNPAIRED"}")
+            appendLine("Playback        ${if (session != null && current != null) "PLAYING" else "No active creative verified"}")
+            appendLine("Current creative ${current?.creativeId ?: "Unknown"}")
+            appendLine("Manifest        ${manifest?.version?.toString() ?: "Unknown / stale cache"}")
+            appendLine("Layout          ${manifest?.layout?.name ?: "Unknown"} · contract ${manifest?.layoutContractVersion?.toString() ?: "Unknown"}")
+            appendLine("Last sync       ${store.lastSuccessfulManifestSyncAt()?.let(::relativeTime) ?: "Unknown"}")
+            appendLine("Assets          ${d.verifiedAssets} verified, ${d.missingAssets} missing")
+            appendLine("Proof queue     ${d.proofQueued} pending")
+            appendLine("Resolved HOME   ${management.homeResolution}")
+            appendLine("Device Owner    ${if (management.deviceOwner) "Confirmed" else "Not confirmed"}")
+            appendLine("Lock Task       ${if (management.lockTaskActive) "Active on OORO task" else "Not active / unverified"}; allowlisted ${management.lockTaskAllowlisted}")
+            appendLine("GPS             ${if (locationStatus.permission && (locationStatus.gps || locationStatus.network)) "AVAILABLE" else "UNAVAILABLE"}")
+            appendLine("Recent error    ${recentError ?: "None recorded"}")
+            appendLine("Primary issue   ${d.lastDiagnosis ?: "Not run"}")
+        }
+    }
     fun retryQueue() { ProofSyncScheduler.enqueue(context, "diagnostic-retry") }
     private fun fallback(c: DeviceCredentials) = DeviceManifest(0,c.screenId,BuildConfig.DEFAULT_TIMEZONE,emptyList(),null)
     override fun onCleared() { runCatching { connectivityManager?.unregisterNetworkCallback(networkCallback) }; manifestRefreshJob?.cancel(); reconnectJob?.cancel(); location.stop(); super.onCleared() }
