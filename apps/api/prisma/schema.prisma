@@ -377,6 +377,7 @@ model Display {
   batteryLevel              Int?
   chargingState             String?
   lastNetworkType           String?
+  supportsSponsoredSlot     Boolean                     @default(false)
   createdAt                 DateTime                    @default(now())
   updatedAt                 DateTime                    @updatedAt
   pairingCodes              DisplayPairingCode[]

@@ -7,16 +7,21 @@ export async function POST(request: Request) {
   const budget = Number(input?.budget); const latitude = Number(input?.latitude); const longitude = Number(input?.longitude); const radiusKm = Number(input?.radiusKm);
   const startsAt = new Date(String(input?.startDate)); const endsAt = new Date(String(input?.endDate));
   const deliveryTier = input?.deliveryTier === "PREMIUM_PLUS" ? "PREMIUM_PLUS" : input?.deliveryTier === undefined || input?.deliveryTier === "STANDARD" ? "STANDARD" : null;
-  if (!Number.isFinite(budget) || budget < MIN_SELF_SERVE_BUDGET_RUPEES) return NextResponse.json({ error: { code: "MINIMUM_BUDGET", message: `Minimum OORO campaign budget is ₹${MIN_SELF_SERVE_BUDGET_RUPEES}.` } }, { status: 422 });
+  if (!Number.isFinite(budget) || budget < MIN_SELF_SERVE_BUDGET_RUPEES) return NextResponse.json({ error: { code: "MINIMUM_BUDGET", message: `Minimum OORO planning budget is ₹${MIN_SELF_SERVE_BUDGET_RUPEES}.` } }, { status: 422 });
   if (![latitude, longitude, radiusKm].every(Number.isFinite) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180 || radiusKm < 1 || radiusKm > 10) return NextResponse.json({ error: { message: "Choose a valid location and radius between 1 km and 10 km." } }, { status: 422 });
-  const calendarDate = /^\\d{4}-\\d{2}-\\d{2}$/;
+  const calendarDate = /^\d{4}-\d{2}-\d{2}$/;
   const indiaParts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
   const datePart = (type: string) => indiaParts.find(part => part.type === type)?.value ?? "";
   const todayIndia = `${datePart("year")}-${datePart("month")}-${datePart("day")}`;
   const startValue = String(input?.startDate ?? "");
   const endValue = String(input?.endDate ?? "");
-  if (!calendarDate.test(startValue) || !calendarDate.test(endValue) || Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime()) || startsAt.toISOString().slice(0, 10) !== startValue || endsAt.toISOString().slice(0, 10) !== endValue || startValue < todayIndia || endValue < startValue) return NextResponse.json({ error: { message: "Choose a future campaign date range in India time (IST)." } }, { status: 422 });
+  if (!calendarDate.test(startValue) || !calendarDate.test(endValue) || Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime()) || startsAt.toISOString().slice(0, 10) !== startValue || endsAt.toISOString().slice(0, 10) !== endValue || startValue < todayIndia || endValue < startValue) return NextResponse.json({ error: { message: "Choose valid campaign dates from today onward in India time (IST)." } }, { status: 422 });
+  const campaignDays = Math.floor((Date.UTC(endsAt.getUTCFullYear(), endsAt.getUTCMonth(), endsAt.getUTCDate()) - Date.UTC(startsAt.getUTCFullYear(), startsAt.getUTCMonth(), startsAt.getUTCDate())) / 86400000) + 1;
+  if (campaignDays < 30) return NextResponse.json({ error: { code: "MINIMUM_CAMPAIGN_DURATION", message: "OORO campaigns require a minimum 30-day term." } }, { status: 422 });
   if (!deliveryTier) return NextResponse.json({ error: { message: "Choose a valid delivery tier." } }, { status: 422 });
+  const dailyRate = deliveryTier === "PREMIUM_PLUS" ? 69 : 59;
+  const minimumCampaignBudget = Math.max(MIN_SELF_SERVE_BUDGET_RUPEES, dailyRate * campaignDays);
+  if (budget < minimumCampaignBudget) return NextResponse.json({ error: { code: "BUDGET_BELOW_ONE_AUTO_MINIMUM", message: `This campaign needs at least ₹${minimumCampaignBudget.toLocaleString("en-IN")} for one auto at the selected rate, before applicable taxes.` } }, { status: 422 });
   try {
     const forecast = await createSelfServeForecast({ budget, startsAt, endsAt, latitude, longitude, radiusKm, deliveryTier });
     return NextResponse.json({ estimatedImpressionsLow: forecast.estimatedImpressionsLow, estimatedImpressionsHigh: forecast.estimatedImpressionsHigh, campaignDays: forecast.campaignDays, radiusKm: forecast.radiusKm, availability: forecast.availability, confidence: forecast.confidence, budget, location: String(input?.location ?? ""), deliveryTier, forecastVersion: forecast.forecastVersion, generatedAt: forecast.generatedAt.toISOString(), forecastExpiresAt: forecast.forecastExpiresAt.toISOString() });

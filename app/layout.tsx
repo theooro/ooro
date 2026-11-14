@@ -7,7 +7,7 @@ const siteDescription = "OORO is a smart mobility advertising network that helps
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
-  icons: { icon: "/favicon-32.png", shortcut: "/favicon-32.png", apple: "/apple-touch-icon.png" },
+  icons: { icon: [{ url: "/favicon.ico" }, { url: "/favicon-32.png", sizes: "32x32", type: "image/png" }], shortcut: "/favicon.ico", apple: "/apple-touch-icon.png" },
   title: { default: "OORO | Digital advertising in autos and cabs in Bengaluru", template: "%s | OORO" },
   description: siteDescription,
   publisher: "OORO",
@@ -20,7 +20,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   const structuredData = {
     "@context": "https://schema.org",
     "@graph": [
-      { "@type": "Organization", "@id": `${siteUrl}/#organization`, name: siteName, alternateName: ["Ooro", "Ooro mobility", "OORO advertising"], url: siteUrl, logo: `${siteUrl}/ooro-mark-3d.png`, description: siteDescription, areaServed: { "@type": "City", name: "Bengaluru" }, knowsAbout: ["Mobility advertising", "Digital out-of-home advertising", "Auto-rickshaw advertising", "Campaign playback measurement"], contactPoint: { "@type": "ContactPoint", contactType: "business enquiries", email: "hello@theooro.com", areaServed: "IN", availableLanguage: ["English"] }, founder: [
+      { "@type": "Organization", "@id": `${siteUrl}/#organization`, name: siteName, alternateName: ["Ooro", "Ooro mobility", "OORO advertising"], url: siteUrl, logo: `${siteUrl}/ooro-logo.png`, description: siteDescription, areaServed: { "@type": "City", name: "Bengaluru" }, founder: [
         { "@type": "Person", "@id": `${siteUrl}/about#founder-1`, name: "Varneeth Varma Nandimandalam", jobTitle: "Founder & CEO", url: `${siteUrl}/about#founder-1`, sameAs: ["https://www.linkedin.com/in/varneeth-varma-nandimandalam/"] },
         { "@type": "Person", "@id": `${siteUrl}/about#founder-2`, name: "Siri Girish", jobTitle: "Co-founder & CMO", url: `${siteUrl}/about#founder-2`, sameAs: ["https://www.linkedin.com/in/siri-girish-7b7b65378/"] },
         { "@type": "Person", "@id": `${siteUrl}/about#founder-3`, name: "Jay Chandrudu Thammadi", jobTitle: "Co-founder, Hardware & Operations", url: `${siteUrl}/about#founder-3` },

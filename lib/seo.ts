@@ -14,7 +14,7 @@ export function pageMetadata(path: string, title: string, description: string): 
 
 export function articleJsonLd(slug: string, title: string, description: string, dateModified: string) {
   const url = `${siteUrl}/guides/${slug}`;
-  return { "@context": "https://schema.org", "@type": "Article", headline: title, description, dateModified, inLanguage: "en-IN", mainEntityOfPage: url, author: { "@type": "Organization", name: "OORO Editorial", url: siteUrl }, publisher: { "@type": "Organization", name: "OORO", url: siteUrl, logo: { "@type": "ImageObject", url: `${siteUrl}/ooro-mark-3d.png` } } };
+  return { "@context": "https://schema.org", "@type": "Article", headline: title, description, dateModified, inLanguage: "en-IN", mainEntityOfPage: url, author: { "@type": "Organization", name: "OORO Editorial", url: siteUrl }, publisher: { "@type": "Organization", name: "OORO", url: siteUrl, logo: { "@type": "ImageObject", url: `${siteUrl}/ooro-logo.png` } } };
 }
 
 export function breadcrumbJsonLd(items: { name: string; path: string }[]) {

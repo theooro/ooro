@@ -40,7 +40,7 @@ export function OperationsOverview({canViewFleet=true,canViewCampaigns=true,canS
    </section>
    <div className="space-y-6">
     <section className="rounded-2xl border border-neutral-200 bg-white p-5 sm:p-6"><div className="flex items-center justify-between"><h2 className="text-lg font-semibold tracking-[-.02em]">Needs attention</h2><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${attention?'bg-amber-100 text-amber-900':'bg-lime-100 text-lime-900'}`}>{loading?'…':attention}</span></div><div className="mt-5 divide-y divide-neutral-100">{[
-      {label:'Screens offline or unseen',value:data?.offline??0,href:'/admin/screens',icon:Radio},
+      {label:'Screens offline or stale',value:data?.offline??0,href:'/admin/screens',icon:Radio},
       {label:'Device playback errors',value:data?.errors??0,href:'/admin/device-health',icon:CircleAlert},
       {label:'Failed manifest commands',value:data?.manifestFailures??0,href:'/admin/device-health',icon:RefreshCw},
       {label:'Creatives awaiting review',value:data?.pendingCreatives??0,href:'/admin/creatives',icon:CheckCircle2},
