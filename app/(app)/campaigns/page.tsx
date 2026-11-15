@@ -5,6 +5,6 @@ export default async function CampaignsPage() {
  const context=await webContext();
  const type=context?.account.accountType;
  if (type==="NETWORK"||type==="EXPLORER") return <AdvertiserAccessNotice accountType={type}/>;
- if ((type==="BRAND"||type==="AGENCY") && context?.organization?.verificationStatus!=="VERIFIED") return <AdvertiserAccessNotice accountType={type} pendingApproval/>;
+ if ((type==="BRAND"||type==="AGENCY"||type==="BUSINESS") && context?.organization?.verificationStatus!=="VERIFIED") return <AdvertiserAccessNotice accountType={type} pendingApproval/>;
  return <Campaigns/>;
 }

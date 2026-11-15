@@ -71,7 +71,36 @@ class LivePairingRepository implements PairingRepository {
   async revokeCode() { return; }
 }
 class MockCommandRepository implements DeviceCommandRepository { async createCommand(screenId: string, type: DeviceCommand["type"]) { return { id: `command-${Date.now()}`, screenId, type, status: "QUEUED" as const, createdAt: new Date().toISOString() }; } async getLatestCommand() { return null; } }
-class LiveCommandRepository implements DeviceCommandRepository { async createCommand(screenId: string, type: DeviceCommand["type"]) { const response = await fetch(`/api/admin/screens/${screenId}/commands`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ commandType: type, idempotencyKey: crypto.randomUUID() }) }); const payload = await response.json().catch(() => null); if (!response.ok) throw new Error(payload?.error?.message || "Unable to queue display command"); const command = payload.data ?? payload; return { id: command.id, screenId, type: command.commandType as DeviceCommand["type"], status: command.status as DeviceCommand["status"], createdAt: command.createdAt, deliveredAt: command.deliveredAt, acknowledgedAt: command.acknowledgedAt, failedAt: command.failedAt, expiresAt: command.expiresAt, error: command.error }; } async getLatestCommand(screenId: string) { const response = await fetch(`/api/admin/screens/${screenId}/commands`, { cache: "no-store" }); const payload = await response.json().catch(() => null); if (!response.ok) throw new Error(payload?.error?.message || "Unable to load display commands"); const command = payload.data?.[0]; return command ? { id: command.id, screenId, type: command.commandType as DeviceCommand["type"], status: command.status as DeviceCommand["status"], createdAt: command.createdAt, deliveredAt: command.deliveredAt, acknowledgedAt: command.acknowledgedAt, failedAt: command.failedAt, cancelledAt: command.cancelledAt, expiresAt: command.expiresAt, error: command.error } : null; } }
+class LiveCommandRepository implements DeviceCommandRepository {
+  async createCommand(screenId: string, type: DeviceCommand["type"]) {
+    // Keep the key until the server confirms the request. If the response is
+    // lost, retrying the same action returns the original command instead of
+    // queuing a duplicate side effect.
+    const storageKey = `ooro-admin-command:${screenId}:${type}`;
+    let idempotencyKey = window.localStorage.getItem(storageKey);
+    if (!idempotencyKey) {
+      idempotencyKey = crypto.randomUUID();
+      window.localStorage.setItem(storageKey, idempotencyKey);
+    }
+    const response = await fetch(`/api/admin/screens/${encodeURIComponent(screenId)}/commands`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ commandType: type, idempotencyKey }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(payload?.error?.message || "Unable to queue display command");
+    window.localStorage.removeItem(storageKey);
+    const command = payload.data ?? payload;
+    return { id: command.id, screenId, type: command.commandType as DeviceCommand["type"], status: command.status as DeviceCommand["status"], createdAt: command.createdAt, deliveredAt: command.deliveredAt, acknowledgedAt: command.acknowledgedAt, failedAt: command.failedAt, expiresAt: command.expiresAt, error: command.error };
+  }
+  async getLatestCommand(screenId: string) {
+    const response = await fetch(`/api/admin/screens/${encodeURIComponent(screenId)}/commands`, { cache: "no-store" });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(payload?.error?.message || "Unable to load display commands");
+    const command = payload.data?.[0];
+    return command ? { id: command.id, screenId, type: command.commandType as DeviceCommand["type"], status: command.status as DeviceCommand["status"], createdAt: command.createdAt, deliveredAt: command.deliveredAt, acknowledgedAt: command.acknowledgedAt, failedAt: command.failedAt, cancelledAt: command.cancelledAt, expiresAt: command.expiresAt, error: command.error } : null;
+  }
+}
 
 export const screenRepository: ScreenRepository = isMockDeviceData ? new MockScreenRepository() : new LiveScreenRepository();
 export const deviceHealthRepository: DeviceHealthRepository = isMockDeviceData ? new MockDeviceHealthRepository() : new LiveDeviceHealthRepository();

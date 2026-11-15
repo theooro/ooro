@@ -55,7 +55,7 @@ export function PlanAccess() {
       <p className="text-sm text-neutral-500">Estimated passenger opportunities: <strong className="text-black">{(autos * days * 24).toLocaleString("en-IN")}</strong> (autos × active days × 24 planning benchmark).</p>
       <p className="text-sm text-neutral-500">Indicative base media cost: <strong className="text-black">₹{((selectedPlan?.autoDayRate ?? 0) * autos * days).toLocaleString("en-IN")}</strong>. One auto-day is one allocated advertising slot, not exclusive screen ownership; negotiated discounts and final availability must be confirmed.</p>
     </section>}
-    {privatePlans.length === 0 && payload?.account?.type === "BRAND" && <Link href="/onboarding/brand" className="inline-flex rounded-[8px] bg-black px-4 py-3 text-sm font-medium text-white">Complete brand verification</Link>}
+    {privatePlans.length === 0 && payload?.account?.type === "BRAND" && payload.account.verificationStatus === "UNVERIFIED" && <Link href="/onboarding/brand" className="inline-flex rounded-[8px] bg-black px-4 py-3 text-sm font-medium text-white">Complete brand verification</Link>}
     {privatePlans.length === 0 && payload?.account?.type === "AGENCY" && <Link href="/agency" className="inline-flex rounded-[8px] bg-black px-4 py-3 text-sm font-medium text-white">View agency application</Link>}
   </div>;
 }
