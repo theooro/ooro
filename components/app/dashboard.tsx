@@ -1,8 +1,65 @@
 "use client";
+
 import Link from "next/link";
-import { ArrowUpRight, Search, Sparkles } from "lucide-react";
+import { ArrowRight, ArrowUpRight, CalendarDays, CircleHelp, FileImage, MapPin, Plus, Radio, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import { EmptyState, PrimaryButton, SectionCard, StatusBadge } from "./app-ui";
 
-const prompts = ["Promote my new café in Koramangala", "Plan a ₹50K awareness campaign", "Find media around HSR Layout", "Research my audience in Bengaluru"];
-export function Dashboard() { const [prompt, setPrompt] = useState(0); const [value, setValue] = useState(""); const [campaigns, setCampaigns] = useState<Array<{id:string;name:string;status:string}>>([]); useEffect(() => { const timer = window.setInterval(() => setPrompt(current => (current + 1) % prompts.length), 3500); fetch("/api/campaigns",{cache:"no-store"}).then(r=>r.ok?r.json():null).then(p=>setCampaigns(p?.data??[])).catch(()=>undefined); return () => window.clearInterval(timer); }, []); const planHref = value.trim() ? `/campaigns/new?brief=${encodeURIComponent(value.trim())}` : "/campaigns/new"; return <div className="space-y-8"><div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between"><div><div className="app-eyebrow">Your OORO workspace</div><h1 className="mt-2 text-4xl font-medium tracking-[-.05em]">Good morning.</h1><p className="mt-3 text-sm leading-6 text-neutral-500">Plan, launch and understand your offline campaigns from one place.</p></div><PrimaryButton href="/campaigns/new">Create campaign <ArrowUpRight className="ml-4" size={15}/></PrimaryButton></div><section className="overflow-hidden rounded-[12px] bg-[#111111] p-5 text-white sm:p-8"><div className="flex items-center gap-2 text-xs text-neutral-400"><Sparkles className="text-[var(--brand-yellow)]" size={15}/> OORO planning surface</div><h2 className="mt-7 text-2xl font-medium tracking-[-.03em] sm:text-3xl">What do you want to achieve?</h2><div className="mt-5 flex items-start gap-3 rounded-[9px] border border-white/15 bg-white/[.06] p-4"><Search className="mt-0.5 shrink-0 text-neutral-500" size={18}/><textarea value={value} onChange={event => setValue(event.target.value)} rows={2} placeholder={prompts[prompt]} className="min-h-[56px] w-full resize-none bg-transparent text-sm leading-6 text-white outline-none placeholder:text-neutral-500"/></div><div className="mt-4 flex flex-wrap gap-2"><Link className="rounded-[7px] bg-[var(--brand-yellow)] px-3 py-2 text-xs font-medium text-black" href={planHref}>Plan campaign</Link><Link className="rounded-[7px] border border-white/15 px-3 py-2 text-xs text-neutral-300 hover:border-white/40" href="/intelligence/research">Research market</Link><Link className="rounded-[7px] border border-white/15 px-3 py-2 text-xs text-neutral-300 hover:border-white/40" href="/discover">Find media</Link><Link className="rounded-[7px] border border-white/15 px-3 py-2 text-xs text-neutral-300 hover:border-white/40" href="/ad-lab">Test creative</Link></div></section><section className="rounded-xl border border-neutral-200 bg-white p-5 sm:p-7" aria-labelledby="campaign-journey-heading"><div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-[11px] font-semibold uppercase tracking-widest text-neutral-500">How OORO works</p><h2 id="campaign-journey-heading" className="mt-2 text-xl font-medium tracking-tight sm:text-2xl">From your idea to a live campaign.</h2><p className="mt-2 max-w-xl text-sm leading-6 text-neutral-500">A simple path to launch advertising inside mobility screens. Approval and playback are verified before we report delivery.</p></div><Link href="/campaigns" className="text-sm font-medium underline underline-offset-4">Track your campaigns</Link></div><ol className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{n:"01",title:"Plan",detail:"Choose a goal, location and budget.",href:"/campaigns/new",action:"Create campaign"},{n:"02",title:"Book & confirm",detail:"Review estimated delivery and booking details.",href:"/campaigns",action:"View bookings"},{n:"03",title:"Creative & approval",detail:"Submit media and follow the review status.",href:"/creatives",action:"Manage creatives"},{n:"04",title:"Live & results",detail:"Track campaign progress and available reports.",href:"/analytics",action:"View results"}].map(step=><li key={step.n} className="flex flex-col rounded-lg border border-neutral-200 bg-[#fafaf8] p-4"><span className="text-xs font-semibold text-neutral-400">{step.n}</span><h3 className="mt-3 text-base font-medium">{step.title}</h3><p className="mt-2 flex-1 text-xs leading-5 text-neutral-600">{step.detail}</p><Link href={step.href} className="mt-4 inline-flex text-xs font-medium underline underline-offset-4">{step.action} →</Link></li>)}</ol></section><div className="grid gap-6 lg:grid-cols-[1.35fr_.65fr]"><SectionCard title="Active campaigns" description="Campaigns that are currently being planned or run.">{campaigns.length ? <div className="divide-y">{campaigns.slice(0,4).map(campaign => <Link href={`/campaigns/${campaign.id}`} key={campaign.id} className="flex items-center justify-between gap-4 py-4"><span className="text-sm font-medium">{campaign.name}</span><StatusBadge>{campaign.status.replaceAll("_"," ")}</StatusBadge></Link>)}</div> : <EmptyState title="No campaigns yet." description="Create your first campaign to start planning media." action={<PrimaryButton href="/campaigns/new">Create your first campaign</PrimaryButton>}/>}</SectionCard><div className="space-y-6"><SectionCard title="Recent activity"><p className="text-sm text-neutral-500">No verified workspace activity yet.</p></SectionCard><SectionCard title="Opportunities"><p className="text-sm text-neutral-500">Recommendations are unavailable until the planning provider is configured.</p></SectionCard></div></div><SectionCard title="Upcoming" description="Scheduled campaign activity will appear here."><p className="text-sm text-neutral-500">No upcoming campaigns.</p></SectionCard></div>; }
+type Campaign = { id: string; name: string; status: string; startsAt?: string | null; endsAt?: string | null };
+
+const nextSteps = [
+  { icon: MapPin, title: "Choose an area", detail: "Pick a Bengaluru neighbourhood for your campaign.", href: "/campaigns/new" },
+  { icon: CalendarDays, title: "Set your dates and budget", detail: "Build a plan. OORO confirms availability before booking.", href: "/campaigns/new" },
+  { icon: FileImage, title: "Add your creative", detail: "Upload artwork now or add it to a saved campaign later.", href: "/creatives" },
+];
+
+export function Dashboard() {
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/campaigns", { cache: "no-store" })
+      .then(async response => {
+        if (!response.ok) throw new Error("Unable to load campaigns");
+        const payload = await response.json();
+        if (active) setCampaigns(payload?.data ?? []);
+      })
+      .catch(() => { if (active) setLoadError(true); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, []);
+
+  const activeCount = campaigns.filter(item => ["SCHEDULED", "LIVE", "ACTIVE"].includes(item.status)).length;
+  const reviewCount = campaigns.filter(item => ["DRAFT", "PENDING_REVIEW", "SUBMITTED"].includes(item.status)).length;
+
+  return <div className="space-y-7 sm:space-y-9">
+    <header className="flex flex-col gap-5 border-b border-neutral-200 pb-7 sm:flex-row sm:items-end sm:justify-between">
+      <div>
+        <p className="app-eyebrow">OORO workspace</p>
+        <h1 className="mt-2 text-3xl font-medium tracking-[-.045em] sm:text-4xl">Campaigns, made clearer.</h1>
+        <p className="mt-3 max-w-xl text-sm leading-6 text-neutral-600">Plan local screen advertising, keep creative and review status together, then follow delivery from one place.</p>
+      </div>
+      <PrimaryButton href="/campaigns/new"><Plus className="mr-2" size={16}/>Plan a campaign<ArrowUpRight className="ml-3" size={15}/></PrimaryButton>
+    </header>
+
+    <section className="grid gap-3 sm:grid-cols-3" aria-label="Workspace summary">
+      <div className="flex items-center gap-4 rounded-xl border border-neutral-200 bg-white p-5"><span className="grid h-10 w-10 place-items-center rounded-lg bg-[#f2f4d8]"><Radio size={18}/></span><div><p className="text-xs text-neutral-500">Active campaigns</p><p className="mt-1 text-2xl font-semibold tracking-tight">{loading ? "—" : activeCount}</p></div></div>
+      <div className="flex items-center gap-4 rounded-xl border border-neutral-200 bg-white p-5"><span className="grid h-10 w-10 place-items-center rounded-lg bg-neutral-100"><Sparkles size={18}/></span><div><p className="text-xs text-neutral-500">In planning or review</p><p className="mt-1 text-2xl font-semibold tracking-tight">{loading ? "—" : reviewCount}</p></div></div>
+      <Link href="/campaigns" className="group flex items-center justify-between gap-4 rounded-xl border border-neutral-200 bg-white p-5 transition hover:border-neutral-400"><div><p className="text-xs text-neutral-500">Your workspace</p><p className="mt-1 text-sm font-medium">View all campaigns</p></div><ArrowRight size={17} className="transition group-hover:translate-x-1"/></Link>
+    </section>
+
+    <div className="grid gap-5 xl:grid-cols-[1.45fr_.8fr]">
+      <SectionCard title="Your campaigns" description="See each plan’s current status and continue where you left off.">
+        {loadError ? <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800"><p>Campaigns could not load.</p><button type="button" onClick={() => window.location.reload()} className="mt-2 font-medium underline underline-offset-4">Try again</button></div> : loading ? <div className="space-y-3 py-3" aria-label="Loading campaigns"><div className="h-12 animate-pulse rounded-lg bg-neutral-100"/><div className="h-12 animate-pulse rounded-lg bg-neutral-100"/></div> : campaigns.length ? <div className="divide-y divide-neutral-200">{campaigns.slice(0, 5).map(campaign => <Link href={`/campaigns/${campaign.id}`} key={campaign.id} className="flex flex-wrap items-center justify-between gap-3 py-4 first:pt-1"><div className="min-w-0"><p className="truncate text-sm font-medium">{campaign.name}</p><p className="mt-1 text-xs text-neutral-500">{campaign.startsAt ? new Date(campaign.startsAt).toLocaleDateString("en-IN", { dateStyle: "medium" }) : "Dates to be confirmed"}</p></div><StatusBadge>{campaign.status.replaceAll("_", " ")}</StatusBadge></Link>)}</div> : <EmptyState title="Your first campaign starts with a plan." description="Choose an area, dates and budget. We’ll review inventory and confirm the next steps with you." action={<PrimaryButton href="/campaigns/new">Build your first plan<ArrowRight className="ml-3" size={15}/></PrimaryButton>}/>}
+      </SectionCard>
+
+      <SectionCard title="A simple way to start" description="You can save a plan before uploading artwork.">
+        <ol className="space-y-4">{nextSteps.map((step, index) => <li key={step.title} className="flex gap-3"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-neutral-200 bg-[#fafaf8]"><step.icon size={16}/></span><div><Link href={step.href} className="text-sm font-medium underline decoration-transparent underline-offset-4 hover:decoration-current">{index + 1}. {step.title}</Link><p className="mt-1 text-xs leading-5 text-neutral-500">{step.detail}</p></div></li>)}</ol>
+        <div className="mt-5 rounded-lg bg-[#f4f5e8] p-3.5 text-xs leading-5 text-neutral-700"><CircleHelp size={14} className="mr-2 inline-block align-[-2px]"/>A plan is a request, not a confirmed booking. OORO reviews screen availability and terms before launch.</div>
+        <Link href="/campaigns/new" className="mt-5 inline-flex items-center gap-2 text-sm font-medium">Start planning<ArrowRight size={15}/></Link>
+      </SectionCard>
+    </div>
+  </div>;
+}

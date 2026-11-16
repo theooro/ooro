@@ -21,7 +21,11 @@ class DeviceStore(context: Context) {
         check(prefs.edit().putString("device_id", credentials.deviceId).putString("screen_id", credentials.screenId).putString("workspace_id", credentials.workspaceId).putString("token", encrypted).putString("device_name", credentials.name).commit()) { "credential preferences commit failed" }
         Log.i("OoroScreen", "credentials persisted displayId=${credentials.screenId} tokenPresent=${encrypted.isNotBlank()} paired=${credentials.screenId.isNotBlank()}")
     }
-    fun clear() { prefs.edit().remove("screen_id").remove("workspace_id").remove("token").remove("device_name").apply() }
+    fun clear() { prefs.edit().remove("screen_id").remove("workspace_id").remove("token").remove("device_name").remove("last_successful_manifest_sync").commit() }
+    fun recordSuccessfulManifestSync(atMillis: Long = System.currentTimeMillis()) {
+        check(prefs.edit().putLong("last_successful_manifest_sync", atMillis).commit()) { "manifest sync timestamp could not be persisted" }
+    }
+    fun lastSuccessfulManifestSyncAt(): Long? = prefs.getLong("last_successful_manifest_sync", 0L).takeIf { it > 0L }
     fun deviceInfo() = mapOf("deviceId" to deviceId, "manufacturer" to Build.MANUFACTURER, "model" to Build.MODEL, "androidVersion" to Build.VERSION.RELEASE)
 }
 

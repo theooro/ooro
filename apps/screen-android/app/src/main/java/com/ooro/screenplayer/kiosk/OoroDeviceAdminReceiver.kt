@@ -16,6 +16,7 @@ class OoroDeviceAdminReceiver : DeviceAdminReceiver() {
             if (!dpm.isDeviceOwnerApp(context.packageName)) return
             runCatching {
                 dpm.setLockTaskPackages(component(context), arrayOf(context.packageName))
+                if (!dpm.isLockTaskPermitted(context.packageName)) return
                 if (Build.VERSION.SDK_INT >= 28) dpm.setLockTaskFeatures(component(context), DevicePolicyManager.LOCK_TASK_FEATURE_NONE)
                 dpm.setKeyguardDisabled(component(context), true)
                 activity.startLockTask()

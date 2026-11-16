@@ -1,17 +1,17 @@
 import { NextResponse } from "next/server";
+import { advertiserCampaignScope } from "@/lib/advertiser-campaign-scope";
 import { webPrisma } from "@/lib/web-prisma";
 import { webOwnerEmail } from "@/lib/web-owner";
 import { validateCampaignDates } from "@/apps/api/src/domain/campaign-validation";
 import { MIN_SELF_SERVE_BUDGET_RUPEES } from "@/lib/campaign-policy";
 import { webContext } from "@/lib/web-owner";
-import { advertiserCampaignScope } from "@/lib/advertiser-campaign-scope";
 
 type CampaignInput = {
   name?: string; description?: string; goal?: string; audience?: string; city?: string; area?: string;
   startDate?: string; endDate?: string; media?: string; budget?: number; currency?: string;
   metadata?: Record<string, unknown>; status?: "DRAFT" | "SCHEDULED";
   pricingPlanId?: string; deliveryTier?: "STANDARD" | "PREMIUM_PLUS";
-  campaignCenterLat?: number | null; campaignCenterLng?: number | null; radiusKm?: number | null;
+  campaignCenterLat?: number; campaignCenterLng?: number; radiusKm?: number;
   forecastSnapshot?: Record<string, unknown>; forecastGeneratedAt?: string; forecastExpiresAt?: string; forecastVersion?: string;
 };
 
@@ -25,9 +25,9 @@ function validate(input: CampaignInput, partial = false) {
   if (!partial && (!input.startDate || !input.endDate)) return "Start and end dates are required";
   const dateError = validateCampaignDates(input); if (dateError) return dateError;
   if (input.budget !== undefined && (!Number.isFinite(input.budget) || input.budget <= 0)) return "Budget must be greater than zero";
-  if (input.radiusKm != null && (!Number.isFinite(input.radiusKm) || input.radiusKm < 1 || input.radiusKm > 10)) return "Radius must be between 1 km and 10 km";
-  if (input.campaignCenterLat != null && (!Number.isFinite(input.campaignCenterLat) || input.campaignCenterLat < -90 || input.campaignCenterLat > 90)) return "Campaign latitude is invalid";
-  if (input.campaignCenterLng != null && (!Number.isFinite(input.campaignCenterLng) || input.campaignCenterLng < -180 || input.campaignCenterLng > 180)) return "Campaign longitude is invalid";
+  if (input.radiusKm !== undefined && (!Number.isFinite(input.radiusKm) || input.radiusKm < 1 || input.radiusKm > 10)) return "Radius must be between 1 km and 10 km";
+  if (input.campaignCenterLat !== undefined && (!Number.isFinite(input.campaignCenterLat) || input.campaignCenterLat < -90 || input.campaignCenterLat > 90)) return "Campaign latitude is invalid";
+  if (input.campaignCenterLng !== undefined && (!Number.isFinite(input.campaignCenterLng) || input.campaignCenterLng < -180 || input.campaignCenterLng > 180)) return "Campaign longitude is invalid";
   return null;
 }
 
@@ -39,6 +39,7 @@ export async function GET() {
     if (context?.account.accountType === "NETWORK" || context?.account.accountType === "EXPLORER") return NextResponse.json({ error: { code: "ADVERTISER_ACCESS_REQUIRED", message: "This account does not have advertiser campaign access." } }, { status: 403 });
     if (context?.account.accountType === "BRAND" && (!context.organization || context.organization.verificationStatus !== "VERIFIED")) return NextResponse.json({ error: { code: "BRAND_VERIFICATION_REQUIRED", message: "Your Brand account is awaiting verification." } }, { status: 403 });
     if (context?.account.accountType === "AGENCY" && (!context.organization || context.organization.verificationStatus !== "VERIFIED")) return NextResponse.json({ error: { code: "AGENCY_APPROVAL_REQUIRED", message: "Your Agency application is being reviewed." } }, { status: 403 });
+    if (context?.account.accountType === "BUSINESS" && (!context.organization || context.organization.type !== "BUSINESS" || context.organization.verificationStatus !== "VERIFIED")) return NextResponse.json({ error: { code: "BUSINESS_APPROVAL_REQUIRED", message: "Your Business account is being reviewed. Campaign access opens after approval." } }, { status: 403 });
     const campaigns = await webPrisma.campaign.findMany({ where: context ? await advertiserCampaignScope(context) : { ownerEmail: email }, orderBy: { updatedAt: "desc" } });
     return NextResponse.json({ data: campaigns });
   } catch (error) { console.error("[campaigns] list failed", error); return NextResponse.json({ error: { code: "CAMPAIGN_SERVICE_UNAVAILABLE", message: "Campaign service unavailable" } }, { status: 503 }); }
@@ -61,6 +62,7 @@ export async function POST(request: Request) {
     if (context?.account.accountType === "NETWORK" || context?.account.accountType === "EXPLORER") return NextResponse.json({ error: { code: "ADVERTISER_ACCESS_REQUIRED", message: "This account does not have advertiser campaign access." } }, { status: 403 });
     if (context?.account.accountType === "BRAND" && (!context.organization || context.organization.verificationStatus !== "VERIFIED")) return NextResponse.json({ error: { code: "BRAND_VERIFICATION_REQUIRED", message: "Your Brand account is awaiting verification." } }, { status: 403 });
     if (context?.account.accountType === "AGENCY" && (!context.organization || context.organization.verificationStatus !== "VERIFIED")) return NextResponse.json({ error: { code: "AGENCY_APPROVAL_REQUIRED", message: "Your Agency application is being reviewed." } }, { status: 403 });
+    if (context?.account.accountType === "BUSINESS" && (!context.organization || context.organization.type !== "BUSINESS" || context.organization.verificationStatus !== "VERIFIED")) return NextResponse.json({ error: { code: "BUSINESS_APPROVAL_REQUIRED", message: "Your Business account is being reviewed. Campaign access opens after approval." } }, { status: 403 });
     const forecastSettings = await webPrisma.forecastSetting.findUnique({ where: { key: "DEFAULT" } });
     const isSelfServe = !context?.organization || context.organization.type === "CONSUMER";
     if (input?.budget !== undefined && isSelfServe && input.budget < (forecastSettings?.minimumSelfServeBudget ?? MIN_SELF_SERVE_BUDGET_RUPEES)) return NextResponse.json({ error: { code: "MINIMUM_BUDGET", message: `Minimum OORO campaign budget is ₹${forecastSettings?.minimumSelfServeBudget ?? MIN_SELF_SERVE_BUDGET_RUPEES}.` } }, { status: 422 });
@@ -68,7 +70,17 @@ export async function POST(request: Request) {
     if (input?.pricingPlanId && !requestedPlan) return NextResponse.json({ error: { message: "Pricing plan is unavailable" } }, { status: 422 });
     const verifiedPrivate = Boolean(context?.organization && context.organization.verificationStatus === "VERIFIED" && ["BRAND", "AGENCY"].includes(context.organization.type));
     if (requestedPlan && ((requestedPlan.customerType === "SELF_SERVE" && !requestedPlan.isPublic) || (requestedPlan.customerType !== "SELF_SERVE" && (!verifiedPrivate || requestedPlan.customerType !== context?.organization?.type)))) return NextResponse.json({ error: { message: "This pricing plan is not available for your account" } }, { status: 403 });
-    const rate = requestedPlan?.customerType === "SELF_SERVE" ? requestedPlan.impressionRate : requestedPlan?.autoDayRate;
+    if (requestedPlan && requestedPlan.customerType !== "SELF_SERVE" && requestedPlan.commitmentMonths) {
+      const start = input!.startDate ? Date.parse(`${input!.startDate}T00:00:00Z`) : NaN;
+      const end = input!.endDate ? Date.parse(`${input!.endDate}T00:00:00Z`) : NaN;
+      const campaignDays = Number.isFinite(start) && Number.isFinite(end) ? Math.floor((end - start) / 86_400_000) + 1 : 0;
+      const minimumDays = requestedPlan.commitmentMonths * 30;
+      if (campaignDays < minimumDays) return NextResponse.json({ error: { message: `This plan requires at least ${minimumDays} campaign days (${requestedPlan.commitmentMonths} month${requestedPlan.commitmentMonths === 1 ? "" : "s"}).` } }, { status: 422 });
+    }
+    const rateOverride = requestedPlan && requestedPlan.customerType !== "SELF_SERVE" && context?.organization?.id
+      ? await webPrisma.organizationPricingOverride.findFirst({ where: { organizationId: context.organization.id, pricingPlanId: requestedPlan.id, effectiveFrom: { lte: new Date() }, OR: [{ effectiveUntil: null }, { effectiveUntil: { gt: new Date() } }] }, orderBy: { effectiveFrom: "desc" } })
+      : null;
+    const rate = requestedPlan?.customerType === "SELF_SERVE" ? requestedPlan.impressionRate : (rateOverride?.customRate ?? requestedPlan?.autoDayRate);
     const metadata = { goal: input!.goal, audience: input!.audience, city: input!.city, area: input!.area, media: input!.media, budget: input!.budget, currency: input!.currency, ...input!.metadata };
     const campaign = await webPrisma.campaign.create({ data: {
       ownerEmail: email, userId: context?.account.id, name: input!.name!.trim(), description: input!.description?.trim(), status: "DRAFT",
@@ -76,7 +88,7 @@ export async function POST(request: Request) {
       timezone: String(input!.metadata?.timezone ?? "Asia/Kolkata"), layout: String(input!.media ?? "OORO Auto Screens"),
       campaignCenterLat: input!.campaignCenterLat, campaignCenterLng: input!.campaignCenterLng, radiusKm: input!.radiusKm,
       forecastSnapshot: input!.forecastSnapshot ? JSON.parse(JSON.stringify(input!.forecastSnapshot)) : undefined, forecastGeneratedAt: input!.forecastGeneratedAt ? new Date(input!.forecastGeneratedAt) : undefined, forecastExpiresAt: input!.forecastExpiresAt ? new Date(input!.forecastExpiresAt) : undefined, forecastVersion: input!.forecastVersion,
-      deliveryTier: input!.deliveryTier ?? (String(input!.metadata?.deliveryTier ?? "STANDARD") === "PREMIUM_PLUS" ? "PREMIUM_PLUS" : "STANDARD"), pricingPlanId: requestedPlan?.id, effectiveRate: rate, pricingSource: requestedPlan ? (requestedPlan.customerType === "SELF_SERVE" ? "PUBLIC_SELF_SERVE" : "VERIFIED_PLAN") : undefined, pricingSnapshot: requestedPlan ? { customerType: requestedPlan.customerType, plan: requestedPlan.name, impressionRate: requestedPlan.impressionRate, autoDayRate: requestedPlan.autoDayRate, effectiveRate: rate, budget: input!.budget ?? null } : undefined,
+      deliveryTier: requestedPlan ? (requestedPlan.deliveryTier === "PREMIUM_PLUS" ? "PREMIUM_PLUS" : "STANDARD") : (input!.deliveryTier ?? (String(input!.metadata?.deliveryTier ?? "STANDARD") === "PREMIUM_PLUS" ? "PREMIUM_PLUS" : "STANDARD")), pricingPlanId: requestedPlan?.id, effectiveRate: rate, pricingSource: requestedPlan ? (requestedPlan.customerType === "SELF_SERVE" ? "PUBLIC_SELF_SERVE" : requestedPlan.deliveryTier === "PREMIUM_PLUS" ? "PREMIUM_PLUS" : rateOverride ? "ORGANIZATION_OVERRIDE" : "VERIFIED_PLAN") : undefined, pricingSnapshot: requestedPlan ? { customerType: requestedPlan.customerType, plan: requestedPlan.name, commitmentMonths: requestedPlan.commitmentMonths, deliveryTier: requestedPlan.deliveryTier, impressionRate: requestedPlan.impressionRate, autoDayRate: requestedPlan.autoDayRate, effectiveRate: rate, customPricing: Boolean(rateOverride), budget: input!.budget ?? null } : undefined,
       metadata,
     } });
     return NextResponse.json({ data: campaign }, { status: 201 });

@@ -22,6 +22,7 @@ export function ContentSettings() {
   const [priority, setPriority] = useState(0);
   const [zone, setZone] = useState<Zone>(initialZone);
   const [savedContractVersion, setSavedContractVersion] = useState<number | null>(null);
+  const [layoutLoading, setLayoutLoading] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
   const [loading, setLoading] = useState(true);
@@ -52,9 +53,10 @@ export function ContentSettings() {
   useEffect(() => { void load(); }, []);
 
   useEffect(() => {
-    if (!screenId) { setZone(initialZone); setSavedContractVersion(null); return; }
+    if (!screenId) { setZone(initialZone); setSavedContractVersion(null); setLayoutLoading(false); return; }
     setZone(initialZone);
     setSavedContractVersion(null);
+    setLayoutLoading(true);
     setError("");
     let active = true;
     setSaved("");
@@ -68,7 +70,8 @@ export function ContentSettings() {
           setSavedContractVersion(version);
         }
       })
-      .catch(caught => { if (active) setError(caught instanceof Error ? caught.message : "Screen layout could not be loaded."); });
+      .catch(caught => { if (active) setError(caught instanceof Error ? caught.message : "Screen layout could not be loaded."); })
+      .finally(() => { if (active) setLayoutLoading(false); });
     return () => { active = false; };
   }, [screenId]);
 
@@ -111,14 +114,14 @@ export function ContentSettings() {
           <h2 id="sponsored-placement-title" className="mt-2 text-lg font-semibold text-neutral-100">Sponsored strip replaces the news ticker</h2>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-neutral-400">On V3 screens, the lower strip is reserved for a sponsored image. Create it as a campaign and choose <strong className="font-semibold text-neutral-200">Sponsored placement</strong>; it will not be managed as a news announcement.</p>
         </div>
-        <span className={`inline-flex w-fit shrink-0 items-center rounded-full border px-3 py-1.5 text-xs font-semibold ${isV3 && canActivateSponsoredSlot ? "border-lime-400/30 bg-lime-400/10 text-lime-200" : "border-amber-400/30 bg-amber-400/10 text-amber-200"}`}>{isV3Active ? "V3 configuration saved" : isV3 && !canActivateSponsoredSlot ? "V3 selected · player support unverified" : isV3 ? "V3 selected · save to activate" : "Legacy layout active"}</span>
+        <span className={`inline-flex w-fit shrink-0 items-center rounded-full border px-3 py-1.5 text-xs font-semibold ${isV3 && canActivateSponsoredSlot ? "border-lime-400/30 bg-lime-400/10 text-lime-200" : "border-amber-400/30 bg-amber-400/10 text-amber-200"}`}>{!screenId ? "Select a screen" : isV3Active ? "V3 configuration saved" : isV3 && !canActivateSponsoredSlot ? "V3 support unverified" : isV3 ? "V3 selected · save to activate" : "V2 legacy layout"}</span>
       </div>
       <div className="mt-5 grid gap-3 sm:grid-cols-3">
         <div className="rounded-xl border border-white/10 bg-black/20 p-4"><p className="text-xs text-neutral-500">Main creative</p><p className="mt-1 text-sm font-medium text-neutral-200">Full-size campaign area</p></div>
         <div className="rounded-xl border border-[#dfff00]/30 bg-[#dfff00]/[.06] p-4"><p className="text-xs text-[#dfff00]/70">Sponsored strip</p><p className="mt-1 text-sm font-medium text-neutral-100">Image campaign · dedicated slot</p></div>
         <div className="rounded-xl border border-white/10 bg-black/20 p-4"><p className="text-xs text-neutral-500">Offer & navigation</p><p className="mt-1 text-sm font-medium text-neutral-200">QR and route panel</p></div>
       </div>
-      {!v3Supported && <p className="mt-4 rounded-lg border border-amber-400/20 bg-amber-400/[.06] px-4 py-3 text-xs leading-5 text-amber-100">This API does not report a V3 layout contract yet. V3 controls stay locked until the migration and compatible API are deployed; existing screens keep their current layout.</p>}
+      {!screenId && <p className="mt-4 rounded-lg border border-white/10 bg-black/20 px-4 py-3 text-xs leading-5 text-neutral-300">Select the paired screen below to see its saved layout and reported player capabilities. Screens without a saved layout use the V2 defaults.</p>}
     </section>
 
     <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(340px,.8fr)]">
@@ -137,9 +140,10 @@ export function ContentSettings() {
 
       <SectionCard title="Screen layout" description="Choose a screen to inspect its current layout and update supported settings.">
         <label className="block text-sm font-medium">Screen<select value={screenId} onChange={event => setScreenId(event.target.value)} className={fieldClass}><option value="">Select a screen</option>{screens.map(screen => <option value={screen.screenId} key={screen.screenId}>{screen.screenName} · {screen.city || "City not set"}</option>)}</select></label>
-        {!screenId ? <p className="mt-5 rounded-lg border border-white/10 bg-black/20 p-4 text-sm leading-6 text-neutral-400">Select a screen to see its layout contract and available controls.</p> : !v3Supported ? <div className="mt-5 rounded-lg border border-white/10 bg-black/20 p-4"><p className="text-sm font-medium text-neutral-200">Current layout: legacy configuration</p><p className="mt-1 text-xs leading-5 text-neutral-500">The server has not returned a layout contract version. V3 cannot be enabled safely from this admin build.</p></div> : <>
+        {!screenId ? <p className="mt-5 rounded-lg border border-white/10 bg-black/20 p-4 text-sm leading-6 text-neutral-400">Select a screen to see its effective layout and the capability reported by its paired player.</p> : layoutLoading ? <p className="mt-5 rounded-lg border border-white/10 bg-black/20 p-4 text-sm text-neutral-400">Loading this screen’s layout and player capabilities…</p> : !v3Supported ? <div className="mt-5 rounded-lg border border-white/10 bg-black/20 p-4"><p className="text-sm font-medium text-neutral-200">Layout configuration unavailable</p><p className="mt-1 text-xs leading-5 text-neutral-500">The screen layout could not be confirmed. Retry before changing layout settings.</p></div> : <>
           <div className="mt-5 rounded-lg border border-white/10 bg-black/20 p-4"><p className="text-xs text-neutral-500">Current contract</p><p className="mt-1 text-sm font-semibold text-neutral-100">V{zone.layoutContractVersion} · {isV3Active ? "Sponsored strip active · no news ticker" : isV3 ? "Sponsored strip selected · not saved yet" : zone.layoutContractVersion === 2 ? "Legacy layout with news ticker" : "Legacy geometry"}</p></div>
-          <label className="mt-4 block text-sm font-medium">Player layout<select value={zone.layoutContractVersion ?? 2} onChange={event => setZone(current => ({ ...current, layoutContractVersion: Number(event.target.value) }))} className={fieldClass}><option value={1}>V1 · legacy geometry</option><option value={2}>V2 · sidebar with news ticker</option><option value={3} disabled={!canActivateSponsoredSlot && zone.layoutContractVersion !== 3}>V3 · sponsored strip, no ticker{!canActivateSponsoredSlot ? " (player support unverified)" : ""}</option></select><span className="mt-1.5 block text-xs leading-5 text-neutral-500">V3 can be selected only when the API confirms this screen’s player supports the sponsored slot and the migration is deployed.</span></label>
+          <div className={`mt-4 rounded-lg border px-4 py-3 text-xs leading-5 ${canActivateSponsoredSlot ? "border-lime-400/20 bg-lime-400/[.05] text-lime-100" : "border-amber-400/20 bg-amber-400/[.06] text-amber-100"}`}><p className="font-semibold">Sponsored-slot support: {canActivateSponsoredSlot ? "confirmed" : "not reported yet"}</p>{!canActivateSponsoredSlot && <p className="mt-1">Install the updated OORO Screen Player and let it reconnect. V3 stays locked until its authenticated heartbeat confirms support.</p>}</div>
+          <label className="mt-4 block text-sm font-medium">Player layout<select value={zone.layoutContractVersion ?? 2} onChange={event => setZone(current => ({ ...current, layoutContractVersion: Number(event.target.value) }))} className={fieldClass}><option value={1}>V1 · legacy geometry</option><option value={2}>V2 · sidebar with news ticker</option><option value={3} disabled={!canActivateSponsoredSlot && zone.layoutContractVersion !== 3}>V3 · sponsored strip, no ticker{!canActivateSponsoredSlot ? " (player support unverified)" : ""}</option></select><span className="mt-1.5 block text-xs leading-5 text-neutral-500">V3 is enabled only after this paired screen reports support and the server has its V3 layout migration.</span></label>
           {!isV3 && <div className="mt-4 grid gap-3 sm:grid-cols-2">{([["primaryWidthPercent","Primary area width (%)"],["adHeightPercent","Main creative height (%)"],["qrHeightPercent","QR area height (%)"],["newsScrollSpeed","Legacy ticker speed"]] as const).map(([key,label]) => <label className="block text-sm font-medium" key={key}>{label}<input type="number" value={zone[key]} onChange={event => setZone(current => ({ ...current, [key]: Number(event.target.value) || 0 }))} className={fieldClass} /></label>)}</div>}
           {isV3 && <p className="mt-4 rounded-lg border border-[#dfff00]/20 bg-[#dfff00]/[.05] p-4 text-sm leading-6 text-neutral-200">V3 uses a fixed sponsored strip. Create or edit the sponsor from <Link href="/admin/campaigns/new" className="font-semibold text-[#dfff00] underline underline-offset-4">Campaigns</Link>; no ticker text or speed setting is used.</p>}
           {isV3 && !canActivateSponsoredSlot && <p className="mt-4 rounded-lg border border-amber-400/20 bg-amber-400/[.06] p-4 text-sm leading-6 text-amber-100">Sponsored strip activation is locked because this screen’s player support has not been confirmed by the API. Ask an administrator to update the player/API first.</p>}

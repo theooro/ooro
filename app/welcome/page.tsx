@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { webContext } from "@/lib/web-owner";
 import type { Metadata } from "next";
+import { ensureBusinessReview } from "@/lib/ensure-business-review";
 export const metadata: Metadata = { robots: { index: false, follow: false } };
 
 export default async function WelcomePage({ searchParams }: { searchParams: Promise<{ next?: string }> }) {
@@ -14,6 +15,10 @@ export default async function WelcomePage({ searchParams }: { searchParams: Prom
   if (context.account.accountType === "AGENCY") redirect("/agency");
   if (context.account.accountType === "NETWORK") redirect("/network/status");
   if (context.account.accountType === "EXPLORER") redirect("/");
-  if (context.account.accountType === "BRAND" && context.organization?.verificationStatus !== "VERIFIED") redirect("/verification");
+  if (context.account.accountType === "BUSINESS") {
+    const organization = context.organization ?? await ensureBusinessReview(context.account);
+    redirect(organization.verificationStatus === "VERIFIED" ? "/dashboard" : "/verification");
+  }
+  if (["BRAND", "AGENCY", "BUSINESS"].includes(context.account.accountType) && context.organization?.verificationStatus !== "VERIFIED") redirect("/verification");
   redirect("/dashboard");
 }

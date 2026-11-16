@@ -47,10 +47,12 @@ class DeviceOsApi {
     }
     fun report(credentials: DeviceCredentials, targetId: String, state: String, idempotencyKey: String, fields: JSONObject = JSONObject()) { request("/api/deviceos/targets/$targetId/events", "POST", credentials.token, fields.put("state", state).put("idempotencyKey", idempotencyKey)) }
     fun download(credentials: DeviceCredentials, releaseId: String, destination: File, expectedBytes: Long): Long {
+        require(releaseId.matches(Regex("^[0-9a-fA-F-]{36}$"))) { "RELEASE_ID_INVALID" }
         var existing = if (destination.exists()) destination.length() else 0L
         if (existing > expectedBytes) { destination.delete(); existing = 0L }
         if (existing == expectedBytes) return existing
         val downloadUrl = request("/api/deviceos/releases/$releaseId/download-url", "GET", credentials.token, null).getJSONObject("data").getString("url")
+        requireValidHttpsDownloadUrl(downloadUrl)
         val connection = openAbsolute(downloadUrl).apply { if (existing > 0) setRequestProperty("Range", "bytes=$existing-"); connectTimeout = 15_000; readTimeout = 60_000 }
         val status = connection.responseCode
         if (status !in 200..299 && status != 206) error("DOWNLOAD_HTTP_$status")
@@ -61,7 +63,16 @@ class DeviceOsApi {
     }
     private fun request(path: String, method: String, token: String?, body: JSONObject?): JSONObject { val connection = open(path, method, token); if (body != null) { connection.doOutput = true; connection.outputStream.use { it.write(body.toString().toByteArray()) } }; val status = connection.responseCode; val text = (if (status in 200..299) connection.inputStream else connection.errorStream).bufferedReader().use { it.readText() }; if (status !in 200..299) error("API_$status:${runCatching { JSONObject(text).optJSONObject("error")?.optString("code") }.getOrNull()}"); return JSONObject(text) }
     private fun open(path: String, method: String, token: String?): HttpURLConnection = (URL(base + path).openConnection() as HttpURLConnection).apply { requestMethod = method; connectTimeout = 15_000; readTimeout = 30_000; setRequestProperty("Accept", "application/json"); if (bodyMethod(method)) setRequestProperty("Content-Type", "application/json"); if (token != null) setRequestProperty("Authorization", "Bearer $token") }
-    private fun openAbsolute(url: String): HttpURLConnection = (URL(url).openConnection() as HttpURLConnection).apply { requestMethod = "GET"; setRequestProperty("Accept", "application/vnd.android.package-archive") }
+    private fun openAbsolute(url: String): HttpURLConnection {
+        requireValidHttpsDownloadUrl(url)
+        return (URL(url).openConnection() as HttpURLConnection).apply {
+            instanceFollowRedirects = false
+            requestMethod = "GET"
+            setRequestProperty("Accept", "application/vnd.android.package-archive")
+            connectTimeout = 15_000
+            readTimeout = 60_000
+        }
+    }
     private fun bodyMethod(method: String) = method == "POST" || method == "PUT"
 }
 
@@ -71,4 +82,17 @@ fun resumeRangeStartsAt(contentRange: String?, expectedStart: Long): Boolean {
     return start == expectedStart
 }
 
+fun requireValidHttpsDownloadUrl(value: String) {
+    val uri = runCatching { java.net.URI(value) }.getOrElse { error("DOWNLOAD_URL_INVALID") }
+    if (!uri.scheme.equals("https", ignoreCase = true) || uri.host.isNullOrBlank() || uri.rawUserInfo != null || uri.rawFragment != null) {
+        error("DOWNLOAD_URL_NOT_APPROVED_HTTPS")
+    }
+}
+
 fun sha256(file: File): String { val digest = MessageDigest.getInstance("SHA-256"); file.inputStream().use { input -> val buffer = ByteArray(64 * 1024); while (true) { val read = input.read(buffer); if (read < 0) break; digest.update(buffer, 0, read) } }; return digest.digest().joinToString("") { "%02x".format(it) } }
+
+fun validateDownloadedArtifact(file: File, expectedBytes: Long, expectedSha256: String) {
+    if (!file.exists() || file.length() != expectedBytes) error("APK_SIZE_MISMATCH")
+    if (!expectedSha256.matches(Regex("^[0-9a-fA-F]{64}$"))) error("RELEASE_SHA256_INVALID")
+    if (!sha256(file).equals(expectedSha256, ignoreCase = true)) error("APK_SHA256_MISMATCH")
+}

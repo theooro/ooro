@@ -428,6 +428,7 @@ model Display {
   batteryLevel              Int?
   chargingState             String?
   lastNetworkType           String?
+  supportsSponsoredSlot     Boolean                     @default(false)
   createdAt                 DateTime                    @default(now())
   updatedAt                 DateTime                    @updatedAt
   pairingCodes              DisplayPairingCode[]
@@ -832,6 +833,8 @@ model DisplayHeartbeat {
   networkType        String?
   networkConnected   Boolean?
   manifestVersion    Int?
+  activeLayout       String?
+  layoutContractVersion Int?
   currentCreativeId  String?
   playbackState      String?
   screenState        String?
@@ -1658,6 +1661,7 @@ model PricingPlan {
   commitmentMonths Int?
   autoDayRate      Int?
   impressionRate   Int?
+  deliveryTier     String                        @default("STANDARD")
   isPublic         Boolean                       @default(false)
   active           Boolean                       @default(true)
   createdAt        DateTime                      @default(now())
@@ -1771,4 +1775,47 @@ model InventoryAllocation {
 
   @@unique([screenId, date, slot])
   @@index([campaignId, date, status])
+}
+
+
+model CompanyAsset {
+  id                String   @id @default(uuid()) @db.Uuid
+  assetCode         String   @unique
+  title             String
+  kind              String   @default("DISPLAY")
+  status            String   @default("DOCUMENTS_PENDING")
+  ownershipStatus   String   @default("UNVERIFIED")
+  legalEntityName   String   @default("ANOK Private Limited")
+  serialNumber      String?
+  deviceId          String?
+  acquisitionCostPaise Int?
+  notes             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  documents         AssetDocument[]
+  events            AssetEvent[]
+}
+
+model AssetDocument {
+  id               String   @id @default(uuid()) @db.Uuid
+  assetId          String   @db.Uuid
+  type             String
+  objectKey        String   @unique
+  filename         String
+  contentType      String
+  sizeBytes        Int
+  uploadedById     String   @db.Uuid
+  createdAt        DateTime @default(now())
+  asset            CompanyAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  @@index([assetId])
+}
+
+model AssetEvent {
+  id               String   @id @default(uuid()) @db.Uuid
+  assetId          String   @db.Uuid
+  actorId          String?  @db.Uuid
+  action           String
+  createdAt        DateTime @default(now())
+  asset            CompanyAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  @@index([assetId, createdAt])
 }

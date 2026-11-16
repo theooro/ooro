@@ -1,15 +1,24 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 import Link from "next/link";
 import { PublicPage, PublicCta } from "@/components/marketing/public-page";
 import { pageMetadata, breadcrumbJsonLd } from "@/lib/seo";
 
 export const metadata: Metadata = pageMetadata(
   "digital-advertising-bengaluru",
-  "Digital Advertising in Bengaluru: Auto Screens and Local Campaigns",
-  "Looking for digital advertising in Bengaluru? Compare Google and social ads with OORO's passenger-facing digital screens inside autos. Learn about creative, costs, booking and proof of play."
+  "DOOH Advertising in Bengaluru",
+  "Plan digital out-of-home (DOOH) advertising in Bengaluru and Bangalore on passenger-facing auto and cab screens. See how OORO reviews creative, confirms inventory, and reports playback."
 );
 
 const questions = [
+  {
+    question: "What does DOOH mean?",
+    answer: "DOOH means digital out-of-home advertising: digital screens used in physical places outside the home. OORO's Bengaluru format is mobile DOOH on passenger-facing screens inside eligible autos and cabs."
+  },
+  {
+    question: "Does OORO offer digital billboards?",
+    answer: "No. This OORO service is passenger-facing digital screens inside eligible autos and cabs. It is not fixed billboard inventory or an online search or social campaign."
+  },
   {
     question: "Does OORO run Google Ads or social media campaigns?",
     answer: "Not through this service. OORO's current offering is digital out-of-home advertising on eligible passenger-facing screens inside participating vehicles. Search and social ads are different channels."
@@ -29,14 +38,45 @@ const questions = [
 ];
 
 export default function Page() {
-  const crumbs = breadcrumbJsonLd([{ name: "Home", path: "/" }, { name: "Bengaluru advertising", path: "/bengaluru" }, { name: "Digital advertising in Bengaluru", path: "/digital-advertising-bengaluru" }]);
+  const crumbs = breadcrumbJsonLd([{ name: "Home", path: "/" }, { name: "Bengaluru advertising", path: "/bengaluru" }, { name: "DOOH advertising in Bengaluru", path: "/digital-advertising-bengaluru" }]);
   return <PublicPage
-    eyebrow="Bengaluru / Advertising options"
-    title="Digital advertising in Bengaluru, beyond the phone."
-    description="Searching for advertising in Bengaluru? Search, social, billboards and passenger-facing digital screens solve different problems. OORO focuses on advertising inside eligible autos—helping local businesses plan a campaign without inventing coverage or results."
-  >
+    eyebrow="Bengaluru / Digital out-of-home"
+    title="DOOH advertising in Bengaluru, on the move."
+    description="OORO offers mobile digital out-of-home (DOOH) advertising on passenger-facing screens inside eligible autos and cabs in Bengaluru. Inventory, dates and commercial terms are checked for each request."
+    primaryAction={{ href: "/advertise", label: "Plan DOOH advertising in Bengaluru" }} secondaryAction={{ href: "/coverage", label: "Check service coverage" }}
+    >
     <article className="container-ooro max-w-5xl py-14 sm:py-20 text-[#182019]">
-      <nav aria-label="Breadcrumb" className="text-sm text-neutral-600"><Link href="/">Home</Link><span className="px-2">/</span><Link href="/bengaluru">Bengaluru advertising</Link><span className="px-2">/</span><span aria-current="page">Digital advertising</span></nav>
+      <nav aria-label="Breadcrumb" className="text-sm text-neutral-600"><Link href="/">Home</Link><span className="px-2">/</span><Link href="/bengaluru">Bengaluru advertising</Link><span className="px-2">/</span><span aria-current="page">DOOH advertising</span></nav>
+
+      <figure className="mt-8">
+        <div className="relative aspect-[16/8] overflow-hidden rounded-xl bg-neutral-200">
+          <Image
+            src="/field/ooro-bengaluru-auto-02.webp"
+            alt="OORO passenger-facing digital display installed inside an auto-rickshaw in Bengaluru"
+            fill
+            sizes="(max-width: 768px) calc(100vw - 40px), 960px"
+            className="object-cover"
+          />
+        </div>
+        <figcaption className="mt-3 text-sm leading-6 text-neutral-600">OORO field photography. Campaign availability is checked separately for each request.</figcaption>
+      </figure>
+
+      <section className="mt-10 border-y border-black/15 bg-white px-5 py-6 sm:px-8" aria-label="Direct answer about OORO DOOH">
+        <p className="text-xs font-semibold uppercase tracking-[.15em] text-[#596944]">Direct answer</p>
+        <h2 className="mt-3 text-2xl font-semibold tracking-tight">What is DOOH advertising in Bengaluru?</h2>
+        <p className="mt-4 max-w-4xl text-base leading-8 text-neutral-700">Digital out-of-home (DOOH) is advertising shown on digital screens in physical environments. OORO&apos;s Bengaluru format is mobile DOOH: a passenger-facing screen inside an eligible auto or cab. OORO confirms inventory and terms before booking; the service does not guarantee a particular route or audience.</p>
+      </section>
+
+      <section className="mt-10 border-t border-black/15 pt-8">
+        <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">Digital outdoor advertising in Bangalore: fixed or mobile?</h2>
+        <p className="mt-5 max-w-3xl text-base leading-8 text-neutral-700">People use “digital outdoor advertising in Bangalore” for different placements, from fixed venue screens to displays in moving vehicles. OORO is the mobile format: a passenger-facing screen inside an eligible auto or cab. Bengaluru and Bangalore are commonly used names for the same city; neither name implies that a particular neighborhood or route is guaranteed.</p>
+      </section>
+
+      <section className="mt-12 grid gap-4 border-y border-black/15 py-7 sm:grid-cols-3" aria-label="OORO format at a glance">
+        <div><h2 className="font-semibold">The placement</h2><p className="mt-2 text-sm leading-6 text-neutral-700">A digital message on a passenger-facing screen inside an eligible auto or cab.</p></div>
+        <div><h2 className="font-semibold">What gets confirmed</h2><p className="mt-2 text-sm leading-6 text-neutral-700">Eligible screens, dates and commercial terms are reviewed before booking.</p></div>
+        <div><h2 className="font-semibold">What playback means</h2><p className="mt-2 text-sm leading-6 text-neutral-700">A playback record, where supported, does not establish unique viewers or sales.</p></div>
+      </section>
 
       <section className="mt-12 border-t border-black/15 pt-8">
         <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">Which type of digital advertising fits your business?</h2>
@@ -45,9 +85,9 @@ export default function Page() {
           <tr className="border-b border-black/10"><th scope="row" className="p-3 font-semibold">Search advertising</th><td className="p-3">People are looking for your product or service now</td><td className="p-3">Clicks, queries, conversions and spend</td></tr>
           <tr className="border-b border-black/10"><th scope="row" className="p-3 font-semibold">Social media advertising</th><td className="p-3">You want to communicate an offer or build awareness in a feed</td><td className="p-3">Delivery metrics, clicks and measured outcomes</td></tr>
           <tr className="border-b border-black/10"><th scope="row" className="p-3 font-semibold">Fixed outdoor screens</th><td className="p-3">A fixed site or known viewing context suits the message</td><td className="p-3">Placement, schedule and playback records</td></tr>
-          <tr className="border-b border-black/10"><th scope="row" className="p-3 font-semibold">OORO auto screens</th><td className="p-3">You want a brand message inside a passenger&apos;s everyday journey</td><td className="p-3">Approved inventory and proof-of-play where supported</td></tr>
+          <tr className="border-b border-black/10"><th scope="row" className="p-3 font-semibold">OORO mobile DOOH</th><td className="p-3">You want a brand message inside a passenger&apos;s auto or cab journey</td><td className="p-3">Approved inventory and proof-of-play where supported</td></tr>
         </tbody></table></div>
-        <p className="mt-4 text-sm leading-6 text-neutral-600">OORO offers the last format. This comparison is educational, not an offer to buy Google Ads, Meta Ads or fixed billboards through OORO.</p>
+        <p className="mt-4 text-sm leading-6 text-neutral-600">OORO offers mobile DOOH inside eligible autos and cabs. This comparison is educational; OORO does not sell Google Ads, Meta Ads or fixed billboards.</p>
       </section>
 
       <section className="mt-12 border-t border-black/15 pt-8">
@@ -73,6 +113,22 @@ export default function Page() {
       </section>
 
       <section className="mt-12 border-t border-black/15 pt-8">
+        <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">What to confirm before you book</h2>
+        <p className="mt-5 max-w-3xl text-base leading-8 text-neutral-700">Use these questions to compare an OORO proposal with any other advertising quote. Get the answers in writing so a preference, estimate or sample report is not mistaken for a confirmed placement.</p>
+        <ul className="mt-5 grid gap-3 sm:grid-cols-2">
+          {[
+            "Which screens and campaign dates are confirmed for this request?",
+            "What is included in the price, and what costs extra?",
+            "What file dimensions, duration and review deadline apply to this screen?",
+            "Which delivery records will the report show, and which figures are estimates?",
+            "What happens if inventory, artwork or dates need to change?",
+            "Who will approve the final creative and confirm the campaign is booked?",
+          ].map(question => <li key={question} className="border border-black/15 p-4 text-sm leading-6 text-neutral-700">{question}</li>)}
+        </ul>
+        <p className="mt-5 max-w-3xl text-sm leading-7 text-neutral-600">For a related format guide, read <Link className="underline underline-offset-4" href="/auto-rickshaw-advertising-bangalore">how advertising inside auto-rickshaws works</Link>. For OORO&apos;s reporting limits, see the <Link className="underline underline-offset-4" href="/methodology">measurement methodology</Link>.</p>
+      </section>
+
+      <section className="mt-12 border-t border-black/15 pt-8">
         <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">Frequently asked questions</h2>
         <div className="mt-5 space-y-5">{questions.map(item => <div key={item.question} className="border-b border-black/10 pb-5"><h3 className="font-semibold">{item.question}</h3><p className="mt-2 max-w-3xl text-sm leading-7 text-neutral-700">{item.answer}</p></div>)}</div>
       </section>
@@ -80,8 +136,8 @@ export default function Page() {
       <section className="mt-12 border-t border-black/15 pt-8">
         <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">Planning a Bengaluru campaign?</h2>
         <p className="mt-4 max-w-3xl leading-8 text-neutral-700">Tell us your business, audience, preferred areas, dates and budget. OORO will review the request and confirm eligible inventory and the applicable terms before any campaign is booked.</p>
-        <div className="mt-7"><PublicCta href="/advertise">Plan advertising in Bengaluru</PublicCta></div>
-        <p className="mt-5 text-sm text-neutral-700">You can also explore <Link className="underline underline-offset-4" href="/auto-rickshaw-advertising-bangalore">advertising inside auto-rickshaws</Link> or <Link className="underline underline-offset-4" href="/contact">contact the OORO team</Link>.</p>
+        <div className="mt-7"><PublicCta href="/advertise">Plan DOOH advertising in Bengaluru</PublicCta></div>
+        <p className="mt-5 text-sm text-neutral-700">You can also explore <Link className="underline underline-offset-4" href="/auto-rickshaw-advertising-bangalore">advertising inside auto-rickshaws</Link>, <Link className="underline underline-offset-4" href="/cab-advertising-bengaluru">cab advertising in Bengaluru</Link>, or <Link className="underline underline-offset-4" href="/contact">contact the OORO team</Link>.</p>
       </section>
     </article>
     <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(crumbs) }} />

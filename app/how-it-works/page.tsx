@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { PublicPage, PublicSection } from "@/components/marketing/public-page";
 import { pageMetadata } from "@/lib/seo";
+import { ContentFaq } from "@/components/marketing/content-faq";
 
 export const metadata: Metadata = pageMetadata("how-it-works", "How OORO Campaign Planning Works", "Understand campaign briefs, creative review, eligible inventory confirmation and scheduling with OORO.");
 
@@ -12,7 +13,7 @@ const steps = [
 ] as const;
 
 export default function HowItWorksPage() {
-  return <PublicPage eyebrow="How OORO works" title="From campaign brief to delivery evidence." description="A clear operating path for mobility advertising: request a plan, review creative, confirm eligible inventory and understand what actually played.">
+  return <PublicPage eyebrow="How OORO works" title="From campaign brief to delivery evidence." description="A clear operating path for mobility advertising: request a plan, review creative, confirm eligible inventory and understand what actually played." size="compact" primaryAction={{ href: "/advertise", label: "Start a campaign request" }} secondaryAction={{ href: "/methodology", label: "Review measurement method" }}>
     <PublicSection title="Four steps. Clear checkpoints.">
       <ol className="mt-10 border-t border-black/15">
         {steps.map(step => <li key={step.number} className="grid gap-4 border-b border-black/15 py-7 sm:grid-cols-[72px_minmax(0,1fr)_minmax(180px,.65fr)] sm:items-start sm:gap-8 sm:py-9">
@@ -22,5 +23,10 @@ export default function HowItWorksPage() {
         </li>)}
       </ol>
     </PublicSection>
-  </PublicPage>;
+  <PublicSection title="Before and after a campaign"><p>Before launch, confirm the approved creative version, campaign dates, eligible screens, price and any production requirements. Keep a copy of the confirmed terms. If the brief changes, ask whether the inventory or schedule needs to be reviewed again.</p><p className="mt-5">After delivery, read the report using its definitions. Device playback records can show that a creative was reported as played on a screen. They do not automatically establish passenger attention, unique reach, conversions or sales.</p></PublicSection>
+<ContentFaq title="How OORO campaigns work" items={[
+ {question:"When is a campaign confirmed?",answer:"After OORO reviews the brief and creative, checks eligible inventory and confirms commercial terms. A planning estimate or submitted request is not a booking confirmation."},
+ {question:"Can I choose a guaranteed route?",answer:"You can provide preferred areas for planning, but OORO does not guarantee a particular vehicle, route or individual audience."},
+ {question:"What does Proof-of-Play tell me?",answer:"Where supported, Proof-of-Play reports device playback events for the approved creative. It is different from a forecast and is not a direct measurement of attention or sales."}
+]} /></PublicPage>;
 }
