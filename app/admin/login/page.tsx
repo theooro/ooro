@@ -3,7 +3,9 @@ import { AdminAuthError, getAuthenticatedAdmin } from "@/lib/auth/backend-sessio
 import { redirect } from "next/navigation";
 export const dynamic = "force-dynamic";
 
-export default async function AdminLoginPage() {
+export default async function AdminLoginPage({ searchParams }: { searchParams: Promise<{ invitation?: string | string[] }> }) {
+ const params = await searchParams;
+ const invitationAccepted = params.invitation === "accepted";
  try { await getAuthenticatedAdmin({ refreshSession: false }); redirect("/admin"); }
  catch (error) { if (!(error instanceof AdminAuthError)) throw error; }
- return <main className="admin-login flex min-h-screen items-center justify-center px-6 py-12"><div className="w-full max-w-md"><p className="eyebrow text-[#dfff00]">OORO / Admin</p><h1 className="display mt-4 text-5xl font-medium">Admin access.</h1><p className="mt-5 text-sm leading-6 text-neutral-400">Sign in with your OORO admin email and password.</p><div className="admin-login-card mt-10 rounded-2xl border p-6 sm:p-8"><AdminAuthForm/></div></div></main>; }
+ return <main className="admin-login flex min-h-screen items-center justify-center px-6 py-12"><div className="w-full max-w-md"><p className="eyebrow text-[#dfff00]">OORO / Admin</p><h1 className="display mt-4 text-5xl font-medium">Admin access.</h1><p className="mt-5 text-sm leading-6 text-neutral-400">Sign in with your OORO admin email and password.</p>{invitationAccepted && <p role="status" className="mt-6 rounded-xl border border-lime-300/30 bg-lime-300/10 px-4 py-3 text-sm text-lime-100">Invitation accepted. Your administrator account is ready. Sign in with your email and password.</p>}<div className="admin-login-card mt-10 rounded-2xl border p-6 sm:p-8"><AdminAuthForm/></div></div></main>; }

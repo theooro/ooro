@@ -10,6 +10,10 @@ import java.time.Instant
 
 internal const val MANIFEST_REFRESH_LEAD_MILLIS = 120_000L
 internal const val NETWORK_RECOVERY_THROTTLE_MILLIS = 30_000L
+internal const val MANIFEST_UPDATE_POLL_INTERVAL_MILLIS = 180_000L
+
+internal fun shouldPollForManifestUpdate(nowElapsedMillis: Long, lastPollElapsedMillis: Long): Boolean =
+    lastPollElapsedMillis <= 0L || nowElapsedMillis - lastPollElapsedMillis >= MANIFEST_UPDATE_POLL_INTERVAL_MILLIS
 
 internal fun shouldRefreshAfterNetworkRecovery(nowElapsedMillis: Long, lastRefreshElapsedMillis: Long): Boolean =
     lastRefreshElapsedMillis <= 0L || nowElapsedMillis - lastRefreshElapsedMillis >= NETWORK_RECOVERY_THROTTLE_MILLIS
@@ -59,6 +63,20 @@ internal fun nextVerifiedManifestItem(
     return scheduler.next(manifest, now, offset, verifiedItemIds)
 }
 
+/**
+ * Selects from a previously accepted local snapshot during an outage. The
+ * manifest lease is not renewed here: item campaign dates and daily schedules
+ * still apply, and callers must only use this for a manifest already committed
+ * from an authenticated response and whose assets have been checksum-verified.
+ */
+internal fun nextVerifiedCachedItem(
+    manifest: DeviceManifest,
+    scheduler: ScheduleEngine,
+    now: Instant,
+    offset: Int,
+    verifiedItemIds: Set<String>,
+): ManifestItem? = scheduler.next(manifest, now, offset, verifiedItemIds)
+
 internal enum class CachedStartupBlock {
     NONE,
     NO_MANIFEST,
@@ -82,14 +100,30 @@ internal fun resolveCachedStartup(
     verifiedItemIds: Set<String>,
     scheduler: ScheduleEngine,
     now: Instant,
+    allowExpiredForOfflinePlayback: Boolean = false,
 ): CachedStartupResolution {
     if (manifest == null) return CachedStartupResolution(null, null, CachedStartupBlock.NO_MANIFEST)
     if (pairedScreenId == null) return CachedStartupResolution(null, null, CachedStartupBlock.UNPAIRED)
     if (manifest.screenId != pairedScreenId) return CachedStartupResolution(null, null, CachedStartupBlock.SCREEN_ID_MISMATCH)
-    if (!manifestIsAuthorizedAt(manifest, now)) return CachedStartupResolution(manifest, null, CachedStartupBlock.AUTHORIZATION_EXPIRED)
-    val firstItem = nextVerifiedManifestItem(manifest, scheduler, now, 0, verifiedItemIds)
+    val authorized = manifestIsAuthorizedAt(manifest, now)
+    if (!authorized && !allowExpiredForOfflinePlayback) return CachedStartupResolution(manifest, null, CachedStartupBlock.AUTHORIZATION_EXPIRED)
+    val firstItem = if (authorized) nextVerifiedManifestItem(manifest, scheduler, now, 0, verifiedItemIds)
+        else nextVerifiedCachedItem(manifest, scheduler, now, 0, verifiedItemIds)
     return if (firstItem == null) CachedStartupResolution(manifest, null, CachedStartupBlock.NO_ELIGIBLE_VERIFIED_ASSET)
     else CachedStartupResolution(manifest, firstItem, CachedStartupBlock.NONE)
+}
+
+internal fun offlineEmptyMessage(
+    manifest: DeviceManifest,
+    now: Instant,
+    verifiedItemIds: Set<String>,
+    allowExpiredCachedManifest: Boolean = false,
+): String = when {
+    manifest.version <= 0L -> "No cached ads are available\nConnect this screen and sync an approved campaign."
+    !allowExpiredCachedManifest && !manifestIsAuthorizedAt(manifest, now) -> "Offline ads paused\nAuthorization expired. Reconnect to refresh approved content."
+    manifest.items.isEmpty() -> "No approved ads are available\nAsk OORO to schedule a campaign for this screen."
+    manifest.items.none { it.id in verifiedItemIds } -> "No verified ads are cached\nReconnect to download approved content."
+    else -> "No ad is eligible right now\nPlayback will resume when an approved schedule is active."
 }
 
 internal fun eligibleSponsoredItem(manifest: DeviceManifest, now: Instant, verifiedItemIds: Set<String>): ManifestItem? {

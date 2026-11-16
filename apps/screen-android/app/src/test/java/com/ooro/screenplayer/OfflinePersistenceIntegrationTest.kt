@@ -125,16 +125,22 @@ class OfflinePersistenceIntegrationTest {
         assertEquals(0, reopened.proofDao().pendingCount())
     }
 
-    @Test fun expiredManifestCannotSelectCachedItemAfterRoomReopen() = runBlocking {
-        val item = ManifestItem("i", "c", "cr", CreativeType.IMAGE, "file://cached", "a".repeat(64), 10, 1, null, null, emptySet(), null, null)
-        val expired = DeviceManifest(1, "screen", "UTC", listOf(item), Instant.parse("2020-01-01T00:00:00Z"))
+    @Test fun expiredManifestCanSelectCachedItemAfterTenHoursOfflineAndRoomReopen() = runBlocking {
+        val issueTime = Instant.parse("2026-01-01T00:00:00Z")
+        val tenHoursLater = issueTime.plusSeconds(10 * 60 * 60)
+        val campaignEnd = issueTime.plusSeconds(24 * 60 * 60)
+        val item = ManifestItem("i", "c", "cr", CreativeType.IMAGE, "file://cached", "a".repeat(64), 10, 1, issueTime.minusSeconds(60), campaignEnd, emptySet(), null, null)
+        val expired = DeviceManifest(1, "screen", "UTC", listOf(item), issueTime.plusSeconds(15 * 60))
         val database = open()
         database.manifestDao().put(ManifestEntity(version = 1, timezone = "UTC", validUntil = expired.validUntil.toString(), json = ManifestCodec.encode(expired)))
         database.close(); db = null
         val reopened = open()
         val persisted = ManifestCodec.parse(reopened.manifestDao().active()!!.json)
-        assertNull(nextVerifiedManifestItem(persisted, ScheduleEngine(), Instant.parse("2026-01-01T00:00:00Z"), 0, setOf("i")))
-        assertFalse(canCommitManifestResponse(persisted, requiredCount = 1, verifiedCount = 1, now = Instant.parse("2026-01-01T00:00:00Z")))
+        assertNull(nextVerifiedManifestItem(persisted, ScheduleEngine(), tenHoursLater, 0, setOf("i")))
+        assertEquals("i", nextVerifiedCachedItem(persisted, ScheduleEngine(), tenHoursLater, 0, setOf("i"))?.id)
+        assertNull(nextVerifiedCachedItem(persisted, ScheduleEngine(), campaignEnd, 0, setOf("i")))
+        assertEquals(CachedStartupBlock.NONE, resolveCachedStartup(persisted, "screen", setOf("i"), ScheduleEngine(), tenHoursLater, allowExpiredForOfflinePlayback = true).block)
+        assertFalse(canCommitManifestResponse(persisted, requiredCount = 1, verifiedCount = 1, now = tenHoursLater))
     }
 
     @Test fun legitimateEmptyManifestReplacesPreviouslyPlayableManifest() = runBlocking {
@@ -170,10 +176,10 @@ class OfflinePersistenceIntegrationTest {
         override suspend fun unpair(credentials: DeviceCredentials) = Unit
     }
 
-    @Test fun failedManifestRefreshLeavesLastValidManifestUsableUntilItsLeaseExpires() = runBlocking {
+    @Test fun failedManifestRefreshKeepsCachedPlaybackUntilCampaignScheduleEnds() = runBlocking {
         val database = open()
         val now = Instant.parse("2026-11-05T10:00:00Z")
-        val item = ManifestItem("still-authorized", "campaign", "creative", CreativeType.IMAGE, "https://asset.invalid/media", "a".repeat(64), 10, 1, now.minusSeconds(60), now.plusSeconds(600), emptySet(), null, null)
+        val item = ManifestItem("still-authorized", "campaign", "creative", CreativeType.IMAGE, "https://asset.invalid/media", "a".repeat(64), 10, 1, now.minusSeconds(60), now.plusSeconds(3_600), emptySet(), null, null)
         val cached = DeviceManifest(1, credentials.screenId, "UTC", listOf(item), now.plusSeconds(900))
         val cachedEntity = ManifestEntity(version = 1, timezone = "UTC", validUntil = cached.validUntil.toString(), json = ManifestCodec.encode(cached))
         database.manifestDao().put(cachedEntity)
@@ -185,6 +191,8 @@ class OfflinePersistenceIntegrationTest {
         val lastKnownGood = ManifestCodec.parse(reopened.manifestDao().active()!!.json)
         assertEquals(item.id, nextVerifiedManifestItem(lastKnownGood, ScheduleEngine(), now.plusSeconds(300), 0, setOf(item.id))?.id)
         assertNull(nextVerifiedManifestItem(lastKnownGood, ScheduleEngine(), now.plusSeconds(900), 0, setOf(item.id)))
+        assertEquals(item.id, nextVerifiedCachedItem(lastKnownGood, ScheduleEngine(), now.plusSeconds(900), 0, setOf(item.id))?.id)
+        assertNull(nextVerifiedCachedItem(lastKnownGood, ScheduleEngine(), now.plusSeconds(3_600), 0, setOf(item.id)))
     }
 
     @Test fun successfulRefreshExtendsManifestLeaseButItemScheduleStillCapsPlayback() = runBlocking {

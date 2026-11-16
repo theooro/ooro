@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PageHeader, PrimaryButton, SecondaryButton, SectionCard, StatusBadge } from "@/components/app/app-ui";
 import { deploymentRequestError, validateDeploymentForm } from "@/lib/admin/deviceos-deployment-form";
 
 type Device = { id: string; displayId: string; enrollmentStatus: string; agentVersionName?: string | null; androidVersion?: string | null; manufacturer?: string | null; model?: string | null; lastSeenAt?: string | null; display?: { name: string; deviceId: string; state: string; vehicle?: { registrationNumber?: string | null; city?: string | null } | null } };
+type Screen = { screenId: string; screenName: string; pairingStatus?: string };
 type InventoryItem = { id: string; packageName: string; versionCode: string; versionName?: string | null; certificateSha256?: string | null; installSource?: string | null; isCompliant: boolean; lastSeenAt?: string | null; application?: { displayName: string; packageName: string } | null };
 type Application = { id: string; packageName: string; displayName: string; allowed: boolean; _count?: { releases: number; inventory: number } };
 type Release = { id: string; packageName: string; versionCode: string; versionName: string; minSdk: number; targetSdk: number; sha256: string; certificateSha256: string; sizeBytes: string; approvalStatus: string };
@@ -17,10 +18,15 @@ type ScreenGroup = { id: string; name: string };
 
 const json = async (url: string, init?: RequestInit) => { const response = await fetch(url, { cache: "no-store", ...init }); const body = await response.json(); if (!response.ok) { const error = new Error(body.error?.message || "DeviceOS request failed") as Error & { status?: number; code?: string }; error.status = response.status; error.code = body.error?.code; throw error; } return body.data; };
 
-export function DeviceOsDashboard() {
-  const [devices, setDevices] = useState<Device[]>([]); const [applications, setApplications] = useState<Application[]>([]); const [deployments, setDeployments] = useState<Deployment[]>([]); const [error, setError] = useState("");
-  useEffect(() => { void Promise.all([json("/api/admin/deviceos/devices"), json("/api/admin/deviceos/applications"), json("/api/admin/deviceos/deployments")]).then(([d, a, c]) => { setDevices(d); setApplications(a); setDeployments(c); }).catch(e => setError(String(e))); }, []);
-  return <div className="space-y-7"><PageHeader eyebrow="Admin / DeviceOS" title="Fleet application management" description="Manage enrolled agents, approved APK releases, and durable deployment campaigns." action={<PrimaryButton href="/admin/deviceos/deployments">Create deployment</PrimaryButton>}/>{error && <p role="alert" className="text-sm text-red-700">{error}</p>}<div className="grid gap-4 md:grid-cols-3"><div className="border border-neutral-200 bg-white p-5"><p className="app-eyebrow">Enrolled devices</p><p className="mt-3 text-3xl font-medium">{devices.filter(d => d.enrollmentStatus === "ENROLLED").length}</p></div><div className="border border-neutral-200 bg-white p-5"><p className="app-eyebrow">Registered applications</p><p className="mt-3 text-3xl font-medium">{applications.length}</p></div><div className="border border-neutral-200 bg-white p-5"><p className="app-eyebrow">Deployments</p><p className="mt-3 text-3xl font-medium">{deployments.length}</p></div></div><SectionCard title="DeviceOS controls"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6"><Link className="border border-neutral-200 p-4 text-sm hover:border-black" href="/admin/deviceos/devices">Devices</Link><Link className="border border-neutral-200 p-4 text-sm hover:border-black" href="/admin/deviceos/applications">Applications</Link><Link className="border border-neutral-200 p-4 text-sm hover:border-black" href="/admin/deviceos/releases">Releases</Link><Link className="border border-neutral-200 p-4 text-sm hover:border-black" href="/admin/deviceos/deployments">Deployments</Link><Link className="border border-neutral-200 p-4 text-sm hover:border-black" href="/admin/deviceos/telemetry">Telemetry</Link><Link className="border border-neutral-200 p-4 text-sm hover:border-black" href="/admin/deviceos/audit-logs">Audit logs</Link></div></SectionCard></div>;
+export function DeviceOsDashboard({ canEnroll = false, canRelease = false, canDeploy = false }: { canEnroll?: boolean; canRelease?: boolean; canDeploy?: boolean }) {
+  const [devices, setDevices] = useState<Device[]>([]); const [applications, setApplications] = useState<Application[]>([]); const [deployments, setDeployments] = useState<Deployment[]>([]); const [screens, setScreens] = useState<Screen[]>([]); const [selectedScreen, setSelectedScreen] = useState(""); const [enrollment, setEnrollment] = useState<{ pairingCode: string; displayName: string; expiresAt: string } | null>(null); const [error, setError] = useState(""); const [loading, setLoading] = useState(true); const [issuing, setIssuing] = useState(false);
+  const load = () => { setLoading(true); setError(""); return Promise.all([json("/api/admin/deviceos/devices"), json("/api/admin/deviceos/applications"), json("/api/admin/deviceos/deployments"), json("/api/admin/screens")]).then(([d, a, c, s]) => { setDevices(d); setApplications(a); setDeployments(c); setScreens(s); setSelectedScreen((current: string) => current || s.find((screen: Screen) => !d.some((device: Device) => device.displayId === screen.screenId && device.enrollmentStatus === "ENROLLED"))?.screenId || s[0]?.screenId || ""); }).catch(e => setError(e instanceof Error ? e.message : "DeviceOS data could not be loaded.")).finally(() => setLoading(false)); };
+  useEffect(() => { void load(); }, []);
+  async function issueEnrollmentCode() { if (!selectedScreen) return; setIssuing(true); setError(""); setEnrollment(null); try { const result = await json(`/api/admin/deviceos/displays/${encodeURIComponent(selectedScreen)}/enrollment-code`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }); setEnrollment(result); } catch (e) { setError(e instanceof Error ? e.message : "Could not create the enrollment code."); } finally { setIssuing(false); } }
+  return <div className="space-y-7"><PageHeader eyebrow="Admin / DeviceOS" title="Fleet application management" description="Connect the OORO agent, approve a signed release, then assign it to enrolled screens." action={canDeploy ? <PrimaryButton href="/admin/deviceos/deployments">Create deployment</PrimaryButton> : undefined}/>{error && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900"><span>{error}</span><button className="font-medium underline" onClick={() => void load()}>Retry</button></div>}<div className="grid gap-4 md:grid-cols-3">{[["Enrolled devices", devices.filter(d => d.enrollmentStatus === "ENROLLED").length], ["Registered applications", applications.length], ["Deployments", deployments.length]].map(([label, value]) => <div key={String(label)} className="border border-neutral-200 bg-white p-5"><p className="app-eyebrow">{label}</p><p className="mt-3 text-3xl font-medium">{loading ? "—" : value}</p></div>)}</div>
+    {!loading && screens.some(screen => !devices.some(device => device.displayId === screen.screenId && device.enrollmentStatus === "ENROLLED")) && <SectionCard title="Connect a screen" description="DeviceOS is a separate OORO agent. Enrolling it adds management telemetry without replacing Screen Player or changing Device Owner policy."><ol className="grid gap-4 md:grid-cols-3"><li className="rounded-xl border border-neutral-200 p-4"><p className="app-eyebrow">01 · Choose screen</p><p className="mt-2 text-sm leading-6 text-neutral-600">Select an existing OORO screen and issue a short-lived DeviceOS-only enrollment code.</p></li><li className="rounded-xl border border-neutral-200 p-4"><p className="app-eyebrow">02 · Enroll agent</p><p className="mt-2 text-sm leading-6 text-neutral-600">Install the approved OORO DeviceOS Agent on the Android board, open it, enter the code, and tap Enroll agent. The board needs network access to the staging API.</p></li><li className="rounded-xl border border-neutral-200 p-4"><p className="app-eyebrow">03 · Release & deploy</p><p className="mt-2 text-sm leading-6 text-neutral-600">Register the app, upload its signed APK, {canRelease ? "approve the release" : "ask a Super Admin to approve the release"}, then create a deployment for this enrolled screen.</p></li></ol><div className="mt-5 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]"><label className="text-sm">OORO screen<select value={selectedScreen} onChange={event => { setSelectedScreen(event.target.value); setEnrollment(null); }} disabled={!screens.length} className="mt-2 block min-h-11 w-full rounded-lg border border-neutral-300 bg-white px-3 text-sm"><option value="">{screens.length ? "Choose a screen" : "No active screens found"}</option>{screens.filter(screen => !devices.some(device => device.displayId === screen.screenId && device.enrollmentStatus === "ENROLLED")).map(screen => <option key={screen.screenId} value={screen.screenId}>{screen.screenName} · {screen.screenId.slice(-8)}</option>)}</select></label><div className="flex items-end"><SecondaryButton onClick={() => void issueEnrollmentCode()} disabled={!canEnroll || !selectedScreen || issuing}>{issuing ? "Creating code…" : canEnroll ? "Create enrollment code" : "Enrollment permission required"}</SecondaryButton></div></div>{enrollment && <div role="status" className="mt-4 rounded-xl border border-lime-300 bg-lime-50 p-4 text-lime-950"><p className="text-sm font-semibold">{enrollment.displayName} · expires {new Date(enrollment.expiresAt).toLocaleTimeString()}</p><p className="mt-2 font-mono text-3xl font-semibold tracking-[.2em]">{enrollment.pairingCode}</p><p className="mt-2 text-xs leading-5">This code is for DeviceOS enrollment only and can be used once. Treat it like a temporary credential.</p></div>}{!applications.length && <p className="mt-4 text-xs text-neutral-500">No app is registered yet. Continue to Applications after the agent is connected.</p>}</SectionCard>}
+    {loading && <SectionCard title="Loading DeviceOS status"><p className="animate-pulse text-sm text-neutral-500">Checking enrolled devices, applications, and deployments…</p></SectionCard>}
+    <SectionCard title="DeviceOS controls"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6"><Link className="border border-neutral-200 p-4 text-sm hover:border-black" href="/admin/deviceos/devices">Devices</Link><Link className="border border-neutral-200 p-4 text-sm hover:border-black" href="/admin/deviceos/applications">Applications</Link><Link className="border border-neutral-200 p-4 text-sm hover:border-black" href="/admin/deviceos/releases">Releases</Link><Link className="border border-neutral-200 p-4 text-sm hover:border-black" href="/admin/deviceos/deployments">Deployments</Link><Link className="border border-neutral-200 p-4 text-sm hover:border-black" href="/admin/deviceos/telemetry">Telemetry</Link><Link className="border border-neutral-200 p-4 text-sm hover:border-black" href="/admin/deviceos/audit-logs">Audit logs</Link></div></SectionCard></div>;
 }
 
 export function DeviceOsTelemetry() {
@@ -77,6 +83,8 @@ export function DeviceOsDeployments() {
   const [pending, setPending] = useState(false);
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [releasesLoading, setReleasesLoading] = useState(false);
+  const [screenTargetName, setScreenTargetName] = useState("");
+  const prefillApplied = useRef(false);
 
   const load = () => Promise.all([
     json("/api/admin/deviceos/devices"),
@@ -88,6 +96,20 @@ export function DeviceOsDeployments() {
     setApps(appRows);
     setItems(deploymentRows);
     setGroups((operations.groups ?? []).map((group: { id: string; name: string }) => ({ id: group.id, name: group.name })));
+    if (!prefillApplied.current && typeof window !== "undefined") {
+      prefillApplied.current = true;
+      const requestedDisplayId = new URLSearchParams(window.location.search).get("displayId");
+      if (requestedDisplayId) {
+        const target = (deviceRows as Device[]).find(device => device.displayId === requestedDisplayId && device.enrollmentStatus === "ENROLLED");
+        if (target) {
+          setDeviceIds([target.id]);
+          setForm(current => ({ ...current, name: `${target.display?.name ?? "Screen"} player update`, targetingMode: "DEVICES" }));
+          setScreenTargetName(target.display?.name ?? target.displayId);
+        } else {
+          setError("This screen is not enrolled in DeviceOS yet. Check its DeviceOS pairing and enrollment before requesting an app update.");
+        }
+      }
+    }
   }).catch(e => setError(String(e)));
 
   useEffect(() => { void load(); }, []);
@@ -180,6 +202,7 @@ export function DeviceOsDeployments() {
   return <div className="space-y-7">
     <PageHeader eyebrow="Admin / DeviceOS" title="Deployment campaigns" description="Assignments are durable in PostgreSQL and remain auditable when devices are offline."/>
     <SectionCard title="Create deployment" description="Choose an approved application release, target the enrolled devices, and set rollout safeguards.">
+      {screenTargetName && <p role="status" className="mb-4 rounded border border-lime-300 bg-lime-50 px-3 py-2 text-sm text-lime-950">Targeted from screen details: {screenTargetName}. Confirm the selected approved release before creating the deployment.</p>}
       <form onSubmit={create} className="grid gap-4 md:grid-cols-2" noValidate>
         {submitAttempted && !valid && <p role="status" className="rounded-lg border border-amber-400/30 bg-amber-400/[.06] px-4 py-3 text-sm text-amber-100 md:col-span-2">Complete the highlighted fields to create this deployment.</p>}
         <label className="text-sm">Campaign name

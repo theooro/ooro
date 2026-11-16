@@ -58,11 +58,15 @@ test('Phase 2: Super Admin directory, invitation, lifecycle and immediately revo
     tokenHash: passwordTokenHash(token), expiresAt: new Date(Date.now() + 3600000), createdById: primary.id,
   } })
   const payload = { token, phone: '+919876543210', password: 'correct horse battery staple' }
-  // First use wins; replay cannot create a second admin.
+  // First use creates the account; an exact retry safely returns that account.
   const accepted = await app.inject({ method: 'POST', url: '/api/auth/admin/accept-invitation', payload })
   assert.equal(accepted.statusCode, 200, accepted.body)
   const replay = await app.inject({ method: 'POST', url: '/api/auth/admin/accept-invitation', payload })
-  assert.equal(replay.statusCode, 400, replay.body)
+  assert.equal(replay.statusCode, 200, replay.body)
+  assert.equal(replay.json().data.alreadyAccepted, true)
+  assert.equal(replay.json().data.user.id, accepted.json().data.user.id)
+  assert.equal((await app.inject({ method: 'POST', url: '/api/auth/admin/accept-invitation', payload: { ...payload, phone: '+919876543219' } })).statusCode, 400)
+  assert.equal((await app.inject({ method: 'POST', url: '/api/auth/admin/accept-invitation', payload: { ...payload, password: 'different secure password 456' } })).statusCode, 400)
   const invitation = await prisma.adminInvitation.findUniqueOrThrow({ where: { id: invited.id } })
   assert.ok(invitation.acceptedAt)
   const acceptedUser = await prisma.user.findUniqueOrThrow({ where: { email: invited.email } })
@@ -88,8 +92,9 @@ test('Phase 2: Super Admin directory, invitation, lifecycle and immediately revo
   const concurrentResults = await Promise.all(Array.from({ length: 2 }, () => app.inject({
     method: 'POST', url: '/api/auth/admin/accept-invitation', payload: concurrentPayload,
   })))
-  assert.deepEqual(concurrentResults.map(result => result.statusCode).sort(), [200, 400])
+  assert.deepEqual(concurrentResults.map(result => result.statusCode).sort(), [200, 200])
   assert.equal(await prisma.user.count({ where: { email: concurrentEmail } }), 1)
+  assert.equal(concurrentResults[0].json().data.user.id, concurrentResults[1].json().data.user.id)
 
   // A stubbed delivery failure must not leave an active invitation behind.
   const originalSend = emailProvider.send

@@ -1,14 +1,15 @@
 import { NextResponse } from "next/server";
 import { webPrisma } from "@/lib/web-prisma";
 import { webContext, webOwnerEmail } from "@/lib/web-owner";
+import { advertiserCampaignScope } from "@/lib/advertiser-campaign-scope";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const context = await webContext(); const ownerEmail = context?.email ?? await webOwnerEmail(); if (!ownerEmail) return NextResponse.json({ error: { message: "Sign in to view delivery" } }, { status: 401 });
   const { id } = await params;
   try {
-    const campaign = await webPrisma.campaign.findUnique({ where: { id }, select: { id: true, userId: true, ownerEmail: true, status: true, startsAt: true, endsAt: true, forecastSnapshot: true } });
+    const scope = context ? await advertiserCampaignScope(context) : { ownerEmail };
+    const campaign = await webPrisma.campaign.findFirst({ where: { AND: [{ id }, scope] }, select: { id: true, status: true, startsAt: true, endsAt: true, forecastSnapshot: true } });
     if (!campaign) return NextResponse.json({ error: { message: "Campaign not found" } }, { status: 404 });
-    if (campaign.userId !== context?.account.id && campaign.ownerEmail !== ownerEmail) return NextResponse.json({ error: { message: "You do not have access to this campaign" } }, { status: 403 });
     const proofSummary = await webPrisma.proofOfPlay.aggregate({ where: { campaignId: id }, _count: { _all: true }, _max: { playbackEndedAt: true } });
     const snapshot = campaign.forecastSnapshot && typeof campaign.forecastSnapshot === "object" ? campaign.forecastSnapshot as Record<string, unknown> : {};
     const target = Number(snapshot.targetDelivery ?? (snapshot.campaignDeliveryTarget && typeof snapshot.campaignDeliveryTarget === "object" ? (snapshot.campaignDeliveryTarget as Record<string, unknown>).high : 0)) || 0;

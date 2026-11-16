@@ -5,6 +5,7 @@ import { app } from './server.js'
 
 test('privileged DeviceOS mutations reject unauthenticated HTTP callers', async () => {
   const paths = [
+    [`/api/admin/deviceos/displays/${randomUUID()}/enrollment-code`, {}],
     ['/api/admin/deviceos/applications', { packageName: 'com.example.test', displayName: 'Test' }],
     [`/api/admin/deviceos/applications/${randomUUID()}/allowlist`, { allowed: true }],
     [`/api/admin/deviceos/applications/${randomUUID()}/releases`, { apkBase64: 'not-used' }],

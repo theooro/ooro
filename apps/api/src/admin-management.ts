@@ -7,7 +7,7 @@ import { adminRoles } from './domain/admin-auth.js'
 import { normalizeIndianPhone } from './domain/phone.js'
 import { config } from './config.js'
 import { ApiError } from './errors.js'
-import { createPasswordToken, hashPassword, normalizeAdminEmail, passwordTokenHash, validateAdminPassword } from './domain/admin-password-auth.js'
+import { createPasswordToken, hashPassword, normalizeAdminEmail, passwordTokenHash, validateAdminPassword, verifyPassword } from './domain/admin-password-auth.js'
 import { sendAdminInvitationEmail } from './domain/transactional-email.js'
 
 const manageableRoles = ['ADMIN','SUPER_ADMIN','OPERATIONS','FINANCE','SUPPORT'] as const
@@ -18,6 +18,14 @@ const forbiddenAdmin = () => new ApiError('ADMIN_MANAGEMENT_FORBIDDEN', 'Adminis
 const conflict = (message: string) => new ApiError('ADMIN_MANAGEMENT_CONFLICT', message, 409)
 const invitationExpired = () => new ApiError('INVALID_ADMIN_INVITATION','Invitation is invalid or expired',400)
 const userFields = { id:true, name:true, email:true, role:true, accountStatus:true, passwordChangedAt:true, lockedUntil:true, createdAt:true, updatedAt:true } as const
+
+async function acceptedInvitationReplay(token: string, phone: string, password: string) {
+  const invite = await prisma.adminInvitation.findUnique({where:{tokenHash:passwordTokenHash(token)}})
+  if (!invite || !invite.acceptedAt || invite.revokedAt || !adminRoles.includes(invite.role)) return null
+  const user = await prisma.user.findUnique({where:{email:invite.email},select:{id:true,phone:true,passwordHash:true,role:true,accountStatus:true}})
+  if (!user || user.phone !== phone || user.role !== invite.role || user.accountStatus !== 'ACTIVE' || !await verifyPassword(user.passwordHash,password)) return null
+  return prisma.user.findUnique({where:{id:user.id},select:userFields})
+}
 
 async function audit(tx: Prisma.TransactionClient, actor: {userId:string;role:string}, action: string, targetId: string, details?: Record<string,string>) {
   await tx.auditLog.create({ data: { actorId:actor.userId, actorRole:actor.role, action, entityType:'User', entityId:targetId, after:details ?? {} } })
@@ -107,19 +115,27 @@ export function registerAdminManagement(app: FastifyInstance) {
     if(!phone) throw new ApiError('VALIDATION_ERROR','A valid Indian mobile number is required',422)
     const passwordHash=await hashPassword(input.password)
     const now=new Date()
-    const user=await prisma.$transaction(async tx=>{
-      // One winning transaction may consume the token; the second must not create a user.
-      const invite=await tx.adminInvitation.findUnique({where:{tokenHash:passwordTokenHash(input.token)}})
-      if(!invite || invite.revokedAt || invite.acceptedAt || invite.expiresAt<=now || !adminRoles.includes(invite.role)) throw invitationExpired()
-      const claimed=await tx.adminInvitation.updateMany({where:{id:invite.id,acceptedAt:null,revokedAt:null,expiresAt:{gt:now}},data:{acceptedAt:now}})
-      if(claimed.count!==1) throw invitationExpired()
-      const created=await tx.user.create({data:{phone,email:invite.email,name:invite.name,role:invite.role,accountStatus:'ACTIVE',passwordHash,passwordChangedAt:now},select:userFields})
-      await tx.auditLog.create({data:{actorId:invite.createdById,actorRole:'SUPER_ADMIN',action:'ADMIN_INVITATION_ACCEPTED',entityType:'User',entityId:created.id,after:{inviteId:invite.id,role:invite.role}}})
-      return created
-    }).catch(error=>{
+    let user
+    try {
+      user=await prisma.$transaction(async tx=>{
+        // A consumed invite may be replayed only with the same phone and password.
+        const invite=await tx.adminInvitation.findUnique({where:{tokenHash:passwordTokenHash(input.token)}})
+        if(!invite || invite.revokedAt || invite.acceptedAt || invite.expiresAt<=now || !adminRoles.includes(invite.role)) throw invitationExpired()
+        const claimed=await tx.adminInvitation.updateMany({where:{id:invite.id,acceptedAt:null,revokedAt:null,expiresAt:{gt:now}},data:{acceptedAt:now}})
+        if(claimed.count!==1) throw invitationExpired()
+        const created=await tx.user.create({data:{phone,email:invite.email,name:invite.name,role:invite.role,accountStatus:'ACTIVE',passwordHash,passwordChangedAt:now},select:userFields})
+        await tx.auditLog.create({data:{actorId:invite.createdById,actorRole:'SUPER_ADMIN',action:'ADMIN_INVITATION_ACCEPTED',entityType:'User',entityId:created.id,after:{inviteId:invite.id,role:invite.role}}})
+        return created
+      })
+    } catch(error) {
       if(error instanceof Prisma.PrismaClientKnownRequestError && error.code==='P2002') throw conflict('Email or phone already belongs to an account')
+      // This also recovers a request whose first response was lost after the DB commit.
+      if(error instanceof ApiError && error.code==='INVALID_ADMIN_INVITATION') {
+        const replay=await acceptedInvitationReplay(input.token,phone,input.password)
+        if(replay) return reply.send(response(request,{user:replay,alreadyAccepted:true}))
+      }
       throw error
-    })
+    }
     return reply.send(response(request,{user}))
   })
 

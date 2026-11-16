@@ -12,6 +12,8 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import android.view.WindowManager
+import android.view.LayoutInflater
+import android.view.TextureView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -139,6 +141,8 @@ class MainActivity : ComponentActivity() {
     }
     override fun onResume() {
         super.onResume()
+        vm.onActivityResumed(intent?.getStringExtra(com.ooro.screenplayer.sync.RESTART_RESUME_EXTRA))
+        intent?.removeExtra(com.ooro.screenplayer.sync.RESTART_RESUME_EXTRA)
         if (::permissionHistory.isInitialized) {
             val previous = locationPermissionGranted
             refreshLocationState()
@@ -147,6 +151,10 @@ class MainActivity : ComponentActivity() {
                 vm.refreshLocationPermission()
             }
         }
+    }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
     }
     private fun hasLocationPermission() = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED || checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
     private fun refreshLocationState() {
@@ -310,12 +318,18 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     val previewVerifiedIds = remember(preview?.itemId, preview?.sponsoredItemId) { setOfNotNull(preview?.itemId, preview?.sponsoredItemId) }
     val verifiedAssetFlow = vm?.verifiedAssetIds ?: remember(previewVerifiedIds) { flowOf(previewVerifiedIds) }
     val verifiedAssetIds by verifiedAssetFlow.collectAsState(initial = previewVerifiedIds)
+    val cachedPlaybackFlow = vm?.cachedPlaybackAllowed ?: remember { flowOf(false) }
+    val cachedPlaybackAllowed by cachedPlaybackFlow.collectAsState(initial = false)
     val pairedScreenIdFlow = vm?.pairedScreenId ?: remember(preview, manifest.screenId) { flowOf(manifest.screenId.takeIf { preview != null }) }
     val pairedScreenId by pairedScreenIdFlow.collectAsState(initial = manifest.screenId.takeIf { preview != null })
     var manifestExpired by remember(manifest.version, manifest.validUntil) {
-        mutableStateOf(!manifestIsAuthorizedAt(manifest, Instant.now()))
+        mutableStateOf(!cachedPlaybackAllowed && !manifestIsAuthorizedAt(manifest, Instant.now()))
     }
-    LaunchedEffect(manifest.version, manifest.validUntil) {
+    LaunchedEffect(manifest.version, manifest.validUntil, cachedPlaybackAllowed) {
+        if (cachedPlaybackAllowed) {
+            manifestExpired = false
+            return@LaunchedEffect
+        }
         val expiresAt = manifest.validUntil
         if (expiresAt == null) {
             manifestExpired = true
@@ -325,8 +339,8 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
             else { kotlinx.coroutines.delay(remainingMs); manifestExpired = true }
         }
     }
-    val scheduledItem = remember(manifest, playbackOffset, verifiedAssetIds, manifestExpired, vm) {
-        if (manifestExpired) null else vm?.currentItem(manifest, playbackOffset, verifiedAssetIds)
+    val scheduledItem = remember(manifest, playbackOffset, verifiedAssetIds, manifestExpired, cachedPlaybackAllowed, vm) {
+        if (manifestExpired) null else vm?.currentItem(manifest, playbackOffset, verifiedAssetIds, allowCachedOffline = cachedPlaybackAllowed)
     }
     val sponsorCandidate = manifest.sponsoredItem?.takeIf { !manifestExpired && it.id in verifiedAssetIds && it.type == CreativeType.IMAGE }
     var sponsorClock by remember(manifest.version) { mutableStateOf(Instant.now()) }
@@ -341,13 +355,19 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
         }
     }
     val sponsoredItem = remember(sponsorCandidate, sponsorClock, verifiedAssetIds, manifest.layoutContractVersion, manifest.validUntil) { eligibleSponsoredItem(manifest, sponsorClock, verifiedAssetIds) }
-    // The local setting affects presentation geometry only. Sponsor eligibility, lease,
-    // schedules, selection and proof attribution continue to use the unmodified manifest.
+    // The local setting affects presentation geometry only. Main ads may continue from a
+    // previously accepted offline cache within their campaign schedules; the separate V3
+    // sponsor lane still requires its active manifest authorization lease.
     val geometryVersion = geometryContractVersion(manifest.layoutContractVersion, manifest.layout, presentationPreference)
     val item = preview?.let { state ->
         val zone = runCatching { ZoneId.of(manifest.timezone) }.getOrDefault(ZoneId.of(BuildConfig.DEFAULT_TIMEZONE))
         manifest.items.firstOrNull { it.id == state.itemId && it.isActive(Instant.now(), zone) }
     } ?: scheduledItem
+    val emptyPlaybackMessage = if (manifestExpired) {
+        "Offline ads paused\nAuthorization expired. Reconnect to refresh approved content."
+    } else {
+        offlineEmptyMessage(manifest, Instant.now(), verifiedAssetIds, allowExpiredCachedManifest = cachedPlaybackAllowed)
+    }
     val displayedOffer = if (preview != null) item else if (manifestExpired) null else presentationItem ?: item
     val customLayoutParseResult = remember(manifest.layoutStudioContract) {
         manifest.layoutStudioContract?.let { LayoutStudioInterpreter.parse(it) }
@@ -365,13 +385,13 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     } else Modifier.fillMaxSize().background(Color.Black).clipToBounds()
     Box(rootModifier) {
         if (customLayout != null) {
-            CustomLayoutPlayer(vm, manifest, customLayout, item, playbackOffset, verifiedAssetIds, pairedScreenId, preview, manifestExpired)
+            CustomLayoutPlayer(vm, manifest, customLayout, item, playbackOffset, verifiedAssetIds, pairedScreenId, preview, manifestExpired, cachedPlaybackAllowed)
         } else if (manifest.layout == DisplayLayout.FOUR_ZONE || manifest.layout == DisplayLayout.AD_NAV_OFFER) Row(Modifier.fillMaxSize().clipToBounds()) {
             val adWidth = if (usesSidebar80(manifest.layout, geometryVersion)) 80 else manifest.layoutConfig.safePrimaryWidth
             val sidebarSplit = if (usesSidebar80(manifest.layout, geometryVersion)) 50 else manifest.layoutConfig.safeQrHeight
             Column(Modifier.weight(adWidth.toFloat()).fillMaxHeight().clipToBounds()) {
                 val mainHeight = if (usesSponsoredLayout(manifest.layout, geometryVersion)) 85 else manifest.layoutConfig.safeAdHeight
-                Box(Modifier.weight(mainHeight.toFloat()).fillMaxWidth().clipToBounds().then(if (preview == null) Modifier else Modifier.semantics { contentDescription = "OoroV3Region:main-ad" }.onSizeChanged { Log.i("OoroRenderTest", "region=main-ad boundsPx=${it.width}x${it.height}") })) { PrimaryAdRegion(vm, Modifier.fillMaxSize(), item, playbackOffset, preview, if (manifestExpired) "Offline ads paused\nAuthorization expired. Reconnect to refresh approved content." else "OORO\nContent will resume shortly") }
+                Box(Modifier.weight(mainHeight.toFloat()).fillMaxWidth().clipToBounds().then(if (preview == null) Modifier else Modifier.semantics { contentDescription = "OoroV3Region:main-ad" }.onSizeChanged { Log.i("OoroRenderTest", "region=main-ad boundsPx=${it.width}x${it.height}") })) { PrimaryAdRegion(vm, Modifier.fillMaxSize(), item, playbackOffset, preview, emptyPlaybackMessage) }
                 if (usesSponsoredLayout(manifest.layout, geometryVersion)) {
                     Box(Modifier.weight(15f).fillMaxWidth().clipToBounds().then(if (preview == null) Modifier else Modifier.semantics { contentDescription = "OoroV3Region:sponsored" }.onSizeChanged { Log.i("OoroRenderTest", "region=sponsored boundsPx=${it.width}x${it.height}") })) {
                         SponsoredAdRegion(vm, sponsoredItem, Modifier.fillMaxSize(), preview?.sponsoredAssetPath)
@@ -385,10 +405,10 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
                 Box(Modifier.weight((100 - sidebarSplit).toFloat()).fillMaxWidth().clipToBounds().then(if (preview == null) Modifier else Modifier.semantics { contentDescription = "OoroV3Region:navigation" }.onSizeChanged { Log.i("OoroRenderTest", "region=navigation boundsPx=${it.width}x${it.height}") })) { NavigationPanel(vm, preview, Modifier.fillMaxSize()) }
             }
         } else if (manifest.layout == DisplayLayout.SPLIT_50_25_25) Row(Modifier.fillMaxSize().clipToBounds()) {
-            Box(Modifier.weight(2f).fillMaxHeight().clipToBounds()) { PrimaryAdRegion(vm, Modifier.fillMaxSize(), item, playbackOffset, preview, if (manifestExpired) "Offline ads paused\nAuthorization expired. Reconnect to refresh approved content." else "OORO\nContent will resume shortly") }
+            Box(Modifier.weight(2f).fillMaxHeight().clipToBounds()) { PrimaryAdRegion(vm, Modifier.fillMaxSize(), item, playbackOffset, preview, emptyPlaybackMessage) }
             Box(Modifier.weight(1f).fillMaxHeight().clipToBounds()) { NavigationPanel(vm, preview, Modifier.fillMaxSize()) }
             Box(Modifier.weight(1f).fillMaxHeight().clipToBounds()) { OfferPanel(displayedOffer, Modifier.fillMaxSize()) }
-        } else PrimaryAdRegion(vm, Modifier.fillMaxSize().clipToBounds(), item, playbackOffset, preview, if (manifestExpired) "Offline ads paused\nAuthorization expired. Reconnect to refresh approved content." else "OORO\nContent will resume shortly")
+        } else PrimaryAdRegion(vm, Modifier.fillMaxSize().clipToBounds(), item, playbackOffset, preview, emptyPlaybackMessage)
     }
 }
 
@@ -402,12 +422,14 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     pairedScreenId: String?,
     preview: PlayerPreviewConfig?,
     manifestExpired: Boolean,
+    cachedPlaybackAllowed: Boolean,
 ) {
     LayoutStudioRenderer(contract, Modifier.fillMaxSize().background(Color.Black).clipToBounds()) { zone ->
         val resolved = remember(zone, manifest.version, manifest.validUntil, manifestExpired, pairedScreenId, verifiedAssetIds, currentMainItem?.id) {
-            resolveCustomWidgetContent(zone, manifest, pairedScreenId, verifiedAssetIds, currentMainItem, Instant.now(), authorizationExpired = manifestExpired)
+            resolveCustomWidgetContent(zone, manifest, pairedScreenId, verifiedAssetIds, currentMainItem, Instant.now(), authorizationExpired = manifestExpired, allowCachedOffline = cachedPlaybackAllowed)
         }
-        CustomLayoutZoneContent(vm, zone, resolved, playbackKey, preview)
+        val emptyMessage = if (manifestExpired) "Offline ads paused\nAuthorization expired. Reconnect to refresh approved content." else offlineEmptyMessage(manifest, Instant.now(), verifiedAssetIds, allowExpiredCachedManifest = cachedPlaybackAllowed)
+        CustomLayoutZoneContent(vm, zone, resolved, playbackKey, preview, emptyMessage)
     }
 }
 
@@ -417,12 +439,13 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     content: CustomWidgetContent,
     playbackKey: Int,
     preview: PlayerPreviewConfig?,
+    emptyMessage: String,
 ) {
     val fit = if (zone.fit == "CENTER_CROP") FitMode.CENTER_CROP else FitMode.FIT
     when (content) {
         is CustomWidgetContent.MainAd -> PrimaryAdRegion(
             vm, Modifier.fillMaxSize(), content.item, playbackKey, preview,
-            emptyMessage = "OORO\nContent will resume shortly", recordProof = preview == null, fitModeOverride = fit,
+            emptyMessage = emptyMessage, recordProof = preview == null, fitModeOverride = fit,
         )
         is CustomWidgetContent.Sponsor -> SponsoredAdRegion(
             vm, content.item, Modifier.fillMaxSize(), preview?.assetPaths?.get(content.item.id),
@@ -542,10 +565,22 @@ internal fun nextScheduleBoundary(item: ManifestItem, now: Instant, zone: ZoneId
     }
 }
 
-@Composable private fun PrimaryAdRegion(vm: ScreenViewModel?, modifier: Modifier, selectedItem: ManifestItem?, playbackKey: Int = 0, preview: PlayerPreviewConfig? = null, emptyMessage: String = "OORO\nContent will resume shortly", recordProof: Boolean = true, fitModeOverride: FitMode? = null) {
+@Composable private fun PrimaryAdRegion(vm: ScreenViewModel?, modifier: Modifier, selectedItem: ManifestItem?, playbackKey: Int = 0, preview: PlayerPreviewConfig? = null, emptyMessage: String = "No ad is available right now\nCheck that an approved campaign is assigned and scheduled.", recordProof: Boolean = true, fitModeOverride: FitMode? = null) {
     SideEffect { RuntimeDiagnostics.increment(RuntimeDiagnostics.Counter.AD_COMPOSITION) }
     val item = selectedItem
     val fitMode = fitModeOverride ?: item?.fitMode ?: FitMode.FIT
+    // Keep the last successfully decoded image on screen while the next asset is
+    // resolved and decoded. Otherwise the empty-state copy flashes between ads.
+    var lastReadyImage by remember { mutableStateOf<Pair<androidx.compose.ui.graphics.ImageBitmap, FitMode>?>(null) }
+    LaunchedEffect(item?.id) {
+        if (item == null) {
+            // A brief null selection can happen between playback completion and
+            // the next schedule selection. Keep the outgoing frame for that handoff,
+            // then restore the real empty state if nothing becomes eligible.
+            kotlinx.coroutines.delay(500)
+            lastReadyImage = null
+        }
+    }
     var path by remember(item?.id, playbackKey, preview) { mutableStateOf<String?>(null) }
     LaunchedEffect(item?.id, playbackKey, preview?.itemId, preview?.assetPaths) {
         val resolved = item?.let { preview?.assetPaths?.get(it.id) ?: vm?.localFile(it) }
@@ -556,7 +591,16 @@ internal fun nextScheduleBoundary(item: ManifestItem, now: Instant, zone: ZoneId
         Log.i("OoroRenderTest", "region creativeId=${item?.creativeId} boundsPx=${size.width}x${size.height} fit=${item?.fitMode}")
     }
     Box(modifier.background(Color.Black).clipToBounds().then(measuredBounds), contentAlignment = Alignment.Center) {
-        if (item == null || path == null) Text(emptyMessage, color = Color.White, fontSize = 24.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        if (item == null) {
+            val retained = lastReadyImage
+            if (retained != null) Image(retained.first, "OORO creative", Modifier.fillMaxSize().clipToBounds(), contentScale = retained.second.toContentScale())
+            else Text(emptyMessage, color = Color.White, fontSize = 24.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        }
+        else if (path == null) {
+            val retained = lastReadyImage
+            if (retained != null) Image(retained.first, "OORO creative", Modifier.fillMaxSize().clipToBounds(), contentScale = retained.second.toContentScale())
+            else Box(Modifier.fillMaxSize().background(Color.Black))
+        }
         else if (item.type == CreativeType.IMAGE) {
             if (path != null) BoxWithConstraints(Modifier.fillMaxSize().clipToBounds()) {
                 val density = androidx.compose.ui.platform.LocalDensity.current
@@ -580,6 +624,11 @@ internal fun nextScheduleBoundary(item: ManifestItem, now: Instant, zone: ZoneId
                 // Compose may draw a retained display list after disposal. Recycling the
                 // bitmap synchronously can crash that frame; allow the bitmap to be GC'd.
                 val imageBitmap = remember(bitmap) { bitmap?.asImageBitmap() }
+                if (imageBitmap != null) SideEffect {
+                    if (lastReadyImage?.first !== imageBitmap || lastReadyImage?.second != fitMode) {
+                        lastReadyImage = imageBitmap to fitMode
+                    }
+                }
                 LaunchedEffect(item.id, playbackKey, path, widthPx, heightPx) {
                     val loaded = snapshotFlow { bitmapState.value to doneState.value }.first { it.first != null || it.second }
                     if (preview == null) {
@@ -598,25 +647,45 @@ internal fun nextScheduleBoundary(item: ManifestItem, now: Instant, zone: ZoneId
                         }
                     ), contentScale = fitMode.toContentScale()
                 )
-                else Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) { Text("Preparing advertisement…", color = Color.White) }
-            } else Text("Preparing advertisement…", color = Color.White)
+                else {
+                    val retained = lastReadyImage
+                    if (retained != null) Image(retained.first, "OORO creative", Modifier.fillMaxSize().clipToBounds(), contentScale = retained.second.toContentScale())
+                    else Box(Modifier.fillMaxSize().background(Color.Black))
+                }
+            } else Box(Modifier.fillMaxSize().background(Color.Black))
         }
         else {
             val context = LocalContext.current
             val lifecycleOwner = LocalLifecycleOwner.current
             val lifecycleState by lifecycleOwner.lifecycle.currentStateFlow.collectAsState()
+            var videoFrameReady by remember(item.id, playbackKey) { mutableStateOf(false) }
             var videoSize by remember(item.id, playbackKey) { mutableStateOf(androidx.media3.common.VideoSize.UNKNOWN) }
             var videoViewport by remember(item.id, playbackKey) { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
             val playerKey = remember(item.id, playbackKey, preview != null) { CreativePlaybackKey(item.id, playbackKey, preview != null) }
+            val playerViewRef = remember { arrayOfNulls<PlayerView>(1) }
             val creative = remember(playerKey) {
                 Log.i("OoroScreen", "media player created creativeId=${item.creativeId} itemId=${item.id} key=$playbackKey")
                 Media3CreativePlayer(
                     context.applicationContext,
                     onStarted = { if (preview == null && recordProof) vm?.creativeStarted(item) },
-                    onCompleted = { ms -> if (preview == null && recordProof) vm?.creativeFinished(item, ms, true) },
-                    onFailed = { e -> if (preview == null && recordProof) vm?.creativeFinished(item, creativeDuration(item), false, e.message) },
+                    onCompleted = { ms ->
+                        if (preview == null) {
+                            captureLastVideoFrame(playerViewRef[0], fitMode)?.let { lastReadyImage = it }
+                            if (recordProof) vm?.creativeFinished(item, ms, true)
+                        }
+                    },
+                    onFailed = { e ->
+                        if (preview == null) {
+                            captureLastVideoFrame(playerViewRef[0], fitMode)?.let { lastReadyImage = it }
+                            if (recordProof) vm?.creativeFinished(item, creativeDuration(item), false, e.message)
+                        }
+                    },
                     onPosition = { position -> if (preview == null && recordProof) vm?.creativePosition(item, position) },
                     onVideoSize = { size -> videoSize = size },
+                    onFirstFrameRendered = {
+                        Log.i("OoroScreen", "creative handoff incoming video frame rendered")
+                        videoFrameReady = true
+                    },
                     repeatOne = preview != null
                 )
             }
@@ -644,9 +713,15 @@ internal fun nextScheduleBoundary(item: ManifestItem, now: Instant, zone: ZoneId
                 }
             }
             AndroidView(
-                factory = { context -> PlayerView(context).apply { useController = false; resizeMode = fitMode.toResizeMode(); Log.i("OoroScreen", "video surface created creativeId=${item.creativeId} itemId=${item.id}") } },
-                modifier = Modifier.fillMaxSize().clipToBounds().then(if (preview == null) Modifier else Modifier.onSizeChanged { bounds -> videoViewport = bounds }),
+                factory = { context -> (LayoutInflater.from(context).inflate(R.layout.creative_player_view, null, false) as PlayerView).apply { playerViewRef[0] = this; resizeMode = fitMode.toResizeMode(); Log.i("OoroScreen", "video surface created creativeId=${item.creativeId} itemId=${item.id}") } },
+                modifier = Modifier.fillMaxSize().clipToBounds()
+                    .then(if (preview == null) Modifier else Modifier.onSizeChanged { bounds -> videoViewport = bounds }),
                 update = { view ->
+                    // If a retained outgoing frame exists, keep the new PlayerView
+                    // hidden until its first frame so its shutter/artwork cannot cover
+                    // the outgoing image. Without a snapshot, let Media3 retain its
+                    // prior video surface during an in-place video-to-video reset.
+                    view.alpha = if (preview != null || videoFrameReady || lastReadyImage == null) 1f else 0f
                     if (needsIdentityBinding(view.player, creative.player)) {
                         Log.i("OoroScreen", "video surface rebound creativeId=${item.creativeId} itemId=${item.id}")
                         view.player = creative.player
@@ -654,10 +729,30 @@ internal fun nextScheduleBoundary(item: ManifestItem, now: Instant, zone: ZoneId
                     val resizeMode = fitMode.toResizeMode()
                     if (view.resizeMode != resizeMode) view.resizeMode = resizeMode
                 },
-                onRelease = { view -> view.player = null; Log.i("OoroScreen", "video surface released creativeId=${item.creativeId} itemId=${item.id}") }
+                onRelease = { view -> if (playerViewRef[0] === view) playerViewRef[0] = null; view.player = null; Log.i("OoroScreen", "video surface released creativeId=${item.creativeId} itemId=${item.id}") }
             )
+            if (!videoFrameReady && preview == null) {
+                lastReadyImage?.let { retained -> Image(retained.first, "OORO creative", Modifier.fillMaxSize().clipToBounds(), contentScale = retained.second.toContentScale()) }
+            }
         }
     }
+}
+private fun captureLastVideoFrame(view: PlayerView?, fitMode: FitMode): Pair<androidx.compose.ui.graphics.ImageBitmap, FitMode>? {
+    val surface = view?.videoSurfaceView
+    val texture = surface as? TextureView ?: run {
+        Log.w("OoroScreen", "creative handoff outgoing video frame unavailable surface=${surface?.javaClass?.simpleName ?: "missing"}")
+        return null
+    }
+    if (!texture.isAvailable || texture.width <= 0 || texture.height <= 0) {
+        Log.w("OoroScreen", "creative handoff outgoing video frame unavailable texture=${texture.isAvailable} size=${texture.width}x${texture.height}")
+        return null
+    }
+    val snapshot = runCatching { texture.getBitmap(texture.width, texture.height) }.getOrNull() ?: run {
+        Log.w("OoroScreen", "creative handoff outgoing video frame capture failed")
+        return null
+    }
+    Log.i("OoroScreen", "creative handoff outgoing video frame retained size=${snapshot.width}x${snapshot.height}")
+    return snapshot.asImageBitmap() to fitMode
 }
 private fun FitMode.toContentScale() = when (creativeScaleBehavior(this)) { CreativeScaleBehavior.CROP -> ContentScale.Crop; CreativeScaleBehavior.CONTAIN -> ContentScale.Fit }
 private fun FitMode.toResizeMode() = when (creativeScaleBehavior(this)) { CreativeScaleBehavior.CROP -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM; CreativeScaleBehavior.CONTAIN -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT }

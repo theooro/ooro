@@ -9,7 +9,11 @@ import androidx.room.*
 
 @Dao interface ManifestDao { @Query("SELECT * FROM campaign_manifest WHERE id = 'active' LIMIT 1") suspend fun active(): ManifestEntity?; @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun put(entity: ManifestEntity) }
 @Dao interface ProofDao { @Query("SELECT * FROM proof_of_play WHERE synced = 0 ORDER BY createdAt LIMIT :limit") suspend fun pending(limit: Int): List<ProofEntity>; @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun add(entity: ProofEntity); @Query("DELETE FROM proof_of_play WHERE eventId IN (:ids)") suspend fun delete(ids: List<String>); @Query("SELECT COUNT(*) FROM proof_of_play WHERE synced = 0") suspend fun pendingCount(): Int }
-@Dao interface ErrorDao { @Insert suspend fun add(entity: ErrorEntity) }
+@Dao interface ErrorDao {
+    @Insert suspend fun add(entity: ErrorEntity)
+    @Query("SELECT message FROM app_error ORDER BY createdAt DESC LIMIT :limit") suspend fun recent(limit: Int): List<String>
+    @Query("DELETE FROM app_error WHERE id NOT IN (SELECT id FROM app_error ORDER BY createdAt DESC LIMIT 20)") suspend fun prune()
+}
 @Database(entities = [ManifestEntity::class, ProofEntity::class, ErrorEntity::class], version = 1, exportSchema = false)
 abstract class OoroDatabase : RoomDatabase() { abstract fun manifestDao(): ManifestDao; abstract fun proofDao(): ProofDao; abstract fun errorDao(): ErrorDao
     companion object { @Volatile private var instance: OoroDatabase? = null; fun get(context: Context) = instance ?: synchronized(this) { instance ?: Room.databaseBuilder(context, OoroDatabase::class.java, "ooro.db").build().also { instance = it } } }

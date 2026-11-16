@@ -809,6 +809,7 @@ model DisplayPairingCode {
   displayId  String    @db.Uuid
   codeHash   String    @unique
   codeLast4  String
+  purpose    String    @default("SCREEN_PLAYER")
   expiresAt  DateTime
   consumedAt DateTime?
   revokedAt  DateTime?
@@ -816,6 +817,7 @@ model DisplayPairingCode {
   display    Display   @relation(fields: [displayId], references: [id], onDelete: Cascade)
 
   @@index([displayId, expiresAt])
+  @@index([displayId, purpose, expiresAt])
 }
 
 model DisplayHeartbeat {
@@ -875,16 +877,19 @@ model DisplayCommand {
   id             String    @id @default(uuid()) @db.Uuid
   displayId      String    @db.Uuid
   commandType    String
+  idempotencyKey String?
   payload        Json?
   status         String    @default("QUEUED")
   createdAt      DateTime  @default(now())
   deliveredAt    DateTime?
   acknowledgedAt DateTime?
   failedAt       DateTime?
+  cancelledAt    DateTime?
   expiresAt      DateTime?
   error          String?
   display        Display   @relation(fields: [displayId], references: [id], onDelete: Cascade)
 
+  @@unique([displayId, idempotencyKey])
   @@index([displayId, status])
 }
 

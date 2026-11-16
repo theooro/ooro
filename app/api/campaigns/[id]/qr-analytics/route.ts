@@ -1,13 +1,16 @@
 import { NextResponse } from "next/server";
 import { webPrisma } from "@/lib/web-prisma";
-import { webOwnerEmail } from "@/lib/web-owner";
+import { webContext, webOwnerEmail } from "@/lib/web-owner";
+import { advertiserCampaignScope } from "@/lib/advertiser-campaign-scope";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const ownerEmail = await webOwnerEmail();
+  const context = await webContext();
+  const ownerEmail = context?.email ?? await webOwnerEmail();
   if (!ownerEmail) return NextResponse.json({ error: { message: "Sign in to view analytics" } }, { status: 401 });
   const { id } = await params;
   try {
-    const campaign = await webPrisma.campaign.findFirst({ where: { id, ownerEmail }, select: { id: true } });
+    const scope = context ? await advertiserCampaignScope(context) : { ownerEmail };
+    const campaign = await webPrisma.campaign.findFirst({ where: { AND: [{ id }, scope] }, select: { id: true } });
     if (!campaign) return NextResponse.json({ error: { message: "Campaign not found" } }, { status: 404 });
     const [completedPlays, qrScans] = await Promise.all([
       webPrisma.proofOfPlay.count({ where: { campaignId: id, playbackCompleted: true } }),

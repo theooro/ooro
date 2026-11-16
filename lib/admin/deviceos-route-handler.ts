@@ -4,6 +4,7 @@ import { AdminAuthError, proxyAdminRequest } from "@/lib/auth/backend-session";
 import { deviceOsProxyFailure, readDeviceOsJson } from "@/apps/api/src/domain/deviceos-proxy-response";
 
 const allowed = [
+  /^displays\/[^/]+\/enrollment-code$/,
   /^devices$/,
   /^devices\/[^/]+\/inventory$/,
   /^devices\/[^/]+\/revoke$/,

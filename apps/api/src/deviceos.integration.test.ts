@@ -16,15 +16,16 @@ test('DeviceOS PostgreSQL integration: enrollment, scoping, authorization, and r
   const support = await prisma.user.create({ data: { phone: `deviceos-support-${randomUUID()}`, role: 'SUPPORT', accountStatus: 'ACTIVE' } })
   const { accessToken: adminToken } = await issueTokens(admin.id, admin.role)
   const { accessToken: supportToken } = await issueTokens(support.id, support.role)
+  const adminHeaders = { authorization: `Bearer ${adminToken}` }
   const displayOne = await prisma.display.create({ data: { deviceId: `deviceos-${randomUUID()}`, name: 'DeviceOS integration one', state: 'READY' } })
   const displayTwo = await prisma.display.create({ data: { deviceId: `deviceos-${randomUUID()}`, name: 'DeviceOS integration two', state: 'READY' } })
-  const pairingOne = 'DEVICEOS-ONE'
   const pairingTwo = 'DEVICEOS-TWO'
-  await prisma.displayPairingCode.createMany({ data: [
-    { displayId: displayOne.id, codeHash: hashSecret(pairingOne), codeLast4: pairingOne.slice(-4), expiresAt: new Date(Date.now() + 60_000) },
-    { displayId: displayTwo.id, codeHash: hashSecret(pairingTwo), codeLast4: pairingTwo.slice(-4), expiresAt: new Date(Date.now() + 60_000) },
-  ] })
-  const adminHeaders = { authorization: `Bearer ${adminToken}` }
+  const issuedCode = await app.inject({ method: 'POST', url: `/api/admin/deviceos/displays/${displayOne.id}/enrollment-code`, headers: adminHeaders, payload: {} })
+  assert.equal(issuedCode.statusCode, 200, issuedCode.body)
+  const pairingOne = issuedCode.json().data.pairingCode as string
+  await prisma.displayPairingCode.create({ data: { displayId: displayTwo.id, codeHash: hashSecret(pairingTwo), codeLast4: pairingTwo.slice(-4), purpose: 'DEVICEOS', expiresAt: new Date(Date.now() + 60_000) } })
+  const screenPlayerWrongPurpose = await app.inject({ method: 'POST', url: '/api/device/pair', payload: { pairingCode: pairingOne, deviceId: `player-${randomUUID()}` } })
+  assert.equal(screenPlayerWrongPurpose.statusCode, 400, screenPlayerWrongPurpose.body)
   const { accessToken: regularAdminToken } = await issueTokens(regularAdmin.id, regularAdmin.role)
   const regularAdminHeaders = { authorization: `Bearer ${regularAdminToken}` }
   const supportHeaders = { authorization: `Bearer ${supportToken}` }

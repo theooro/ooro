@@ -49,9 +49,19 @@ data class DiagnosticsState(
     val verifiedAssets: Int = 0,
     val missingAssets: Int = 0,
     val proofQueued: Int = 0,
+    val recentErrors: List<String> = emptyList(),
     val lastDiagnosis: String? = null,
     val message: String? = null
 )
+
+internal fun recordManifestSync(context: Context, atMillis: Long = System.currentTimeMillis()) {
+    context.getSharedPreferences("ooro_local_health", Context.MODE_PRIVATE).edit()
+        .putLong("manifest_sync_at", atMillis).commit()
+}
+
+internal fun lastManifestSyncAt(context: Context): Long? = context
+    .getSharedPreferences("ooro_local_health", Context.MODE_PRIVATE)
+    .getLong("manifest_sync_at", 0L).takeIf { it > 0L }
 
 fun probeApi(baseUrl: String): ApiProbe {
     val url = URL(baseUrl.trimEnd('/') + "/api/health")
@@ -100,7 +110,10 @@ fun networkInfo(context: Context): DeviceNetworkInfo {
         else -> "None"
     }
     val local = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED) == true
-    val internet = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+    val internet = caps?.let {
+        it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            it.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    } == true
     val ip = runCatching {
         val address = java.net.NetworkInterface.getNetworkInterfaces().toList().flatMap { it.inetAddresses.toList() }
             .firstOrNull { !it.isLoopbackAddress && it.hostAddress?.contains(':') == false }

@@ -12,7 +12,7 @@ import android.util.Log
 import com.ooro.screenplayer.RuntimeDiagnostics
 
 /** Media3 boundary. Playback remains local: callers pass a verified cached file URI. */
-class Media3CreativePlayer(context: Context, private val onStarted: () -> Unit = {}, private val onCompleted: (Long) -> Unit = {}, private val onFailed: (Throwable) -> Unit = {}, private val onStall: () -> Unit = {}, private val onPosition: (Long) -> Unit = {}, private val onVideoSize: (androidx.media3.common.VideoSize) -> Unit = {}, repeatOne: Boolean = false) : AutoCloseable {
+class Media3CreativePlayer(context: Context, private val onStarted: () -> Unit = {}, private val onCompleted: (Long) -> Unit = {}, private val onFailed: (Throwable) -> Unit = {}, private val onStall: () -> Unit = {}, private val onPosition: (Long) -> Unit = {}, private val onVideoSize: (androidx.media3.common.VideoSize) -> Unit = {}, private val onFirstFrameRendered: () -> Unit = {}, repeatOne: Boolean = false) : AutoCloseable {
     val player: ExoPlayer = ExoPlayer.Builder(context).build().apply { volume = 0f; repeatMode = if (repeatOne) ExoPlayer.REPEAT_MODE_ONE else ExoPlayer.REPEAT_MODE_OFF }
     private val watchdog = android.os.Handler(android.os.Looper.getMainLooper()); private var lastPosition = -1L; private var stallCount = 0; private var closed = false
     init {
@@ -35,6 +35,9 @@ class Media3CreativePlayer(context: Context, private val onStarted: () -> Unit =
             }
         })
         player.addAnalyticsListener(object : AnalyticsListener {
+            override fun onRenderedFirstFrame(eventTime: AnalyticsListener.EventTime, output: Any, renderTimeMs: Long) {
+                onFirstFrameRendered()
+            }
             override fun onVideoDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
                 RuntimeDiagnostics.decoderInitialized()
                 Log.i("OoroScreen", "video decoder initialized name=$decoderName initMs=$initializationDurationMs")

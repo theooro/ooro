@@ -4,7 +4,7 @@ import type { CreateScreenInput, DeviceActivity, DeviceCommand, DeviceHeartbeat,
 export interface ScreenRepository { listScreens(filters?: ScreenFilters): Promise<Screen[]>; getScreen(id: string): Promise<Screen | null>; createScreen(input: CreateScreenInput): Promise<Screen> }
 export interface DeviceHealthRepository { getLatestHealth(screenId: string): Promise<DeviceHealth | null>; getFleetHealth(): Promise<{ screens: DeviceHealth[]; summary: ReturnType<typeof fleetHealth> }>; getHeartbeatHistory(screenId: string, limit?: number): Promise<DeviceHeartbeat[]>; getActivity(screenId: string, limit?: number): Promise<DeviceActivity[]> }
 export interface PairingRepository { getActiveCode(screenId: string): Promise<PairingCode | null>; createCode(screenId: string): Promise<PairingCode>; revokeCode(code: string): Promise<void> }
-export interface DeviceCommandRepository { createCommand(screenId: string, type: DeviceCommand["type"]): Promise<DeviceCommand>; getLatestCommand(screenId: string): Promise<DeviceCommand | null> }
+export interface DeviceCommandRepository { createCommand(screenId: string, type: DeviceCommand["type"], idempotencyKey?: string): Promise<DeviceCommand>; getCommands(screenId: string): Promise<DeviceCommand[]>; getLatestCommand(screenId: string): Promise<DeviceCommand | null> }
 
 // Fixtures are useful while developing the admin UI, but must never be able to
 // replace live device data in a production build, even if an environment
@@ -70,8 +70,25 @@ class LivePairingRepository implements PairingRepository {
   async createCode(screenId: string) { const response = await fetch(`/api/admin/screens/${screenId}/pairing-code`, { method: "POST" }); const payload = await response.json().catch(() => null); if (!response.ok) throw new Error(payload?.error?.message || "Unable to generate pairing code"); return payload.data as PairingCode; }
   async revokeCode() { return; }
 }
-class MockCommandRepository implements DeviceCommandRepository { async createCommand(screenId: string, type: DeviceCommand["type"]) { return { id: `command-${Date.now()}`, screenId, type, status: "QUEUED" as const, createdAt: new Date().toISOString() }; } async getLatestCommand() { return null; } }
-class LiveCommandRepository implements DeviceCommandRepository { async createCommand(screenId: string, type: DeviceCommand["type"]) { const response = await fetch(`/api/admin/screens/${screenId}/commands`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ commandType: type }) }); const payload = await response.json().catch(() => null); if (!response.ok) throw new Error(payload?.error?.message || "Unable to queue display command"); const command = payload.data ?? payload; return { id: command.id, screenId, type: command.commandType as DeviceCommand["type"], status: command.status as DeviceCommand["status"], createdAt: command.createdAt }; } async getLatestCommand(screenId: string) { const response = await fetch(`/api/admin/screens/${screenId}/commands`, { cache: "no-store" }); const payload = await response.json().catch(() => null); if (!response.ok) throw new Error(payload?.error?.message || "Unable to load display commands"); const command = payload.data?.[0]; return command ? { id: command.id, screenId, type: command.commandType as DeviceCommand["type"], status: command.status as DeviceCommand["status"], createdAt: command.createdAt } : null; } }
+class MockCommandRepository implements DeviceCommandRepository { async createCommand(screenId: string, type: DeviceCommand["type"]) { return { id: `command-${Date.now()}`, screenId, type, status: "QUEUED" as const, createdAt: new Date().toISOString() }; } async getCommands() { return []; } async getLatestCommand() { return null; } }
+class LiveCommandRepository implements DeviceCommandRepository {
+  async createCommand(screenId: string, type: DeviceCommand["type"], idempotencyKey = crypto.randomUUID()) {
+    const response = await fetch(`/api/admin/screens/${screenId}/commands`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ commandType: type, idempotencyKey }) });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(payload?.error?.message || "Unable to queue display command");
+    return mapCommand(payload.data ?? payload, screenId);
+  }
+  async getCommands(screenId: string) {
+    const response = await fetch(`/api/admin/screens/${screenId}/commands`, { cache: "no-store" });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(payload?.error?.message || "Unable to load display commands");
+    return (Array.isArray(payload.data) ? payload.data : []).map((command: Record<string, unknown>) => mapCommand(command, screenId));
+  }
+  async getLatestCommand(screenId: string) { return (await this.getCommands(screenId))[0] ?? null; }
+}
+function mapCommand(command: Record<string, unknown>, screenId: string): DeviceCommand {
+  return { id: String(command.id), screenId, type: String(command.commandType) as DeviceCommand["type"], status: String(command.status) as DeviceCommand["status"], createdAt: String(command.createdAt), deliveredAt: command.deliveredAt as string | null | undefined, acknowledgedAt: command.acknowledgedAt as string | null | undefined, failedAt: command.failedAt as string | null | undefined, expiresAt: command.expiresAt as string | null | undefined, error: command.error as string | null | undefined, payload: command.payload };
+}
 
 export const screenRepository: ScreenRepository = isMockDeviceData ? new MockScreenRepository() : new LiveScreenRepository();
 export const deviceHealthRepository: DeviceHealthRepository = isMockDeviceData ? new MockDeviceHealthRepository() : new LiveDeviceHealthRepository();

@@ -4,13 +4,14 @@ import { webOwnerEmail } from "@/lib/web-owner";
 import { validateCampaignDates } from "@/apps/api/src/domain/campaign-validation";
 import { MIN_SELF_SERVE_BUDGET_RUPEES } from "@/lib/campaign-policy";
 import { webContext } from "@/lib/web-owner";
+import { advertiserCampaignScope } from "@/lib/advertiser-campaign-scope";
 
 type CampaignInput = {
   name?: string; description?: string; goal?: string; audience?: string; city?: string; area?: string;
   startDate?: string; endDate?: string; media?: string; budget?: number; currency?: string;
   metadata?: Record<string, unknown>; status?: "DRAFT" | "SCHEDULED";
   pricingPlanId?: string; deliveryTier?: "STANDARD" | "PREMIUM_PLUS";
-  campaignCenterLat?: number; campaignCenterLng?: number; radiusKm?: number;
+  campaignCenterLat?: number | null; campaignCenterLng?: number | null; radiusKm?: number | null;
   forecastSnapshot?: Record<string, unknown>; forecastGeneratedAt?: string; forecastExpiresAt?: string; forecastVersion?: string;
 };
 
@@ -24,9 +25,9 @@ function validate(input: CampaignInput, partial = false) {
   if (!partial && (!input.startDate || !input.endDate)) return "Start and end dates are required";
   const dateError = validateCampaignDates(input); if (dateError) return dateError;
   if (input.budget !== undefined && (!Number.isFinite(input.budget) || input.budget <= 0)) return "Budget must be greater than zero";
-  if (input.radiusKm !== undefined && (!Number.isFinite(input.radiusKm) || input.radiusKm < 1 || input.radiusKm > 10)) return "Radius must be between 1 km and 10 km";
-  if (input.campaignCenterLat !== undefined && (!Number.isFinite(input.campaignCenterLat) || input.campaignCenterLat < -90 || input.campaignCenterLat > 90)) return "Campaign latitude is invalid";
-  if (input.campaignCenterLng !== undefined && (!Number.isFinite(input.campaignCenterLng) || input.campaignCenterLng < -180 || input.campaignCenterLng > 180)) return "Campaign longitude is invalid";
+  if (input.radiusKm != null && (!Number.isFinite(input.radiusKm) || input.radiusKm < 1 || input.radiusKm > 10)) return "Radius must be between 1 km and 10 km";
+  if (input.campaignCenterLat != null && (!Number.isFinite(input.campaignCenterLat) || input.campaignCenterLat < -90 || input.campaignCenterLat > 90)) return "Campaign latitude is invalid";
+  if (input.campaignCenterLng != null && (!Number.isFinite(input.campaignCenterLng) || input.campaignCenterLng < -180 || input.campaignCenterLng > 180)) return "Campaign longitude is invalid";
   return null;
 }
 
@@ -38,7 +39,7 @@ export async function GET() {
     if (context?.account.accountType === "NETWORK" || context?.account.accountType === "EXPLORER") return NextResponse.json({ error: { code: "ADVERTISER_ACCESS_REQUIRED", message: "This account does not have advertiser campaign access." } }, { status: 403 });
     if (context?.account.accountType === "BRAND" && (!context.organization || context.organization.verificationStatus !== "VERIFIED")) return NextResponse.json({ error: { code: "BRAND_VERIFICATION_REQUIRED", message: "Your Brand account is awaiting verification." } }, { status: 403 });
     if (context?.account.accountType === "AGENCY" && (!context.organization || context.organization.verificationStatus !== "VERIFIED")) return NextResponse.json({ error: { code: "AGENCY_APPROVAL_REQUIRED", message: "Your Agency application is being reviewed." } }, { status: 403 });
-    const campaigns = await webPrisma.campaign.findMany({ where: { OR: [{ ownerEmail: email }, ...(context?.account.id ? [{ userId: context.account.id }] : [])] }, orderBy: { updatedAt: "desc" } });
+    const campaigns = await webPrisma.campaign.findMany({ where: context ? await advertiserCampaignScope(context) : { ownerEmail: email }, orderBy: { updatedAt: "desc" } });
     return NextResponse.json({ data: campaigns });
   } catch (error) { console.error("[campaigns] list failed", error); return NextResponse.json({ error: { code: "CAMPAIGN_SERVICE_UNAVAILABLE", message: "Campaign service unavailable" } }, { status: 503 }); }
 }

@@ -21,8 +21,9 @@ sealed interface CustomWidgetContent {
 }
 
 /**
- * Resolves Layout Studio references only through the currently authorized device manifest.
- * It never fetches media, selects campaigns, extends a lease, or attributes a proof.
+ * Resolves Layout Studio references only through a screen-bound manifest accepted from the
+ * device API. Offline main-creative fallback still obeys item schedules; this resolver never
+ * fetches media, selects campaigns, extends a lease, or attributes a proof.
  */
 internal fun resolveCustomWidgetContent(
     zone: LayoutStudioZone,
@@ -33,9 +34,10 @@ internal fun resolveCustomWidgetContent(
     now: Instant,
     enabledCapabilities: Set<String> = emptySet(),
     authorizationExpired: Boolean = false,
+    allowCachedOffline: Boolean = false,
 ): CustomWidgetContent {
     if (pairedScreenId.isNullOrBlank() || manifest.screenId != pairedScreenId) return CustomWidgetContent.Fallback("screen-identity-mismatch")
-    if (authorizationExpired || !manifestIsAuthorizedAt(manifest, now)) return CustomWidgetContent.Fallback("manifest-expired")
+    if (authorizationExpired || (!allowCachedOffline && !manifestIsAuthorizedAt(manifest, now))) return CustomWidgetContent.Fallback("manifest-expired")
     if (!zone.visible) return CustomWidgetContent.Fallback("hidden")
     val binding = zone.bindingKind
     val reference = zone.referenceId
