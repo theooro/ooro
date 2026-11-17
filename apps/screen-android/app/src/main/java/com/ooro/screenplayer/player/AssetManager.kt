@@ -22,9 +22,9 @@ class AssetManager(private val context: Context) {
         val safeId = item.id.replace(Regex("[^A-Za-z0-9._-]"), "_").take(120)
         val target = File(root, safeId)
         val digestRecord = File(root, digestRecordName(safeId))
-        if (isVerifiedOrRecordLegacyCache(target, item.checksum, digestRecord)) {
-            Log.i("OoroScreen", "asset ready assetId=${item.id} source=cache checksumMatch=true")
-            return@withContext target
+        findVerifiedCachedFile(item)?.let { cached ->
+            Log.i("OoroScreen", "asset ready source=${if (cached == target) "item-id-cache" else "legacy-content-addressed-cache"} checksumMatch=true")
+            return@withContext cached
         }
         val temp = File(root, "$safeId.part")
         runCatching {
@@ -34,19 +34,17 @@ class AssetManager(private val context: Context) {
             downloaded
         }.onFailure { error -> Log.e("OoroScreen", "asset download failed assetId=${item.id} tempExists=${temp.exists()} tempBytes=${temp.length()} targetExists=${target.exists()} error=${error.message}", error) }.getOrNull()
     }
-    fun cleanup(keepIds: Set<String>) {
+    fun cleanup(keepIds: Set<String>, keepChecksums: Set<String> = emptySet()) {
         val safe = keepIds.map { it.replace(Regex("[^A-Za-z0-9._-]"), "_").take(120) }
-        val keep = safe.flatMap { listOf(it, digestRecordName(it)) }.toSet()
+        val contentAddressed = keepChecksums.mapNotNull(::contentAddressedCacheName)
+        val keep = safe.flatMap { listOf(it, digestRecordName(it)) }.toSet() + contentAddressed
         root.listFiles()?.filter { it.isFile && it.name !in keep && !it.name.endsWith(".part") }
             ?.sortedBy { it.lastModified() }?.forEach { it.delete() }
     }
     fun clear() { root.listFiles()?.forEach { it.deleteRecursively() } }
     suspend fun verifiedItemIds(items: List<ManifestItem>): Set<String> = withContext(Dispatchers.IO) {
         items.asSequence().filter { it.url.isNotBlank() }
-            .filter { item ->
-                val file = File(root, item.safeCacheName())
-                isVerifiedOrRecordLegacyCache(file, item.checksum, File(root, digestRecordName(item.safeCacheName())))
-            }
+            .filter { item -> findVerifiedCachedFile(item) != null }
             .map { it.id }.toSet()
     }
     suspend fun verify(items: List<ManifestItem>): Pair<Int, Int> = withContext(Dispatchers.IO) {
@@ -55,7 +53,22 @@ class AssetManager(private val context: Context) {
         valid to (required - valid)
     }
     fun storageBytes(): Long = root.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+
+    /** Reuse a valid legacy content-addressed file without copying or trusting its filename alone. */
+    private fun findVerifiedCachedFile(item: ManifestItem): File? {
+        val idName = item.safeCacheName()
+        val itemIdFile = File(root, idName)
+        if (isVerifiedOrRecordLegacyCache(itemIdFile, item.checksum, File(root, digestRecordName(idName)))) return itemIdFile
+
+        val checksum = item.checksum?.takeIf { it.matches(SHA256_PATTERN) } ?: return null
+        val contentFile = File(root, contentAddressedCacheName(checksum) ?: return null)
+        return contentFile.takeIf { isVerifiedCachedAsset(it, checksum) }
+    }
 }
+
+private val SHA256_PATTERN = Regex("[0-9a-fA-F]{64}")
+private fun contentAddressedCacheName(checksum: String): String? =
+    checksum.takeIf { it.matches(SHA256_PATTERN) }?.lowercase()?.let { "sha256-$it" }
 
 private fun digestRecordName(safeId: String) = ".$safeId.sha256"
 
