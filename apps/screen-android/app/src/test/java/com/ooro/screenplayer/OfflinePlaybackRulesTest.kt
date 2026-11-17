@@ -16,6 +16,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
+import java.time.ZoneId
 import java.io.File
 import java.net.InetAddress
 import java.net.ServerSocket
@@ -119,6 +120,24 @@ class OfflinePlaybackRulesTest {
         assertTrue(shouldPollForManifestUpdate(1_000L, 0L))
         assertFalse(shouldPollForManifestUpdate(180_999L, 1_000L))
         assertTrue(shouldPollForManifestUpdate(181_000L, 1_000L))
+    }
+
+    @Test fun scheduleEligibilityIsRecheckedAtTheNextManifestBoundary() {
+        val starts = now.plusSeconds(300)
+        val scheduled = item("starts-soon").copy(startAt = starts)
+        assertEquals(300_000L, scheduleReevaluationDelayMillis(manifest(listOf(scheduled)), now))
+        assertEquals(60_000L, scheduleReevaluationDelayMillis(manifest(listOf(item("no-boundary"))), now))
+        assertEquals(starts, nextScheduleBoundary(scheduled, now, ZoneId.of("UTC")))
+    }
+
+    @Test fun staleColdStartClockCanSelectCachedCampaignAfterSystemTimeCorrection() {
+        val correctedTime = Instant.parse("2026-11-17T16:00:00Z")
+        val campaign = item("active-after-time-sync").copy(startAt = correctedTime.minusSeconds(60), endAt = correctedTime.plusSeconds(3_600))
+        val cached = manifest(listOf(campaign), correctedTime.plusSeconds(900))
+        val staleClock = correctedTime.minusSeconds(459L * 24 * 60 * 60)
+        assertNull(nextVerifiedCachedItem(cached, ScheduleEngine(), staleClock, 0, setOf(campaign.id)))
+        assertEquals(campaign.id, nextVerifiedCachedItem(cached, ScheduleEngine(), correctedTime, 0, setOf(campaign.id))?.id)
+        assertEquals(60_000L, scheduleReevaluationDelayMillis(cached, correctedTime))
     }
 
     @Test fun manifestReconnectBackoffIsBoundedAndExponential() {
