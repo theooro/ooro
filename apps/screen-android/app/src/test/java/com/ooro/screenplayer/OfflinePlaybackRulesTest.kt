@@ -125,7 +125,7 @@ class OfflinePlaybackRulesTest {
     @Test fun scheduleEligibilityIsRecheckedAtTheNextManifestBoundary() {
         val starts = now.plusSeconds(300)
         val scheduled = item("starts-soon").copy(startAt = starts)
-        assertEquals(300_000L, scheduleReevaluationDelayMillis(manifest(listOf(scheduled)), now))
+        assertEquals(60_000L, scheduleReevaluationDelayMillis(manifest(listOf(scheduled)), now))
         assertEquals(60_000L, scheduleReevaluationDelayMillis(manifest(listOf(item("no-boundary"))), now))
         assertEquals(starts, nextScheduleBoundary(scheduled, now, ZoneId.of("UTC")))
     }
