@@ -153,7 +153,7 @@ class OfflinePersistenceIntegrationTest {
         )
         val cached = DeviceManifest(12, credentials.screenId, "UTC", listOf(item), correctedTime.minusSeconds(30))
         val first = open()
-        first.manifestDao().put(ManifestEntity(cached.version, cached.timezone, cached.validUntil.toString(), ManifestCodec.encode(cached)))
+        first.manifestDao().put(ManifestEntity(version = cached.version, timezone = cached.timezone, validUntil = cached.validUntil.toString(), json = ManifestCodec.encode(cached)))
         first.close(); db = null
         val reopened = open()
         val restored = ManifestCodec.parse(reopened.manifestDao().active()!!.json)
