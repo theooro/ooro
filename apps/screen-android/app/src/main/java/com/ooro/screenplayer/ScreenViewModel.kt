@@ -292,6 +292,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             val incoming = api.manifest(c)
             val receivedAt = Instant.now()
             check(manifestIsAuthorizedAt(incoming, receivedAt)) { "manifest authorization is missing or expired" }
+            val currentlyPlayingItems = active?.items.orEmpty().filter { it.id == session?.itemId }
             val required = incoming.items.filter { it.url.isNotBlank() }
             val cachedMainIds = required.mapNotNull { item -> assets.ensure(item)?.let { item.id } }.toSet()
             val sponsorCached = incoming.sponsoredItem?.let { item -> runCatching { assets.ensure(item) }.getOrNull() != null } == true
@@ -302,7 +303,11 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             active=incoming
             _cachedPlaybackAllowed.value = false
             _verifiedAssetIds.value = cachedIds
-            assets.cleanup(retainedAssetIds(cachedIds, session?.itemId))
+            val retainedItems = incoming.items + listOfNotNull(incoming.sponsoredItem) + currentlyPlayingItems
+            assets.cleanup(
+                retainedAssetIds(cachedIds, session?.itemId),
+                retainedItems.mapNotNull { it.checksum?.takeIf { checksum -> checksum.matches(Regex("[0-9a-fA-F]{64}")) } }.toSet(),
+            )
             online=true
             reconnectAttempt = 0
             reconnectJob?.cancel(); reconnectJob = null

@@ -1,6 +1,7 @@
 package com.ooro.screenplayer
 
 import android.content.Context
+import android.content.ContextWrapper
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.testing.TestListenableWorkerBuilder
@@ -34,6 +35,61 @@ class OfflinePersistenceIntegrationTest {
     private val credentials = DeviceCredentials("device-test", "screen-test", "workspace-test", "fake", "Test")
     private fun open() = Room.databaseBuilder(context, OoroDatabase::class.java, name).allowMainThreadQueries().build().also { db = it }
     @After fun clean() { SyncWorkerDependencies.reset(); db?.close(); context.deleteDatabase(name) }
+
+    @Test fun checksumNamedLegacyAssetsAreVerifiedAndReusedWithoutNetworkOrCopy() = runBlocking {
+        val isolatedFilesDir = File(context.cacheDir, "legacy-reuse-${System.nanoTime()}").also { it.mkdirs() }
+        val isolatedContext = object : ContextWrapper(context) { override fun getFilesDir() = isolatedFilesDir }
+        val cache = File(isolatedFilesDir, "creative-cache").also { it.mkdirs() }
+        val bytes = "legacy content addressed image".toByteArray()
+        val checksum = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+        val legacy = File(cache, "sha256-$checksum").apply { writeBytes(bytes) }
+        val first = ManifestItem(
+            "schedule-item-one-${System.nanoTime()}", "campaign", "creative", CreativeType.IMAGE,
+            "http://127.0.0.1:0/unreachable", checksum, 10, 0, null, null, emptySet(), null, null, "asset-one",
+        )
+        val second = first.copy(id = "schedule-item-two-${System.nanoTime()}", assetId = "asset-two")
+        val manager = AssetManager(isolatedContext)
+        try {
+            assertEquals("offline ensure should reuse the verified content-addressed file", legacy, manager.ensure(first))
+            assertEquals(legacy.absolutePath, manager.ensure(second)?.absolutePath)
+            assertEquals(setOf(first.id, second.id), manager.verifiedItemIds(listOf(first, second)))
+            assertFalse(File(cache, first.id).exists())
+            assertFalse(File(cache, second.id).exists())
+
+            manager.cleanup(setOf(first.id, second.id), setOf(checksum))
+            assertTrue("accepted legacy content remains retained during manifest cleanup", legacy.isFile)
+            assertEquals(checksum, MessageDigest.getInstance("SHA-256").digest(legacy.readBytes()).joinToString("") { "%02x".format(it) })
+        } finally {
+            legacy.delete()
+            File(cache, ".${first.id}.sha256").delete()
+            File(cache, ".${second.id}.sha256").delete()
+            isolatedFilesDir.deleteRecursively()
+        }
+    }
+
+    @Test fun corruptChecksumNamedLegacyAssetFailsClosedAndIsNotCopiedToItemPath() = runBlocking {
+        val isolatedFilesDir = File(context.cacheDir, "legacy-corrupt-${System.nanoTime()}").also { it.mkdirs() }
+        val isolatedContext = object : ContextWrapper(context) { override fun getFilesDir() = isolatedFilesDir }
+        val cache = File(isolatedFilesDir, "creative-cache").also { it.mkdirs() }
+        val expected = "approved legacy bytes".toByteArray()
+        val checksum = MessageDigest.getInstance("SHA-256").digest(expected).joinToString("") { "%02x".format(it) }
+        val legacy = File(cache, "sha256-$checksum").apply { writeText("corrupt bytes") }
+        val item = ManifestItem(
+            "schedule-item-corrupt-${System.nanoTime()}", "campaign", "creative", CreativeType.IMAGE,
+            "http://127.0.0.1:0/unreachable", checksum, 10, 0, null, null, emptySet(), null, null, "asset-corrupt",
+        )
+        val manager = AssetManager(isolatedContext)
+        try {
+            assertTrue(manager.verifiedItemIds(listOf(item)).isEmpty())
+            assertNull("a filename that claims a digest cannot replace byte verification", manager.ensure(item))
+            assertTrue("failed verification leaves the source cache entry untouched", legacy.isFile)
+            assertFalse(File(cache, item.id).exists())
+        } finally {
+            legacy.delete()
+            File(cache, ".${item.id}.sha256").delete()
+            isolatedFilesDir.deleteRecursively()
+        }
+    }
 
     @Test fun verifiedManifestAssetAndOfflineProofSurviveDatabaseCloseAndReopen() = runBlocking {
         val first = open()

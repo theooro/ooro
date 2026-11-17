@@ -1,0 +1,15 @@
+Read-only cache-path inspection at 2026-11-17T19:25:31Z UTC
+board_serial=6c001040f441c941d94
+paired_credentials_present=true
+paired_screen_matches_manifest=true
+manifest_version=19366658
+manifest_timezone=Asia/Kolkata
+manifest_item_count=24
+refresh_lease_until=2026-11-17T19:37:58.348Z
+pending_proofs=2163
+actual_cache_file_count=3
+expected_item_id_path_count=24
+expected_item_id_path_hits=0
+unique_manifest_checksums=3
+unique_manifest_checksums_found_among_actual_file_sha256=3
+actual_cache_filename_sanitization=relative path under files/creative-cache; no credentials or pairing fields included
