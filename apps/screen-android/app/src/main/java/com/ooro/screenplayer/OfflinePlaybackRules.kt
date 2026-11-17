@@ -7,6 +7,7 @@ import com.ooro.screenplayer.model.CreativeType
 import com.ooro.screenplayer.model.DisplayLayout
 import java.time.Duration
 import java.time.Instant
+import java.time.ZoneId
 
 internal const val MANIFEST_REFRESH_LEAD_MILLIS = 120_000L
 internal const val NETWORK_RECOVERY_THROTTLE_MILLIS = 30_000L
@@ -27,6 +28,20 @@ internal fun syncRetryDelayMillis(attempt: Int, jitterMillis: Long): Long {
 /** A cached manifest is usable only inside the server-issued authorization window. */
 internal fun manifestIsAuthorizedAt(manifest: DeviceManifest, now: Instant): Boolean =
     manifest.validUntil?.isAfter(now) == true
+
+/** Recheck soon after the next schedule boundary, with a bounded poll for wall-clock corrections. */
+internal fun scheduleReevaluationDelayMillis(
+    manifest: DeviceManifest?,
+    now: Instant,
+    fallbackPollMillis: Long = 60_000L,
+): Long {
+    val poll = fallbackPollMillis.coerceAtLeast(1L)
+    if (manifest == null) return poll
+    val zone = runCatching { ZoneId.of(manifest.timezone) }.getOrNull() ?: return poll
+    val nextBoundary = manifest.items.asSequence().mapNotNull { nextScheduleBoundary(it, now, zone) }.minOrNull() ?: return poll
+    val untilBoundary = Duration.between(now, nextBoundary).toMillis().coerceAtLeast(1L)
+    return minOf(untilBoundary, poll)
+}
 
 /** Refresh before the server lease ends; this never extends the authorization window. */
 internal fun manifestRefreshDelayMillis(

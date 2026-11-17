@@ -143,6 +143,32 @@ class OfflinePersistenceIntegrationTest {
         assertFalse(canCommitManifestResponse(persisted, requiredCount = 1, verifiedCount = 1, now = tenHoursLater))
     }
 
+    @Test fun coldStartReevaluatesPersistedCampaignWhenAndroidCorrectsClock() = runBlocking {
+        val correctedTime = Instant.parse("2026-11-17T16:00:00Z")
+        val staleClock = correctedTime.minusSeconds(459L * 24 * 60 * 60)
+        val item = ManifestItem(
+            "clock-corrected-campaign", "campaign", "creative", CreativeType.IMAGE,
+            "file://verified-cache", "a".repeat(64), 10, 1,
+            correctedTime.minusSeconds(60), correctedTime.plusSeconds(3_600), emptySet(), null, null,
+        )
+        val cached = DeviceManifest(12, credentials.screenId, "UTC", listOf(item), correctedTime.minusSeconds(30))
+        val first = open()
+        first.manifestDao().put(ManifestEntity(version = cached.version, timezone = cached.timezone, validUntil = cached.validUntil.toString(), json = ManifestCodec.encode(cached)))
+        first.close(); db = null
+        val reopened = open()
+        val restored = ManifestCodec.parse(reopened.manifestDao().active()!!.json)
+        val proofsBefore = reopened.proofDao().pendingCount()
+        assertEquals(CachedStartupBlock.NO_ELIGIBLE_VERIFIED_ASSET,
+            resolveCachedStartup(restored, credentials.screenId, setOf(item.id), ScheduleEngine(), staleClock, allowExpiredForOfflinePlayback = true).block)
+        val afterClockCorrection = resolveCachedStartup(
+            restored, credentials.screenId, setOf(item.id), ScheduleEngine(), correctedTime,
+            allowExpiredForOfflinePlayback = true,
+        )
+        assertEquals(CachedStartupBlock.NONE, afterClockCorrection.block)
+        assertEquals(item.id, afterClockCorrection.firstItem?.id)
+        assertEquals("schedule reevaluation must not fabricate proof", proofsBefore, reopened.proofDao().pendingCount())
+    }
+
     @Test fun legitimateEmptyManifestReplacesPreviouslyPlayableManifest() = runBlocking {
         val database = open()
         val item = ManifestItem("old", "campaign", "creative", CreativeType.IMAGE, "file://old", "a".repeat(64), 10, 1, null, null, emptySet(), null, null)

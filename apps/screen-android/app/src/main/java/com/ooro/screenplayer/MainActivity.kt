@@ -9,6 +9,8 @@ import android.graphics.Bitmap
 import android.util.LruCache
 import android.os.SystemClock
 import android.content.Intent
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
 import android.net.Uri
 import android.provider.Settings
 import android.view.WindowManager
@@ -111,6 +113,7 @@ class MainActivity : ComponentActivity() {
     private val locationPermissionRequestGate = LocationPermissionRequestGate()
     private lateinit var permissionHistory: LocationPermissionHistory
     private lateinit var presentationPreferenceStore: PresentationPreferenceStore
+    private var clockChangeReceiver: BroadcastReceiver? = null
     private var presentationPreference by mutableStateOf(PresentationPreference.AUTO_FROM_MANIFEST)
     private val locationPermission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         locationPermissionRequestGate.complete()
@@ -123,6 +126,16 @@ class MainActivity : ComponentActivity() {
     }
     override fun onCreate(state: android.os.Bundle?) {
         super.onCreate(state)
+        val clockFilter = IntentFilter().apply {
+            addAction(Intent.ACTION_TIME_CHANGED)
+            addAction(Intent.ACTION_TIMEZONE_CHANGED)
+            addAction(Intent.ACTION_DATE_CHANGED)
+        }
+        clockChangeReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context?, intent: Intent?) {
+                vm.onDeviceClockChanged(intent?.action)
+            }
+        }.also { androidx.core.content.ContextCompat.registerReceiver(this, it, clockFilter, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED) }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         enterFullscreen()
         OoroDeviceAdminReceiver.initialize(this, this)
@@ -151,6 +164,11 @@ class MainActivity : ComponentActivity() {
                 vm.refreshLocationPermission()
             }
         }
+    }
+    override fun onDestroy() {
+        clockChangeReceiver?.let { receiver -> runCatching { unregisterReceiver(receiver) } }
+        clockChangeReceiver = null
+        super.onDestroy()
     }
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -322,10 +340,12 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     val cachedPlaybackAllowed by cachedPlaybackFlow.collectAsState(initial = false)
     val pairedScreenIdFlow = vm?.pairedScreenId ?: remember(preview, manifest.screenId) { flowOf(manifest.screenId.takeIf { preview != null }) }
     val pairedScreenId by pairedScreenIdFlow.collectAsState(initial = manifest.screenId.takeIf { preview != null })
-    var manifestExpired by remember(manifest.version, manifest.validUntil) {
-        mutableStateOf(!cachedPlaybackAllowed && !manifestIsAuthorizedAt(manifest, Instant.now()))
+    val scheduleClockFlow = vm?.scheduleClock ?: remember { flowOf(Instant.now()) }
+    val scheduleClock by scheduleClockFlow.collectAsState(initial = Instant.now())
+    var manifestExpired by remember(manifest.version, manifest.validUntil, cachedPlaybackAllowed, scheduleClock) {
+        mutableStateOf(!cachedPlaybackAllowed && !manifestIsAuthorizedAt(manifest, scheduleClock))
     }
-    LaunchedEffect(manifest.version, manifest.validUntil, cachedPlaybackAllowed) {
+    LaunchedEffect(manifest.version, manifest.validUntil, cachedPlaybackAllowed, scheduleClock) {
         if (cachedPlaybackAllowed) {
             manifestExpired = false
             return@LaunchedEffect
@@ -334,18 +354,18 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
         if (expiresAt == null) {
             manifestExpired = true
         } else {
-            val remainingMs = Duration.between(Instant.now(), expiresAt).toMillis()
-            if (remainingMs <= 0) manifestExpired = true
-            else { kotlinx.coroutines.delay(remainingMs); manifestExpired = true }
+            manifestExpired = !expiresAt.isAfter(scheduleClock)
+            val remainingMs = Duration.between(scheduleClock, expiresAt).toMillis()
+            if (remainingMs > 0) { kotlinx.coroutines.delay(remainingMs); manifestExpired = true }
         }
     }
-    val scheduledItem = remember(manifest, playbackOffset, verifiedAssetIds, manifestExpired, cachedPlaybackAllowed, vm) {
-        if (manifestExpired) null else vm?.currentItem(manifest, playbackOffset, verifiedAssetIds, allowCachedOffline = cachedPlaybackAllowed)
+    val scheduledItem = remember(manifest, playbackOffset, verifiedAssetIds, manifestExpired, cachedPlaybackAllowed, scheduleClock, vm) {
+        if (manifestExpired) null else vm?.currentItem(manifest, playbackOffset, verifiedAssetIds, allowCachedOffline = cachedPlaybackAllowed, now = scheduleClock)
     }
     val sponsorCandidate = manifest.sponsoredItem?.takeIf { !manifestExpired && it.id in verifiedAssetIds && it.type == CreativeType.IMAGE }
-    var sponsorClock by remember(manifest.version) { mutableStateOf(Instant.now()) }
-    LaunchedEffect(sponsorCandidate?.id, sponsorCandidate?.startAt, sponsorCandidate?.endAt, sponsorCandidate?.daysOfWeek, sponsorCandidate?.startTime, sponsorCandidate?.endTime, manifest.timezone) {
-        sponsorClock = Instant.now()
+    var sponsorClock by remember(manifest.version) { mutableStateOf(scheduleClock) }
+    LaunchedEffect(sponsorCandidate?.id, sponsorCandidate?.startAt, sponsorCandidate?.endAt, sponsorCandidate?.daysOfWeek, sponsorCandidate?.startTime, sponsorCandidate?.endTime, manifest.timezone, scheduleClock) {
+        sponsorClock = scheduleClock
         val item = sponsorCandidate ?: return@LaunchedEffect
         val zone = runCatching { ZoneId.of(manifest.timezone) }.getOrDefault(ZoneId.of(BuildConfig.DEFAULT_TIMEZONE))
         while (true) {
@@ -366,7 +386,7 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     val emptyPlaybackMessage = if (manifestExpired) {
         "Offline ads paused\nAuthorization expired. Reconnect to refresh approved content."
     } else {
-        offlineEmptyMessage(manifest, Instant.now(), verifiedAssetIds, allowExpiredCachedManifest = cachedPlaybackAllowed)
+        offlineEmptyMessage(manifest, scheduleClock, verifiedAssetIds, allowExpiredCachedManifest = cachedPlaybackAllowed)
     }
     val displayedOffer = if (preview != null) item else if (manifestExpired) null else presentationItem ?: item
     val customLayoutParseResult = remember(manifest.layoutStudioContract) {
@@ -385,7 +405,7 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     } else Modifier.fillMaxSize().background(Color.Black).clipToBounds()
     Box(rootModifier) {
         if (customLayout != null) {
-            CustomLayoutPlayer(vm, manifest, customLayout, item, playbackOffset, verifiedAssetIds, pairedScreenId, preview, manifestExpired, cachedPlaybackAllowed)
+            CustomLayoutPlayer(vm, manifest, customLayout, item, playbackOffset, verifiedAssetIds, pairedScreenId, preview, manifestExpired, cachedPlaybackAllowed, scheduleClock)
         } else if (manifest.layout == DisplayLayout.FOUR_ZONE || manifest.layout == DisplayLayout.AD_NAV_OFFER) Row(Modifier.fillMaxSize().clipToBounds()) {
             val adWidth = if (usesSidebar80(manifest.layout, geometryVersion)) 80 else manifest.layoutConfig.safePrimaryWidth
             val sidebarSplit = if (usesSidebar80(manifest.layout, geometryVersion)) 50 else manifest.layoutConfig.safeQrHeight
@@ -423,12 +443,13 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     preview: PlayerPreviewConfig?,
     manifestExpired: Boolean,
     cachedPlaybackAllowed: Boolean,
+    scheduleClock: Instant,
 ) {
     LayoutStudioRenderer(contract, Modifier.fillMaxSize().background(Color.Black).clipToBounds()) { zone ->
-        val resolved = remember(zone, manifest.version, manifest.validUntil, manifestExpired, pairedScreenId, verifiedAssetIds, currentMainItem?.id) {
-            resolveCustomWidgetContent(zone, manifest, pairedScreenId, verifiedAssetIds, currentMainItem, Instant.now(), authorizationExpired = manifestExpired, allowCachedOffline = cachedPlaybackAllowed)
+        val resolved = remember(zone, manifest.version, manifest.validUntil, manifestExpired, pairedScreenId, verifiedAssetIds, currentMainItem?.id, scheduleClock) {
+            resolveCustomWidgetContent(zone, manifest, pairedScreenId, verifiedAssetIds, currentMainItem, scheduleClock, authorizationExpired = manifestExpired, allowCachedOffline = cachedPlaybackAllowed)
         }
-        val emptyMessage = if (manifestExpired) "Offline ads paused\nAuthorization expired. Reconnect to refresh approved content." else offlineEmptyMessage(manifest, Instant.now(), verifiedAssetIds, allowExpiredCachedManifest = cachedPlaybackAllowed)
+        val emptyMessage = if (manifestExpired) "Offline ads paused\nAuthorization expired. Reconnect to refresh approved content." else offlineEmptyMessage(manifest, scheduleClock, verifiedAssetIds, allowExpiredCachedManifest = cachedPlaybackAllowed)
         CustomLayoutZoneContent(vm, zone, resolved, playbackKey, preview, emptyMessage)
     }
 }
