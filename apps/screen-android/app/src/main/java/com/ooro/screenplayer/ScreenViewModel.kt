@@ -11,6 +11,7 @@ import com.ooro.screenplayer.player.AssetManager
 import com.ooro.screenplayer.player.ScheduleEngine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -80,6 +81,8 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
     val cachedPlaybackAllowed: StateFlow<Boolean> = _cachedPlaybackAllowed
     private val _playbackOffset = MutableStateFlow(0)
     val playbackOffset: StateFlow<Int> = _playbackOffset
+    private val _scheduleClock = MutableStateFlow(Instant.now())
+    val scheduleClock: StateFlow<Instant> = _scheduleClock.asStateFlow()
     private val _verifiedAssetIds = MutableStateFlow<Set<String>>(emptySet())
     val verifiedAssetIds: StateFlow<Set<String>> = _verifiedAssetIds
     private var reconnectJob: Job? = null
@@ -168,6 +171,22 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
                 }
             }
         }
+        // Network time can correct the device clock after a cold start. Re-evaluate
+        // even when startup found no eligible campaign, then keep checking at bounded
+        // intervals so schedule eligibility cannot remain stale.
+        viewModelScope.launch {
+            cachedStartupReady.await()
+            while (true) {
+                val now = Instant.now()
+                val manifest = active
+                val delayMillis = scheduleReevaluationDelayMillis(
+                    manifest?.copy(items = manifest.items + listOfNotNull(manifest.sponsoredItem)),
+                    now,
+                )
+                delay(delayMillis)
+                refreshScheduleEligibility("timer")
+            }
+        }
         viewModelScope.launch {
             try {
                 val stored = db.manifestDao().active()
@@ -215,8 +234,23 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
     fun reconnect() { if (_reconnecting.value) return; _reconnecting.value = true; val current = (_state.value as? ScreenState.AuthRecovery); if (current != null) _state.value = current.copy(reconnecting = true); viewModelScope.launch { try { sync() } finally { _reconnecting.value = false } } }
     fun beginRepair() { repairMode = true; _state.value = ScreenState.Setup("Enter a new pairing code. This keeps the existing screen identity and history.", true) }
     fun onActivityResumed(commandId: String?) {
+        refreshScheduleEligibility("activity_resumed")
         if (commandId.isNullOrBlank()) return
         viewModelScope.launch { runCatching { CommandProcessor(context, api, store).confirmRestartResumed(commandId) } }
+    }
+    fun onDeviceClockChanged(action: String?) {
+        val source = when (action) {
+            android.content.Intent.ACTION_TIME_CHANGED -> "time_changed"
+            android.content.Intent.ACTION_TIMEZONE_CHANGED -> "timezone_changed"
+            android.content.Intent.ACTION_DATE_CHANGED -> "date_changed"
+            else -> "system_clock_event"
+        }
+        refreshScheduleEligibility(source)
+    }
+    private fun refreshScheduleEligibility(source: String) {
+        val now = Instant.now()
+        _scheduleClock.value = now
+        Log.i("OoroScreen", "schedule eligibility reevaluated source=$source epochMs=${now.toEpochMilli()}")
     }
     fun sync() { viewModelScope.launch { cachedStartupReady.await(); syncMutex.withLock { syncInternal() } } }
     private fun hasValidatedInternet(): Boolean = runCatching {
@@ -333,8 +367,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
         DeviceFailureKind.REQUEST_FAILED -> "We couldn't connect this screen to OORO. Please try again."
     }
 
-    fun currentItem(manifest: DeviceManifest, offset: Int = _playbackOffset.value, verifiedIds: Set<String> = _verifiedAssetIds.value, allowCachedOffline: Boolean = _cachedPlaybackAllowed.value): ManifestItem? {
-        val now = Instant.now()
+    fun currentItem(manifest: DeviceManifest, offset: Int = _playbackOffset.value, verifiedIds: Set<String> = _verifiedAssetIds.value, allowCachedOffline: Boolean = _cachedPlaybackAllowed.value, now: Instant = _scheduleClock.value): ManifestItem? {
         if (!allowCachedOffline && !manifestIsAuthorizedAt(manifest, now)) return null
         val current = manifest.items.find { it.id == session?.itemId && it.id in verifiedIds && it.isActive(now, java.time.ZoneId.of(manifest.timezone)) }
         val emergency = manifest.items.any { it.priority >= 1000 && it.isActive(now, java.time.ZoneId.of(manifest.timezone)) }
