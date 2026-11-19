@@ -100,9 +100,7 @@ import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.Style
 import kotlinx.coroutines.flow.flowOf
-import java.time.Duration
 import java.time.Instant
-import java.time.ZoneId
 import java.io.File
 
 class MainActivity : ComponentActivity() {
@@ -338,50 +336,23 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     val verifiedAssetIds by verifiedAssetFlow.collectAsState(initial = previewVerifiedIds)
     val cachedPlaybackFlow = vm?.cachedPlaybackAllowed ?: remember { flowOf(false) }
     val cachedPlaybackAllowed by cachedPlaybackFlow.collectAsState(initial = false)
+    val authorizationFlow = vm?.authorizationValid ?: remember { flowOf(preview != null) }
+    val authorizationValid by authorizationFlow.collectAsState(initial = preview != null)
     val pairedScreenIdFlow = vm?.pairedScreenId ?: remember(preview, manifest.screenId) { flowOf(manifest.screenId.takeIf { preview != null }) }
     val pairedScreenId by pairedScreenIdFlow.collectAsState(initial = manifest.screenId.takeIf { preview != null })
     val scheduleClockFlow = vm?.scheduleClock ?: remember { flowOf(Instant.now()) }
     val scheduleClock by scheduleClockFlow.collectAsState(initial = Instant.now())
-    var manifestExpired by remember(manifest.version, manifest.validUntil, cachedPlaybackAllowed, scheduleClock) {
-        mutableStateOf(!cachedPlaybackAllowed && !manifestIsAuthorizedAt(manifest, scheduleClock))
+    val manifestExpired = preview == null && !authorizationValid
+    val scheduledItem = remember(manifest, playbackOffset, verifiedAssetIds, cachedPlaybackAllowed, scheduleClock, vm) {
+        vm?.currentItem(manifest, playbackOffset, verifiedAssetIds, allowCachedOffline = cachedPlaybackAllowed, now = scheduleClock)
     }
-    LaunchedEffect(manifest.version, manifest.validUntil, cachedPlaybackAllowed, scheduleClock) {
-        if (cachedPlaybackAllowed) {
-            manifestExpired = false
-            return@LaunchedEffect
-        }
-        val expiresAt = manifest.validUntil
-        if (expiresAt == null) {
-            manifestExpired = true
-        } else {
-            manifestExpired = !expiresAt.isAfter(scheduleClock)
-            val remainingMs = Duration.between(scheduleClock, expiresAt).toMillis()
-            if (remainingMs > 0) { kotlinx.coroutines.delay(remainingMs); manifestExpired = true }
-        }
-    }
-    val scheduledItem = remember(manifest, playbackOffset, verifiedAssetIds, manifestExpired, cachedPlaybackAllowed, scheduleClock, vm) {
-        if (manifestExpired) null else vm?.currentItem(manifest, playbackOffset, verifiedAssetIds, allowCachedOffline = cachedPlaybackAllowed, now = scheduleClock)
-    }
-    val sponsorCandidate = manifest.sponsoredItem?.takeIf { !manifestExpired && it.id in verifiedAssetIds && it.type == CreativeType.IMAGE }
-    var sponsorClock by remember(manifest.version) { mutableStateOf(scheduleClock) }
-    LaunchedEffect(sponsorCandidate?.id, sponsorCandidate?.startAt, sponsorCandidate?.endAt, sponsorCandidate?.daysOfWeek, sponsorCandidate?.startTime, sponsorCandidate?.endTime, manifest.timezone, scheduleClock) {
-        sponsorClock = scheduleClock
-        val item = sponsorCandidate ?: return@LaunchedEffect
-        val zone = runCatching { ZoneId.of(manifest.timezone) }.getOrDefault(ZoneId.of(BuildConfig.DEFAULT_TIMEZONE))
-        while (true) {
-            val boundary = nextScheduleBoundary(item, sponsorClock, zone) ?: return@LaunchedEffect
-            kotlinx.coroutines.delay(Duration.between(sponsorClock, boundary).toMillis().coerceAtLeast(1L))
-            sponsorClock = Instant.now()
-        }
-    }
-    val sponsoredItem = remember(sponsorCandidate, sponsorClock, verifiedAssetIds, manifest.layoutContractVersion, manifest.validUntil) { eligibleSponsoredItem(manifest, sponsorClock, verifiedAssetIds) }
-    // The local setting affects presentation geometry only. Main ads may continue from a
-    // previously accepted offline cache within their campaign schedules; the separate V3
-    // sponsor lane still requires its active manifest authorization lease.
+    val sponsorCandidate = manifest.sponsoredItem?.takeIf { it.id in verifiedAssetIds && it.type == CreativeType.IMAGE }
+    val sponsoredItem = remember(sponsorCandidate, verifiedAssetIds, manifest.layoutContractVersion) { eligibleSponsoredItem(manifest, scheduleClock, verifiedAssetIds) }
+    // The local setting affects presentation geometry only. Accepted manifest state and
+    // explicit per-display quota authorize cached delivery; timestamps are audit metadata.
     val geometryVersion = geometryContractVersion(manifest.layoutContractVersion, manifest.layout, presentationPreference)
     val item = preview?.let { state ->
-        val zone = runCatching { ZoneId.of(manifest.timezone) }.getOrDefault(ZoneId.of(BuildConfig.DEFAULT_TIMEZONE))
-        manifest.items.firstOrNull { it.id == state.itemId && it.isActive(Instant.now(), zone) }
+        manifest.items.firstOrNull { it.id == state.itemId }
     } ?: scheduledItem
     val emptyPlaybackMessage = if (manifestExpired) {
         "Offline ads paused\nAuthorization expired. Reconnect to refresh approved content."
@@ -525,23 +496,6 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     }
 }
 
-internal fun nextScheduleBoundary(item: ManifestItem, now: Instant, zone: ZoneId): Instant? {
-    val candidates = buildList {
-        item.startAt?.takeIf { it.isAfter(now) }?.let(::add)
-        item.endAt?.takeIf { it.isAfter(now) }?.let(::add)
-        if (item.daysOfWeek.isNotEmpty() || item.startTime != null || item.endTime != null) {
-            val localDate = now.atZone(zone).toLocalDate()
-            for (offset in 0..8) {
-                val date = localDate.plusDays(offset.toLong())
-                if (item.daysOfWeek.isNotEmpty()) date.atStartOfDay(zone).toInstant().takeIf { it.isAfter(now) }?.let(::add)
-                item.startTime?.let { date.atTime(it).atZone(zone).toInstant().takeIf { instant -> instant.isAfter(now) }?.let(::add) }
-                item.endTime?.let { date.atTime(it).atZone(zone).toInstant().takeIf { instant -> instant.isAfter(now) }?.let(::add) }
-            }
-        }
-    }
-    return candidates.minOrNull()
-}
-
 @Composable private fun NewsTicker(news: NewsConfig, modifier: Modifier) {
     SideEffect { RuntimeDiagnostics.increment(RuntimeDiagnostics.Counter.TICKER_COMPOSITION) }
     val announcements = remember(news.announcements) { news.announcements.sortedWith(compareByDescending<NewsAnnouncement> { it.priority }.thenBy { it.id }) }
@@ -586,7 +540,7 @@ internal fun nextScheduleBoundary(item: ManifestItem, now: Instant, zone: ZoneId
     }
 }
 
-@Composable private fun PrimaryAdRegion(vm: ScreenViewModel?, modifier: Modifier, selectedItem: ManifestItem?, playbackKey: Int = 0, preview: PlayerPreviewConfig? = null, emptyMessage: String = "No ad is available right now\nCheck that an approved campaign is assigned and scheduled.", recordProof: Boolean = true, fitModeOverride: FitMode? = null) {
+@Composable private fun PrimaryAdRegion(vm: ScreenViewModel?, modifier: Modifier, selectedItem: ManifestItem?, playbackKey: Int = 0, preview: PlayerPreviewConfig? = null, emptyMessage: String = "No authorized campaign delivery is available\nCheck approval, campaign state, screen assignment, quota and verified assets.", recordProof: Boolean = true, fitModeOverride: FitMode? = null) {
     SideEffect { RuntimeDiagnostics.increment(RuntimeDiagnostics.Counter.AD_COMPOSITION) }
     val item = selectedItem
     val fitMode = fitModeOverride ?: item?.fitMode ?: FitMode.FIT
@@ -1245,7 +1199,7 @@ internal fun technicianStateSubscriptions(section: TechnicianSection): Technicia
         }
         when (section) {
             TechnicianSection.OVERVIEW -> {
-                val offlineAuthorized = manifest?.let { manifestIsAuthorizedAt(it, java.time.Instant.now()) } == true
+                val offlineAuthorized = vm.isOfflineAuthorizationValid()
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     TechnicianMetric("PAIRING", if (vm.isPaired) "Connected" else "Setup needed", vm.screenId, vm.isPaired, Modifier.weight(1f))
                     TechnicianMetric("NETWORK", if (network.internet) network.type else "Offline", network.ip ?: "No local address", network.internet, Modifier.weight(1f))
@@ -1291,7 +1245,7 @@ internal fun technicianStateSubscriptions(section: TechnicianSection): Technicia
                         Text("SLOT STATUS", color = Yellow, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(10.dp))
                         TechnicianLine("Main ad", if (currentCreative != null) "Active" else if (diagnostics.verifiedAssets > 0) "Cached" else "Waiting")
-                        TechnicianLine("Sponsored slot", when { manifest?.sponsoredItem == null -> "Neutral fallback"; manifest.sponsoredItem.endAt?.isBefore(java.time.Instant.now()) == true -> "Expired"; else -> "Manifest assigned" })
+                        TechnicianLine("Sponsored slot", when { manifest?.sponsoredItem == null -> "Neutral fallback"; else -> "Manifest assigned" })
                         TechnicianLine("Cached playlist", "${diagnostics.verifiedAssets} verified assets")
                         TechnicianLine("Last manifest sync", relativeTime(diagnostics.manifestLastSyncAt))
                         TechnicianLine("Authorization rule", "Playback stops at expiry")
@@ -1320,7 +1274,7 @@ internal fun technicianStateSubscriptions(section: TechnicianSection): Technicia
                             else OutlinedButton(onClick = { onPresentationPreferenceChanged(PresentationPreference.OORO_V3_PRESENTATION) }, modifier = Modifier.heightIn(min = 48.dp)) { Text("OORO V3") }
                         }
                         Spacer(Modifier.height(8.dp))
-                        Text("This device-local choice changes presentation geometry only. The server still controls creative selection, schedule, approval, expiry and proof attribution.", color = Color(0xFFB6C0CA), fontSize = 13.sp)
+                        Text("This device-local choice changes presentation geometry only. The server controls creative authorization, campaign state, quota and proof attribution.", color = Color(0xFFB6C0CA), fontSize = 13.sp)
                     }
                 }
                 TechnicianCard {

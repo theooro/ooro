@@ -1,8 +1,8 @@
 const steps = [
-  ["01", "Shape the campaign", "Choose Bengaluru areas, dates and budget. Explore the options in OORO’s campaign planner."],
-  ["02", "Share your creative", "Upload an image or video for review before a campaign is scheduled."],
+  ["01", "Shape the campaign", "Choose Bengaluru areas and budget. Explore the options in OORO’s campaign planner."],
+  ["02", "Share your creative", "Upload an image or video for review before delivery can be approved."],
   ["03", "Confirm the details", "OORO checks eligible inventory and confirms the campaign details before booking."],
-  ["04", "Review what played", "Where supported, review proof-of-play for scheduled creative delivery."],
+  ["04", "Review what played", "Where supported, review proof-of-play for authorized creative delivery."],
 ] as const;
 
 export function CampaignPlanning() {

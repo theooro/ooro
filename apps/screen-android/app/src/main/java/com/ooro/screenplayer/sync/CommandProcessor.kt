@@ -2,7 +2,10 @@ package com.ooro.screenplayer.sync
 
 import android.content.Context
 import android.content.Intent
+import android.os.SystemClock
+import android.provider.Settings
 import android.util.Log
+import androidx.room.withTransaction
 import com.ooro.screenplayer.ManifestRefreshBus
 import com.ooro.screenplayer.recordManifestSync
 import com.ooro.screenplayer.api.CommandResult
@@ -214,14 +217,25 @@ class CommandProcessor(private val context: Context, private val api: DeviceApi,
         val db = OoroDatabase.get(context)
         val assets = AssetManager(context)
         val manifest = api.manifest(credentials)
-        val receivedAt = Instant.now()
+        val receivedElapsed = SystemClock.elapsedRealtime()
+        val bootCount = runCatching { Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT) }.getOrNull()
         check(manifest.screenId == credentials.screenId) { "manifest is assigned to a different screen" }
-        check(com.ooro.screenplayer.manifestIsAuthorizedAt(manifest, receivedAt)) { "manifest authorization is missing or expired" }
+        val authorization = com.ooro.screenplayer.issueOfflineAuthorization(credentials.screenId, manifest.generatedAt, manifest.validUntil, manifest.authenticatedServerTime, receivedElapsed, bootCount)
+            ?: error("authenticated offline authorization lease is missing, expired, or invalid")
+        val previousServerTime = db.manifestDao().active()?.authorizationServerTimeUtcMillis
+        check(com.ooro.screenplayer.serverTimeDoesNotRollback(previousServerTime, authorization.serverTimeUtcMillis)) { "authenticated server time moved backwards; previous authorization retained" }
         val required = manifest.items.filter { it.url.isNotBlank() }
         val cached = required.mapNotNull { assets.ensure(it) }
         manifest.sponsoredItem?.let { sponsor -> runCatching { assets.ensure(sponsor) } }
-        check(com.ooro.screenplayer.canCommitManifestResponse(manifest, required.size, cached.size, Instant.now())) { "manifest is expired or required assets are unavailable" }
-        db.manifestDao().put(ManifestEntity(version = manifest.version, timezone = manifest.timezone, validUntil = manifest.validUntil?.toString(), json = com.ooro.screenplayer.api.ManifestCodec.encode(manifest)))
+        check(com.ooro.screenplayer.canCommitDownloadedManifest(required.size, cached.size)) { "required assets are unavailable" }
+        check(com.ooro.screenplayer.offlineAuthorizationRemainingMillis(authorization, credentials.screenId, SystemClock.elapsedRealtime(), runCatching { Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT) }.getOrNull()) > 0L) { "manifest authorization expired while assets were prepared" }
+        db.withTransaction {
+            (manifest.items + listOfNotNull(manifest.sponsoredItem)).mapNotNull { it.deliveryQuota }.distinctBy { it.id }.forEach { quota ->
+                val campaignId = manifest.items.firstOrNull { it.deliveryQuota?.id == quota.id }?.campaignId ?: manifest.sponsoredItem?.takeIf { it.deliveryQuota?.id == quota.id }?.campaignId.orEmpty()
+                db.deliveryQuotaDao().mergeIncoming(com.ooro.screenplayer.data.DeliveryQuotaEntity(quota.id, campaignId, quota.revision, quota.remainingPlays, quota.unlimited))
+            }
+            db.manifestDao().put(ManifestEntity(version = manifest.version, timezone = manifest.timezone, validUntil = manifest.validUntil?.toString(), json = com.ooro.screenplayer.api.ManifestCodec.encode(manifest), authorizationReceivedElapsedMillis = authorization.receivedElapsedMillis, authorizationBootCount = authorization.bootCount, authorizationDurationMillis = authorization.durationMillis, authorizationScreenId = authorization.screenId, authorizationServerTimeUtcMillis = authorization.serverTimeUtcMillis))
+        }
         recordManifestSync(context)
         ManifestRefreshBus.request()
     }

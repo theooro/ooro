@@ -2,10 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { PageHeader, PrimaryButton } from "./app-ui";
-import { PLANNING_AUTO_DAY_RATE_RUPEES } from "@/lib/campaign-policy";
 
-type Draft = { name: string; start: string; end: string; autos: string; creativeId?: string; creativeName?: string; campaignId?: string };
-const initial: Draft = { name: "", start: "", end: "", autos: "1" };
+type Draft = { name: string; autos: string; creativeId?: string; creativeName?: string; campaignId?: string };
+const initial: Draft = { name: "", autos: "1" };
 
 export function BusinessCampaignFlow() {
   const [draft, setDraft] = useState<Draft>(initial);
@@ -14,26 +13,10 @@ export function BusinessCampaignFlow() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const requestedAutos = Number(draft.autos);
-  const campaignDays = draft.start && draft.end && draft.end >= draft.start
-    ? Math.floor((Date.UTC(Number(draft.end.slice(0, 4)), Number(draft.end.slice(5, 7)) - 1, Number(draft.end.slice(8, 10))) - Date.UTC(Number(draft.start.slice(0, 4)), Number(draft.start.slice(5, 7)) - 1, Number(draft.start.slice(8, 10)))) / 86400000) + 1
-    : 0;
-  const estimate = requestedAutos * campaignDays * PLANNING_AUTO_DAY_RATE_RUPEES;
-  const valid = Boolean(draft.name.trim() && draft.start && draft.end && draft.end >= draft.start && Number.isInteger(requestedAutos) && requestedAutos >= 1 && requestedAutos <= 500);
+  const valid = Boolean(draft.name.trim() && Number.isInteger(requestedAutos) && requestedAutos >= 1 && requestedAutos <= 500);
   const set = (key: keyof Draft, value: string) => setDraft(current => ({ ...current, [key]: value }));
 
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem("ooro.campaign-draft");
-      if (!raw) return;
-      const previous = JSON.parse(raw) as Record<string, unknown>;
-      setDraft(current => ({
-        ...current,
-        start: typeof previous.start === "string" ? previous.start : current.start,
-        end: typeof previous.end === "string" ? previous.end : current.end,
-      }));
-      window.localStorage.removeItem("ooro.campaign-draft");
-    } catch { /* An old or invalid local draft must not block a new brief. */ }
-  }, []);
+
 
   const persist = async () => {
     const payload = {
@@ -43,8 +26,6 @@ export function BusinessCampaignFlow() {
       audience: "Local customers",
       city: "Bengaluru",
       area: "Bengaluru",
-      startDate: draft.start,
-      endDate: draft.end,
       currency: "INR",
       campaignCenterLat: null,
       campaignCenterLng: null,
@@ -52,7 +33,7 @@ export function BusinessCampaignFlow() {
       metadata: {
         timezone: "Asia/Kolkata",
         target: { mode: "CITYWIDE", city: "Bengaluru" },
-        planningEstimate: { autos: requestedAutos, days: campaignDays, ratePerAutoPerDay: PLANNING_AUTO_DAY_RATE_RUPEES, amount: estimate, currency: "INR" },
+        planningEstimate: { requestedAutos },
       },
     };
     const response = await fetch(draft.campaignId ? `/api/campaigns/${draft.campaignId}` : "/api/campaigns", {
@@ -105,7 +86,7 @@ export function BusinessCampaignFlow() {
   }
 
   return <div className="space-y-8">
-    <PageHeader eyebrow="Business campaign" title="Create campaign" description="Share your Bengaluru campaign dates and creative. OORO will confirm eligible screens and commercial terms before delivery." />
+    <PageHeader eyebrow="Business campaign" title="Create campaign" description="Share your campaign brief and creative. OORO will confirm approval, coverage and commercial terms before delivery." />
     <div className="space-y-6 border bg-white p-5 sm:p-8">
       <label className="block text-sm">Campaign name<input value={draft.name} onChange={event => set("name", event.target.value)} className="mt-2 w-full rounded border px-3 py-3" /></label>
       <section className="rounded-lg border border-neutral-200 bg-[#fafaf8] p-4" aria-labelledby="campaign-creative-title">
@@ -114,7 +95,7 @@ export function BusinessCampaignFlow() {
         <label className="mt-3 block text-xs font-medium">Choose image or video<input type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" onChange={event => setSelectedFile(event.target.files?.[0] || null)} className="mt-2 block w-full rounded border px-3 py-3" /></label>
         <p className="mt-2 break-all text-xs text-neutral-600">{selectedFile ? `${selectedFile.name} · ${(selectedFile.size / 1048576).toFixed(1)} MB` : draft.creativeName ? `Uploaded: ${draft.creativeName}` : "No creative selected."}</p>
         {selectedFile && <button type="button" disabled={!valid || busy} onClick={() => void submitCreative()} className="mt-3 rounded-md bg-black px-4 py-2.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-40">{busy ? "Uploading…" : "Upload creative to campaign"}</button>}
-        {selectedFile && !valid && <p className="mt-2 text-xs text-amber-800">Add a campaign name and valid dates before uploading.</p>}
+        {selectedFile && !valid && <p className="mt-2 text-xs text-amber-800">Add a campaign name and requested screen count before uploading.</p>}
       </section>
       <div className="rounded-lg border border-neutral-200 bg-[#fafaf8] p-4">
         <p className="text-sm font-medium">Campaign coverage</p>
@@ -122,19 +103,15 @@ export function BusinessCampaignFlow() {
         <p className="mt-2 text-xs leading-5 text-neutral-500">Radius targeting is not available. OORO confirms participating autos and coverage during operational review.</p>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
-        <label className="text-sm">Start date<input type="date" value={draft.start} onChange={event => set("start", event.target.value)} className="mt-2 w-full rounded border px-3 py-3" /></label>
-        <label className="text-sm">End date<input type="date" value={draft.end} onChange={event => set("end", event.target.value)} className="mt-2 w-full rounded border px-3 py-3" /></label>
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2">
         <label className="text-sm">Requested autos<input type="number" min="1" max="500" step="1" value={draft.autos} onChange={event => set("autos", event.target.value)} className="mt-2 w-full rounded border px-3 py-3"/><span className="mt-1 block text-xs text-neutral-500">A planning request; final availability is confirmed by OORO.</span></label>
         <div className="rounded-lg border border-neutral-200 bg-[#fafaf8] px-4 py-3">
-          <p className="text-xs text-neutral-500">Indicative planning estimate</p>
-          <p className="mt-2 text-2xl font-medium">{campaignDays > 0 && valid ? `₹${estimate.toLocaleString("en-IN")}` : "Add dates and autos"}</p>
-          <p className="mt-1 text-xs text-neutral-500">₹{PLANNING_AUTO_DAY_RATE_RUPEES} × {requestedAutos || 0} autos × {campaignDays} days</p>
+          <p className="text-xs text-neutral-500">Commercial terms</p>
+          <p className="mt-2 text-2xl font-medium">To be confirmed by OORO</p>
+          <p className="mt-1 text-xs text-neutral-500">Final pricing and campaign delivery do not depend on dates or daily-hour windows.</p>
         </div>
       </div>
       <div className="rounded-lg border border-neutral-200 px-4 py-3 text-sm text-neutral-600">
-        Estimate only. This brief does not collect payment or guarantee vehicle availability or a booking. OORO confirms final inventory and commercial terms before launch.
+        This brief does not collect payment or activate delivery. OORO confirms required approval, funding, operational checks and per-screen delivery quota before launch.
       </div>
       {error && <p role="alert" className="border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
       {message && <p role="status" className="border border-amber-200 bg-amber-50 p-3 text-sm">{message}</p>}

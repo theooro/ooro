@@ -16,6 +16,42 @@ import java.security.MessageDigest
 
 data class ApkValidation(val packageName: String, val versionCode: Long, val certificateSha256: String)
 
+internal data class ApkArchiveMetadata(
+    val packageName: String,
+    val versionCode: Long,
+    val versionName: String,
+    val minSdk: Int,
+    val targetSdk: Int,
+    val certificateSha256: String,
+)
+
+/** Validate the server-approved release metadata before downloading or installing its artifact. */
+internal fun validateReleaseMetadata(release: Release, deviceSdk: Int, installedVersionCode: Long? = null) {
+    if (!release.packageName.matches(Regex("^[a-zA-Z][a-zA-Z0-9_]*(?:\\.[a-zA-Z0-9_]+)+$"))) error("RELEASE_PACKAGE_INVALID")
+    if (release.versionCode <= 0 || release.versionName.isBlank()) error("RELEASE_VERSION_INVALID")
+    if (release.minSdk <= 0 || release.targetSdk < release.minSdk) error("RELEASE_SDK_METADATA_INVALID")
+    if (!release.sha256.matches(Regex("^[0-9a-fA-F]{64}$"))) error("RELEASE_SHA256_INVALID")
+    if (!release.certificateSha256.matches(Regex("^[0-9a-fA-F]{64}$"))) error("RELEASE_CERTIFICATE_INVALID")
+    if (release.sizeBytes <= 0) error("RELEASE_SIZE_INVALID")
+    if (deviceSdk < release.minSdk) error("APK_MIN_SDK_UNSUPPORTED")
+    if (installedVersionCode != null && release.versionCode < installedVersionCode) error("APK_DOWNGRADE_BLOCKED")
+}
+
+/** Validate APK archive metadata against the approved record before the installer is invoked. */
+internal fun validateReleaseMetadata(
+    release: Release,
+    archive: ApkArchiveMetadata,
+    deviceSdk: Int,
+    installedVersionCode: Long? = null,
+) {
+    validateReleaseMetadata(release, deviceSdk, installedVersionCode)
+    if (archive.packageName != release.packageName) error("APK_PACKAGE_MISMATCH")
+    if (archive.versionCode != release.versionCode) error("APK_VERSION_MISMATCH")
+    if (archive.versionName != release.versionName) error("APK_VERSION_NAME_MISMATCH")
+    if (archive.minSdk != release.minSdk || archive.targetSdk != release.targetSdk || archive.targetSdk < archive.minSdk) error("APK_SDK_METADATA_MISMATCH")
+    if (!archive.certificateSha256.equals(release.certificateSha256, true)) error("APK_CERTIFICATE_MISMATCH")
+}
+
 internal fun validateReleaseArtifact(
     release: Release,
     packageName: String,
@@ -55,6 +91,7 @@ fun installedPackageCertificateSha256(context: Context, packageName: String): St
 }
 
 fun validateApk(context: Context, file: File, release: Release): ApkValidation {
+    validateReleaseMetadata(release, Build.VERSION.SDK_INT)
     if (!file.exists()) error("APK_SIZE_MISMATCH")
     val info = context.packageManager.getPackageArchiveInfo(file.absolutePath, if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES) ?: error("APK_PACKAGE_INVALID")
     val packageName = info.packageName ?: error("APK_PACKAGE_MISSING")
@@ -68,6 +105,7 @@ fun validateApk(context: Context, file: File, release: Release): ApkValidation {
         val signer = info.signingInfo?.apkContentsSigners?.firstOrNull() ?: error("APK_SIGNATURE_MISSING")
         val cert = MessageDigest.getInstance("SHA-256").digest(signer.toByteArray()).joinToString("") { "%02x".format(it) }
         validateReleaseArtifact(release, packageName, versionCode, sha256(file), cert, Build.VERSION.SDK_INT, file.length())
+        validateReleaseMetadata(release, archiveMetadata(info, packageName, versionCode, cert), Build.VERSION.SDK_INT, installedVersion)
         return ApkValidation(packageName, versionCode, cert)
     }
     @Suppress("DEPRECATION")
@@ -75,8 +113,12 @@ fun validateApk(context: Context, file: File, release: Release): ApkValidation {
     @Suppress("DEPRECATION")
     val cert = MessageDigest.getInstance("SHA-256").digest(signer.toByteArray()).joinToString("") { "%02x".format(it) }
     validateReleaseArtifact(release, packageName, versionCode, sha256(file), cert, Build.VERSION.SDK_INT, file.length())
+    validateReleaseMetadata(release, archiveMetadata(info, packageName, versionCode, cert), Build.VERSION.SDK_INT, installedVersion)
     return ApkValidation(packageName, versionCode, cert)
 }
+
+private fun archiveMetadata(info: android.content.pm.PackageInfo, packageName: String, versionCode: Long, certificateSha256: String): ApkArchiveMetadata =
+    ApkArchiveMetadata(packageName, versionCode, info.versionName ?: "", info.applicationInfo?.minSdkVersion ?: 0, info.applicationInfo?.targetSdkVersion ?: 0, certificateSha256)
 
 class ApkInstaller(private val context: Context, private val db: AgentDatabase) {
     fun install(targetId: String, file: File, release: Release): Int {

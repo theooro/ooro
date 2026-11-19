@@ -6,10 +6,7 @@ const valid = {
   status: "DRAFT",
   hasCreative: true,
   activeDisplayCount: 1,
-  startDate: "2099-09-09",
-  endDate: "2099-09-30",
   budget: 500,
-  today: new Date("2026-09-09T12:00:00.000Z"),
 }
 
 test("allows a valid campaign with pending display delivery", () => {
@@ -24,11 +21,15 @@ test("requires an active display assignment", () => {
   assert.equal(validateCampaignContinuation({ ...valid, activeDisplayCount: 0 }), "Assign at least one display before continuing setup")
 })
 
-test("rejects invalid schedule and budget", () => {
-  assert.equal(validateCampaignContinuation({ ...valid, startDate: "2020-09-09" }), "A scheduled campaign cannot start in the past")
+test("campaign continuation does not require delivery dates", () => {
+  assert.equal(validateCampaignContinuation(valid), null)
   assert.equal(validateCampaignContinuation({ ...valid, budget: 0 }), "Budget must be greater than zero")
 })
 
-test("makes an already scheduled retry idempotent", () => {
-  assert.equal(validateCampaignContinuation({ ...valid, status: "SCHEDULED", hasCreative: false, activeDisplayCount: 0 }), null)
+test("keeps legacy scheduled campaigns out until explicitly reviewed", () => {
+  assert.equal(validateCampaignContinuation({ ...valid, status: "SCHEDULED" }), "Legacy scheduled campaign needs an administrator review before state-based delivery")
+})
+
+test("makes an already active retry idempotent", () => {
+  assert.equal(validateCampaignContinuation({ ...valid, status: "ACTIVE", hasCreative: false, activeDisplayCount: 0 }), null)
 })

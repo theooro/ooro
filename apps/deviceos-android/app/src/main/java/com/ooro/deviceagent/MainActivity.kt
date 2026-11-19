@@ -8,6 +8,7 @@ import android.content.IntentFilter
 import android.os.Bundle
 import android.view.ViewGroup
 import android.widget.*
+import androidx.core.content.ContextCompat
 import com.ooro.deviceagent.data.SecureStore
 import com.ooro.deviceagent.install.InstallResultReceiver
 import com.ooro.deviceagent.network.DeviceOsApi
@@ -57,8 +58,7 @@ class MainActivity : Activity() {
     override fun onStart() {
         super.onStart()
         val filter = IntentFilter(InstallResultReceiver.PENDING_APPROVAL_ACTION)
-        if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(approvalReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        else @Suppress("DEPRECATION") registerReceiver(approvalReceiver, filter)
+        ContextCompat.registerReceiver(this, approvalReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
         launchPendingApproval()
     }
 

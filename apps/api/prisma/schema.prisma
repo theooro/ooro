@@ -429,6 +429,7 @@ model Display {
   chargingState             String?
   lastNetworkType           String?
   supportsSponsoredSlot     Boolean                     @default(false)
+  supportsDeliveryQuota     Boolean                     @default(false)
   createdAt                 DateTime                    @default(now())
   updatedAt                 DateTime                    @updatedAt
   pairingCodes              DisplayPairingCode[]
@@ -483,6 +484,8 @@ model Campaign {
   pricingSnapshot         Json?
   deliveryTier            String                      @default("STANDARD")
   commercialFundingStatus String                      @default("UNFUNDED")
+  offlinePlaysPerDisplay  Int?
+  unlimitedOfflineDelivery Boolean                    @default(false)
   createdAt               DateTime                    @default(now())
   updatedAt               DateTime                    @updatedAt
   creatives               Creative[]
@@ -683,6 +686,10 @@ model DisplayCampaignAssignment {
   displayId  String   @db.Uuid
   campaignId String   @db.Uuid
   active     Boolean  @default(true)
+  offlinePlaysAuthorized Int?
+  offlinePlaysConsumed Int @default(0)
+  unlimitedOfflineAuthorized Boolean @default(false)
+  offlineQuotaRevision Int @default(1)
   createdAt  DateTime @default(now())
   display    Display  @relation(fields: [displayId], references: [id], onDelete: Cascade)
   campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
@@ -690,6 +697,7 @@ model DisplayCampaignAssignment {
   @@unique([displayId, campaignId])
   @@index([displayId, active])
 }
+
 
 model GuestCampaignOrder {
   id                     String    @id @default(uuid()) @db.Uuid

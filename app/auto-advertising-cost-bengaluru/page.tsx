@@ -17,15 +17,15 @@ export default function Page() {
     sections={[
       {
         title: "What can vary between campaign options",
-        body: "A proposal may differ by requested campaign dates, available screen inventory, schedule, total budget, creative review or production needs, and the reporting that can be provided. Ask OORO to state each proposed placement, period, included work, exclusions, cancellation terms and evidence in writing. Three-month and longer commitments may receive a negotiated discount; it is not applied until confirmed in the proposal.",
+        body: "A proposal may differ by available screen inventory, total budget, creative review or production needs, and the reporting that can be provided. Ask OORO to state each proposed placement, included work, exclusions, cancellation terms and evidence in writing. Three-month and longer commitments may receive a negotiated discount; it is not applied until confirmed in the proposal.",
       },
       {
         title: "Define what the proposal includes",
-        body: "Ask the provider to name the placement format, dates, number or type of units included, creative production, taxes, minimum spend, cancellation terms and reporting definitions. Ask which costs are fixed and which depend on eligible inventory. A proposal is easier to compare when every provider prices the same dates, format and deliverables.\n\nFor OORO, the relevant format is a passenger-facing digital screen inside an eligible auto. OORO reviews availability and confirms the commercial terms for each request before booking.",
+        body: "Ask the provider to name the placement format, number or type of units included, creative production, taxes, minimum spend, cancellation terms and reporting definitions. Ask which costs are fixed and which depend on eligible inventory. A proposal is easier to compare when every provider prices the same format and deliverables.\n\nFor OORO, the relevant format is a passenger-facing digital screen inside an eligible auto. OORO reviews availability and confirms the commercial terms for each request before booking.",
       },
       {
         title: "Treat the OORO planner as a planning step",
-        body: "The self-serve planner accepts budget input from ₹500 and can display a model-based impression estimate. This planner input is separate from the auto-day rates listed above; it is not a quote, booking confirmation or guaranteed delivery.\n\nA campaign request is reviewed against preferred areas, dates, creative and eligible inventory. If the requested plan cannot be confirmed as submitted, clarify the alternatives and revised terms before committing.",
+        body: "The self-serve planner accepts budget input from ₹500 and can display a model-based impression estimate. This planner input is separate from the auto-day rates listed above; it is not a quote, booking confirmation or guaranteed delivery.\n\nA campaign request is reviewed against preferred areas, creative and eligible inventory. If the requested plan cannot be confirmed as submitted, clarify the alternatives and revised terms before committing.",
       },
       {
         title: "Set a test budget you can evaluate",
@@ -34,7 +34,7 @@ export default function Page() {
     ]}
     faqs={[
       { question: "What is the minimum OORO campaign term?", answer: "The minimum commitment is one month (30 days). Campaigns of three months or longer may qualify for a negotiated discount, confirmed in writing." },
-      { question: "What information should I send for a quote?", answer: "Share your objective, preferred areas, dates, total budget, creative format and any production needs. OORO checks eligible inventory and confirms the commercial terms for that specific request." },
+      { question: "What information should I send for a quote?", answer: "Share your objective, preferred areas, total budget, creative format and any production needs. OORO checks eligible inventory and confirms the commercial terms for that specific request." },
       { question: "Does the budget planner forecast impressions?", answer: "No. It only divides a budget across the chosen number of days. It does not estimate inventory, impressions, reach, leads or results." },
     ]}
   />;

@@ -7,12 +7,12 @@ const VERSION = "planned-delivery-v1";
 import { MIN_SELF_SERVE_BUDGET_RUPEES } from "./campaign-policy";
 const DEFAULT = { averageRidesPerDay: 12, averagePassengersPerRide: 2, fallbackActiveAutoFactor: 0.6, minimumSelfServeBudget: MIN_SELF_SERVE_BUDGET_RUPEES, forecastTtlMinutes: 15 };
 function distanceKm(aLat: number, aLng: number, bLat: number, bLng: number) { const radians = (value: number) => value * Math.PI / 180; const dLat = radians(bLat - aLat); const dLng = radians(bLng - aLng); const h = Math.sin(dLat / 2) ** 2 + Math.cos(radians(aLat)) * Math.cos(radians(bLat)) * Math.sin(dLng / 2) ** 2; return 6371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h)); }
-function dayCount(start: Date, end: Date) { return Math.max(1, Math.floor((Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate()) - Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate())) / 86400000) + 1); }
+export const SELF_SERVE_FORECAST_HORIZON_DAYS = 30;
 
-export async function createSelfServeForecast(input: { budget: number; startsAt: Date; endsAt: Date; latitude: number; longitude: number; radiusKm: number; deliveryTier: "STANDARD" | "PREMIUM_PLUS" }) {
+export async function createSelfServeForecast(input: { budget: number; latitude: number; longitude: number; radiusKm: number; deliveryTier: "STANDARD" | "PREMIUM_PLUS" }) {
   const setting = await webPrisma.forecastSetting.findUnique({ where: { key: "DEFAULT" } });
   const assumptions = setting ?? DEFAULT;
-  const days = dayCount(input.startsAt, input.endsAt);
+  const days = SELF_SERVE_FORECAST_HORIZON_DAYS;
   const serviceability = selfServeServiceability(input.latitude, input.longitude, input.radiusKm);
   const generatedAt = new Date();
   if (serviceability.availability === "UNSUPPORTED") return { estimatedImpressionsLow: 0, estimatedImpressionsHigh: 0, campaignDays: days, radiusKm: input.radiusKm, availability: "UNSUPPORTED" as SelfServeAvailability, confidence: "EARLY_ESTIMATE" as const, generatedAt, forecastExpiresAt: forecastExpiresAt(generatedAt, assumptions.forecastTtlMinutes), forecastVersion: `${VERSION}-${generatedAt.getTime()}` };
@@ -32,9 +32,9 @@ export async function createSelfServeForecast(input: { budget: number; startsAt:
   return { estimatedImpressionsLow: range.low, estimatedImpressionsHigh: range.high, campaignDays: days, radiusKm: input.radiusKm, availability: serviceability.availability, confidence, generatedAt, forecastExpiresAt: forecastExpiresAt(generatedAt, assumptions.forecastTtlMinutes), forecastVersion: `${VERSION}-${generatedAt.getTime()}`, estimatedActiveAutosLow: result.estimatedActiveAutosLow, estimatedActiveAutosHigh: result.estimatedActiveAutosHigh, estimatedAutoDays: result.estimatedAutoDays, inventoryAvailability: result.inventoryAvailability, confidenceLevel: result.confidenceLevel };
 }
 
-export async function revalidateSelfServeForecast(campaign: { budget?: number | null; startsAt: Date | null; endsAt: Date | null; campaignCenterLat: number | null; campaignCenterLng: number | null; radiusKm: number | null; deliveryTier: string }) {
-  const budget = Number(campaign.budget); if (!Number.isFinite(budget) || !campaign.startsAt || !campaign.endsAt || campaign.campaignCenterLat === null || campaign.campaignCenterLng === null || campaign.radiusKm === null) throw new Error("FORECAST_NOT_READY");
-  return createSelfServeForecast({ budget, startsAt: campaign.startsAt, endsAt: campaign.endsAt, latitude: campaign.campaignCenterLat, longitude: campaign.campaignCenterLng, radiusKm: campaign.radiusKm, deliveryTier: campaign.deliveryTier === "PREMIUM_PLUS" ? "PREMIUM_PLUS" : "STANDARD" });
+export async function revalidateSelfServeForecast(campaign: { budget?: number | null; campaignCenterLat: number | null; campaignCenterLng: number | null; radiusKm: number | null; deliveryTier: string }) {
+  const budget = Number(campaign.budget); if (!Number.isFinite(budget) || campaign.campaignCenterLat === null || campaign.campaignCenterLng === null || campaign.radiusKm === null) throw new Error("FORECAST_NOT_READY");
+  return createSelfServeForecast({ budget, latitude: campaign.campaignCenterLat, longitude: campaign.campaignCenterLng, radiusKm: campaign.radiusKm, deliveryTier: campaign.deliveryTier === "PREMIUM_PLUS" ? "PREMIUM_PLUS" : "STANDARD" });
 }
 
 export function materiallyChanged(previous: unknown, next: { estimatedImpressionsLow: number; estimatedImpressionsHigh: number }) { const value = previous && typeof previous === "object" && !Array.isArray(previous) ? previous as Record<string, unknown> : null; return forecastChangedMaterially(value && typeof value.estimatedImpressionsLow === "number" && typeof value.estimatedImpressionsHigh === "number" ? { low: value.estimatedImpressionsLow, high: value.estimatedImpressionsHigh } : null, { low: next.estimatedImpressionsLow, high: next.estimatedImpressionsHigh }); }

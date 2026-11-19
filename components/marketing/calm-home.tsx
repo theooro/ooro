@@ -8,7 +8,7 @@ import { FieldFilmButton } from "./field-film-button";
 import "./calm-home.css";
 
 const steps = [
-  { number: "01", title: "Tell us your plan", description: "Choose your preferred areas, campaign dates and budget." },
+  { number: "01", title: "Tell us your plan", description: "Choose your preferred areas, objective and budget." },
   { number: "02", title: "Share the creative", description: "Upload an image or video for our team's review." },
   { number: "03", title: "Confirm and go live", description: "We confirm available inventory and the campaign details before booking." },
 ] as const;

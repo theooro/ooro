@@ -1,13 +1,11 @@
 package com.ooro.screenplayer.layoutstudio
 
 import com.ooro.screenplayer.eligibleSponsoredItem
-import com.ooro.screenplayer.manifestIsAuthorizedAt
 import com.ooro.screenplayer.model.CreativeType
 import com.ooro.screenplayer.model.DeviceManifest
 import com.ooro.screenplayer.model.ManifestItem
 import com.ooro.screenplayer.player.ScheduleEngine
 import java.time.Instant
-import java.time.ZoneId
 
 /** A resolved, manifest-backed payload. This type carries no authority to create proof by itself. */
 sealed interface CustomWidgetContent {
@@ -22,7 +20,7 @@ sealed interface CustomWidgetContent {
 
 /**
  * Resolves Layout Studio references only through a screen-bound manifest accepted from the
- * device API. Offline main-creative fallback still obeys item schedules; this resolver never
+ * device API. Accepted campaign state and its explicit quota govern offline main-creative playback; this resolver never
  * fetches media, selects campaigns, extends a lease, or attributes a proof.
  */
 internal fun resolveCustomWidgetContent(
@@ -37,13 +35,12 @@ internal fun resolveCustomWidgetContent(
     allowCachedOffline: Boolean = false,
 ): CustomWidgetContent {
     if (pairedScreenId.isNullOrBlank() || manifest.screenId != pairedScreenId) return CustomWidgetContent.Fallback("screen-identity-mismatch")
-    if (authorizationExpired || (!allowCachedOffline && !manifestIsAuthorizedAt(manifest, now))) return CustomWidgetContent.Fallback("manifest-expired")
+    if (authorizationExpired) return CustomWidgetContent.Fallback("manifest-authorization-invalid")
     if (!zone.visible) return CustomWidgetContent.Fallback("hidden")
     val binding = zone.bindingKind
     val reference = zone.referenceId
-    val zoneId = runCatching { ZoneId.of(manifest.timezone) }.getOrDefault(ZoneId.of("UTC"))
     fun activeAndVerified(item: ManifestItem?) = item?.takeIf {
-        it.id in verifiedItemIds && it.isActive(now, zoneId)
+        it.id in verifiedItemIds && it.hasAuthorizedDeliveryQuota
     }
 
     return when (zone.type) {

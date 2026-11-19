@@ -2,34 +2,19 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from './prisma.js'
 import { requirePermission, response } from './http.js'
-import { ApiError } from './errors.js'
-import { saveSchedule } from './domain/schedule-service.js'
-import { scheduleInput } from './domain/scheduling.js'
 
 const safe = (data: unknown) => JSON.parse(JSON.stringify(data,(_,v)=>typeof v==='bigint'?v.toString():v))
 export function registerOperations(app: FastifyInstance) {
  app.get('/api/admin/scheduler', async (request,reply) => {
   await requirePermission(request,'operations:write')
-  const [schedules,campaigns,screens,groups,routes,depots,vehicles] = await Promise.all([
-   prisma.adSchedule.findMany({where:{status:{in:['PUBLISHED','PAUSED']}},include:{campaign:{select:{name:true,assignments:{where:{active:true},select:{displayId:true}}}}},orderBy:{updatedAt:'desc'},take:500}),
-   prisma.campaign.findMany({where:{status:{notIn:['ARCHIVED','COMPLETED','CANCELLED']}},select:{id:true,name:true,status:true,ownerEmail:true,startsAt:true,endsAt:true,metadata:true,creatives:{where:{status:{not:'ARCHIVED'}},include:{asset:true},orderBy:{displayOrder:'asc'}}},take:500}),
-   prisma.display.findMany({select:{id:true,name:true,state:true,vehicleId:true},take:1000}),prisma.screenGroup.findMany({include:{members:true}}),prisma.route.findMany(),prisma.depot.findMany(),prisma.vehicle.findMany({select:{id:true,registrationNumber:true,type:true,city:true,routeId:true,depotId:true}})
+  const [screens,groups,routes,depots,vehicles] = await Promise.all([
+   prisma.display.findMany({select:{id:true,name:true,state:true,vehicleId:true},take:1000}),
+   prisma.screenGroup.findMany({include:{members:true}}),prisma.route.findMany(),prisma.depot.findMany(),
+   prisma.vehicle.findMany({select:{id:true,registrationNumber:true,type:true,city:true,routeId:true,depotId:true}})
   ])
-  const campaignsWithStartTime=campaigns.map(campaign=>{const metadata=campaign.metadata&&typeof campaign.metadata==='object'&&!Array.isArray(campaign.metadata)?campaign.metadata as Record<string,unknown>:{};const adminSchedule=metadata.adminSchedule&&typeof metadata.adminSchedule==='object'&&!Array.isArray(metadata.adminSchedule)?metadata.adminSchedule as Record<string,unknown>:{};return {...campaign,creativeStartTime:typeof adminSchedule.startTime==='string'?adminSchedule.startTime:undefined}})
-  return reply.send(response(request,safe({schedules,campaigns:campaignsWithStartTime,screens,groups,routes,depots,vehicles})))
- })
- for (const action of ['check','publish']) app.post(`/api/admin/scheduler/${action}`,async(request,reply)=>{
-  const actor=await requirePermission(request,'campaign:schedule'); const parsed=scheduleInput.safeParse(request.body)
-  if(!parsed.success) {
-   const details=parsed.error.issues.map(issue=>{
-    const field=issue.path.join('.')
-    if(field==='rules.days') return 'Choose at least one day of the week.'
-    if(field==='rules.creativeIds') return 'Add at least one approved creative to the playlist.'
-    return `${field ? `${field}: ` : ''}${issue.message}`
-   })
-   throw new ApiError('VALIDATION_ERROR',details.join(' '),422)
-  }
-  return reply.send(response(request,await saveSchedule(parsed.data,actor,request.id,action==='check')))
+  // Kept as a compatibility data route for screen-group administration. No
+  // scheduling rules or date-window campaign data are returned here.
+  return reply.send(response(request,safe({schedules:[],campaigns:[],screens,groups,routes,depots,vehicles})))
  })
  app.post('/api/admin/screen-groups',async(request,reply)=>{
   const actor=await requirePermission(request,'operations:write')
@@ -45,11 +30,11 @@ export function registerOperations(app: FastifyInstance) {
  app.get('/api/admin/overview',async(request,reply)=>{
   await requirePermission(request,'admin:read')
   const now=new Date(); const india=new Date(now.getTime()+330*60000); const today=new Date(india.toISOString().slice(0,10)+'T00:00:00+05:30')
-  const [screens,active,scheduled,pending,creatives,plays,failedCommands]=await Promise.all([
+  const [screens,active,legacyScheduled,pending,creatives,plays,failedCommands]=await Promise.all([
    prisma.display.findMany({where:{state:{notIn:['DELETED','DISABLED']}},select:{lastHeartbeatAt:true,currentPlaybackState:true}}),prisma.campaign.count({where:{status:'ACTIVE'}}),prisma.campaign.count({where:{status:'SCHEDULED'}}),prisma.campaign.count({where:{status:{in:['PENDING_REVIEW','CAMPAIGN_PENDING_REVIEW']}}}),prisma.creative.count({where:{status:'PENDING_REVIEW'}}),prisma.proofOfPlay.count({where:{playbackStartedAt:{gte:today},playbackCompleted:true}}),prisma.displayCommand.count({where:{commandType:{in:['SYNC_MANIFEST','REFRESH_MANIFEST']},status:'FAILED'}})
   ])
   const online=screens.filter(s=>s.lastHeartbeatAt && now.getTime()-s.lastHeartbeatAt.getTime()<=90000)
-  return reply.send(response(request,{total:screens.length,online:online.length,offline:screens.length-online.length,playing:online.filter(s=>s.currentPlaybackState==='PLAYING').length,idle:online.filter(s=>['IDLE','READY'].includes(s.currentPlaybackState??'')).length,errors:screens.filter(s=>['ERROR','FAILED'].includes(s.currentPlaybackState??'')).length,activeCampaigns:active,scheduledCampaigns:scheduled,pendingCampaigns:pending,pendingCreatives:creatives,playsToday:plays,manifestFailures:failedCommands}))
+  return reply.send(response(request,{total:screens.length,online:online.length,offline:screens.length-online.length,playing:online.filter(s=>s.currentPlaybackState==='PLAYING').length,idle:online.filter(s=>['IDLE','READY'].includes(s.currentPlaybackState??'')).length,errors:screens.filter(s=>['ERROR','FAILED'].includes(s.currentPlaybackState??'')).length,activeCampaigns:active,legacyScheduledCampaigns:legacyScheduled,pendingCampaigns:pending,pendingCreatives:creatives,playsToday:plays,manifestFailures:failedCommands}))
  })
  app.get('/api/admin/audit-log',async(request,reply)=>{
   await requirePermission(request,'operations:write');const q=z.object({skip:z.coerce.number().int().min(0).max(100000).default(0),entityId:z.string().optional()}).parse(request.query)

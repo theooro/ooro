@@ -18,6 +18,7 @@ import java.time.Instant
 import android.util.Log
 import com.ooro.screenplayer.location.LocationReporter
 import androidx.work.Constraints
+import androidx.room.withTransaction
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
@@ -120,7 +121,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             Log.i("OoroScreen", "proof worker selected rows=${uploadRows.size} stale=$staleCount attempt=$attempt")
             val events = uploadRows.map { row ->
                 val j = JSONObject(row.payload)
-                ProofOfPlay(eventId = row.eventId, screenId = j.getString("screenId"), deviceId = j.getString("deviceId"), campaignId = j.getString("campaignId"), creativeId = j.getString("creativeId"), scheduleItemId = j.getString("scheduleItemId"), startedAt = Instant.parse(j.getString("startedAt")), endedAt = Instant.parse(j.getString("endedAt")), expectedDurationMs = j.optLong("expectedDurationMs"), actualPlayedMs = j.optLong("actualPlayedMs"), success = j.getBoolean("success"), failureReason = j.optString("failureReason").takeIf { it.isNotBlank() }, appVersion = j.getString("appVersion"), assetId = j.optString("assetId").takeIf { it.isNotBlank() }, slot = j.optString("slot", "MAIN"))
+                ProofOfPlay(eventId = row.eventId, screenId = j.getString("screenId"), deviceId = j.getString("deviceId"), campaignId = j.getString("campaignId"), creativeId = j.getString("creativeId"), scheduleItemId = j.getString("scheduleItemId"), startedAt = Instant.parse(j.getString("startedAt")), endedAt = Instant.parse(j.getString("endedAt")), expectedDurationMs = j.optLong("expectedDurationMs"), actualPlayedMs = j.optLong("actualPlayedMs"), success = j.getBoolean("success"), failureReason = j.optString("failureReason").takeIf { it.isNotBlank() }, appVersion = j.getString("appVersion"), assetId = j.optString("assetId").takeIf { it.isNotBlank() }, slot = j.optString("slot", "MAIN"), deliveryGrantId = j.optString("deliveryGrantId").takeIf { it.isNotBlank() && it != "null" }, deliveryQuotaRevision = j.optInt("deliveryQuotaRevision", -1).takeIf { it > 0 })
             }
             Log.i("OoroScreen", "proof upload starting batch=${events.size} attempt=$attempt")
             val upload = api.uploadProof(credentials, events)
@@ -131,7 +132,10 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                 Log.w("OoroScreen", "proof upload acknowledgment missing event IDs accepted=${upload.accepted} selected=${events.size}; retaining local rows")
             }
             if (acknowledgedIds.isNotEmpty()) {
-                db.proofDao().delete(acknowledgedIds.toList())
+                db.withTransaction {
+                    db.proofDao().delete(acknowledgedIds.toList())
+                    db.deliveryQuotaDao().acknowledgeConsumptions(acknowledgedIds.toList())
+                }
             }
             Log.i("OoroScreen", "proof local acknowledgment deleted=${acknowledgedIds.size} remaining=${db.proofDao().pendingCount()} attempt=$attempt")
             if (shouldRetryProofBatch(events.size, acknowledgedIds.size)) {

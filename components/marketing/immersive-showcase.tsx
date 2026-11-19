@@ -6,7 +6,7 @@ import { ArrowUpRight, ChartNoAxesColumnIncreasing, Clapperboard, MapPinned } fr
 
 const stories = [
  {number:"01",label:"Where",title:"Start with a place.",body:"Choose Bengaluru neighborhoods, the radius you want to reach and the dates you have in mind. OORO confirms actual availability before any booking.",Icon:MapPinned,caption:"Planning preview · Bengaluru"},
- {number:"02",label:"What",title:"Make the moment yours.",body:"Bring your artwork or video. OORO reviews the creative and schedules approved media on eligible in-vehicle screens.",Icon:Clapperboard,caption:"Creative preview · illustrative"},
+ {number:"02",label:"What",title:"Make the moment yours.",body:"Bring your artwork or video. OORO reviews the creative and authorizes approved media for eligible in-vehicle screens.",Icon:Clapperboard,caption:"Creative preview · illustrative"},
  {number:"03",label:"Proof",title:"See what actually played.",body:"Understand supported playback records and campaign reporting—without confusing estimated reach with verified delivery.",Icon:ChartNoAxesColumnIncreasing,caption:"Reporting preview · illustrative"},
 ] as const;
 

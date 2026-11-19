@@ -72,7 +72,7 @@ export default function Page() {
       if (!response.ok) throw new Error(payload.error?.message || "Group could not be saved.");
       await load();
       setId(payload.data?.id ?? id);
-      setSaved("Group saved. Existing schedules need to be republished to apply membership changes.");
+      setSaved("Group saved. Active campaign delivery uses direct screen assignments; review those assignments if membership changes.");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Group could not be saved.");
     } finally {
@@ -108,7 +108,7 @@ export default function Page() {
             <button type="button" onClick={newGroup} className="min-h-11 rounded-lg border border-neutral-300 px-4 text-sm font-medium text-neutral-200 hover:bg-white/[.05]">Clear form</button>
             <button type="submit" disabled={busy || !name.trim()} className="min-h-11 rounded-lg bg-[var(--brand-yellow)] px-5 text-sm font-semibold text-black disabled:cursor-not-allowed disabled:opacity-50">{busy ? "Saving…" : id ? "Save changes" : "Create group"}</button>
           </div>
-          <p className="text-xs leading-5 text-neutral-500">Changing group membership does not update existing schedules automatically. Republish those schedules to apply the change.</p>
+          <p className="text-xs leading-5 text-neutral-500">Group membership does not change campaign delivery. Active campaigns are assigned directly to compatible screens and use per-screen delivery quotas.</p>
         </form>
       </SectionCard>
     </div>}

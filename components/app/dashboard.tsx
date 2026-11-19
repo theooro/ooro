@@ -5,11 +5,11 @@ import { ArrowRight, ArrowUpRight, CalendarDays, CircleHelp, FileImage, MapPin, 
 import { useEffect, useState } from "react";
 import { EmptyState, PrimaryButton, SectionCard, StatusBadge } from "./app-ui";
 
-type Campaign = { id: string; name: string; status: string; startsAt?: string | null; endsAt?: string | null };
+type Campaign = { id: string; name: string; status: string };
 
 const nextSteps = [
   { icon: MapPin, title: "Choose an area", detail: "Pick a Bengaluru neighbourhood for your campaign.", href: "/campaigns/new" },
-  { icon: CalendarDays, title: "Set your dates and budget", detail: "Build a plan. OORO confirms availability before booking.", href: "/campaigns/new" },
+  { icon: CalendarDays, title: "Set your campaign budget", detail: "Build a plan. OORO confirms approval, delivery state and quota.", href: "/campaigns/new" },
   { icon: FileImage, title: "Add your creative", detail: "Upload artwork now or add it to a saved campaign later.", href: "/creatives" },
 ];
 
@@ -31,7 +31,7 @@ export function Dashboard() {
     return () => { active = false; };
   }, []);
 
-  const activeCount = campaigns.filter(item => ["SCHEDULED", "LIVE", "ACTIVE"].includes(item.status)).length;
+  const activeCount = campaigns.filter(item => ["LIVE", "ACTIVE"].includes(item.status)).length;
   const reviewCount = campaigns.filter(item => ["DRAFT", "PENDING_REVIEW", "SUBMITTED"].includes(item.status)).length;
 
   return <div className="space-y-7 sm:space-y-9">
@@ -52,7 +52,7 @@ export function Dashboard() {
 
     <div className="grid gap-5 xl:grid-cols-[1.45fr_.8fr]">
       <SectionCard title="Your campaigns" description="See each plan’s current status and continue where you left off.">
-        {loadError ? <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800"><p>Campaigns could not load.</p><button type="button" onClick={() => window.location.reload()} className="mt-2 font-medium underline underline-offset-4">Try again</button></div> : loading ? <div className="space-y-3 py-3" aria-label="Loading campaigns"><div className="h-12 animate-pulse rounded-lg bg-neutral-100"/><div className="h-12 animate-pulse rounded-lg bg-neutral-100"/></div> : campaigns.length ? <div className="divide-y divide-neutral-200">{campaigns.slice(0, 5).map(campaign => <Link href={`/campaigns/${campaign.id}`} key={campaign.id} className="flex flex-wrap items-center justify-between gap-3 py-4 first:pt-1"><div className="min-w-0"><p className="truncate text-sm font-medium">{campaign.name}</p><p className="mt-1 text-xs text-neutral-500">{campaign.startsAt ? new Date(campaign.startsAt).toLocaleDateString("en-IN", { dateStyle: "medium" }) : "Dates to be confirmed"}</p></div><StatusBadge>{campaign.status.replaceAll("_", " ")}</StatusBadge></Link>)}</div> : <EmptyState title="Your first campaign starts with a plan." description="Choose an area, dates and budget. We’ll review inventory and confirm the next steps with you." action={<PrimaryButton href="/campaigns/new">Build your first plan<ArrowRight className="ml-3" size={15}/></PrimaryButton>}/>}
+        {loadError ? <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800"><p>Campaigns could not load.</p><button type="button" onClick={() => window.location.reload()} className="mt-2 font-medium underline underline-offset-4">Try again</button></div> : loading ? <div className="space-y-3 py-3" aria-label="Loading campaigns"><div className="h-12 animate-pulse rounded-lg bg-neutral-100"/><div className="h-12 animate-pulse rounded-lg bg-neutral-100"/></div> : campaigns.length ? <div className="divide-y divide-neutral-200">{campaigns.slice(0, 5).map(campaign => <Link href={`/campaigns/${campaign.id}`} key={campaign.id} className="flex flex-wrap items-center justify-between gap-3 py-4 first:pt-1"><div className="min-w-0"><p className="truncate text-sm font-medium">{campaign.name}</p><p className="mt-1 text-xs text-neutral-500">Delivery follows approved campaign state</p></div><StatusBadge>{campaign.status.replaceAll("_", " ")}</StatusBadge></Link>)}</div> : <EmptyState title="Your first campaign starts with a plan." description="Choose an area and budget. OORO will review eligibility and confirm the next steps with you." action={<PrimaryButton href="/campaigns/new">Build your first plan<ArrowRight className="ml-3" size={15}/></PrimaryButton>}/>}
       </SectionCard>
 
       <SectionCard title="A simple way to start" description="You can save a plan before uploading artwork.">

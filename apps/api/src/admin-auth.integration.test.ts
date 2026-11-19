@@ -42,11 +42,11 @@ test('admin email/password workflow, generic failures, session revocation, and s
     assert.equal((await app.inject({ method: 'GET', url: '/api/admin/overview', headers: { authorization: `Bearer ${roleLogin.json().data.accessToken}` } })).statusCode, 200, roleUser.role)
   }
   for (const role of ['ADMIN', 'SUPER_ADMIN', 'OPERATIONS']) {
-    const response = await app.inject({ method: 'POST', url: `/api/admin/displays/${randomUUID()}/commands`, headers: { authorization: `Bearer ${roleTokens.get(role)}` }, payload: { commandType: 'HEALTH_CHECK' } })
+    const response = await app.inject({ method: 'POST', url: `/api/admin/displays/${randomUUID()}/commands`, headers: { authorization: `Bearer ${roleTokens.get(role)}` }, payload: { commandType: 'HEALTH_CHECK', idempotencyKey: randomUUID() } })
     assert.equal(response.statusCode, 404, `${role} must reach the protected device operation`)
   }
   for (const role of ['FINANCE', 'SUPPORT']) {
-    const response = await app.inject({ method: 'POST', url: `/api/admin/displays/${randomUUID()}/commands`, headers: { authorization: `Bearer ${roleTokens.get(role)}` }, payload: { commandType: 'HEALTH_CHECK' } })
+    const response = await app.inject({ method: 'POST', url: `/api/admin/displays/${randomUUID()}/commands`, headers: { authorization: `Bearer ${roleTokens.get(role)}` }, payload: { commandType: 'HEALTH_CHECK', idempotencyKey: randomUUID() } })
     assert.equal(response.statusCode, 403, `${role} must be denied device writes`)
   }
   const privilegedDeviceOsWrites = [
