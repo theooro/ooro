@@ -65,6 +65,16 @@ class ManifestCodecTest {
         assertEquals(null, withoutOffer.items.single().offer.offerTitle)
     }
 
+    @Test fun legacyTimingMetadataIsIgnoredForAnAuthorizedManifestItem() {
+        val legacy = ManifestCodec.parse("""{"version":3,"screenId":"screen-1","timezone":"Pacific/Honolulu","items":[{"id":"legacy","campaignId":"campaign","creativeId":"creative","type":"IMAGE","url":"https://cdn.example/a.png","checksum":"${"a".repeat(64)}","durationSeconds":10,"startAt":"2099-01-01T00:00:00Z","endAt":"2000-01-01T00:00:00Z","daysOfWeek":[],"startTime":"23:55","endTime":"00:05","deliveryQuota":{"id":"campaign:screen-1","revision":1,"remainingPlays":3,"unlimited":false}}]}""")
+        val item = legacy.items.single()
+
+        assertEquals(null, item.startAt)
+        assertEquals(null, item.endAt)
+        assertEquals(emptySet< java.time.DayOfWeek >(), item.daysOfWeek)
+        assertEquals("legacy", com.ooro.screenplayer.player.ScheduleEngine().next(legacy, java.time.Instant.parse("2026-11-19T12:00:00Z"))?.id)
+    }
+
     @Test fun `authorized QR destination record ID survives manifest cache round trip`() {
         val payloadWithDestination = payload.replace("\"qrUrl\":\"https://theooro.com/go/token-a\"", "\"qrUrl\":\"https://theooro.com/go/token-a\",\"authorizedDestinationId\":\"destination-uuid\"")
         val parsed = ManifestCodec.parse(payloadWithDestination)

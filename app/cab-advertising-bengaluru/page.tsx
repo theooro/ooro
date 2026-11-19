@@ -24,7 +24,7 @@ export default function CabAdvertisingPage() {
       },
       {
         title: "Confirm creative and availability before booking",
-        body: "Prepare the campaign objective, dates, preferred Bengaluru areas, budget and draft creative. Ask the OORO team to confirm the screen format, file requirements, eligible inventory, schedule and commercial terms in writing before you commit. The creative review and availability check are part of the request process.\n\nSee [how OORO plans campaigns](/how-it-works), review [DOOH advertising in Bengaluru](/digital-advertising-bengaluru), or [start a campaign request](/advertise).",
+        body: "Prepare the campaign objective, preferred Bengaluru areas, budget and draft creative. Ask the OORO team to confirm the screen format, file requirements, eligible inventory and commercial terms in writing before you commit. The creative review and availability check are part of the request process.\n\nSee [how OORO plans campaigns](/how-it-works), review [DOOH advertising in Bengaluru](/digital-advertising-bengaluru), or [start a campaign request](/advertise).",
       },
       {
         title: "Understand what the report can establish",

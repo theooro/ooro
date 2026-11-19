@@ -7,11 +7,56 @@ import com.ooro.screenplayer.model.CreativeType
 import com.ooro.screenplayer.model.DisplayLayout
 import java.time.Duration
 import java.time.Instant
-import java.time.ZoneId
 
 internal const val MANIFEST_REFRESH_LEAD_MILLIS = 120_000L
 internal const val NETWORK_RECOVERY_THROTTLE_MILLIS = 30_000L
 internal const val MANIFEST_UPDATE_POLL_INTERVAL_MILLIS = 180_000L
+internal const val MAX_OFFLINE_AUTHORIZATION_MILLIS = 15 * 60_000L
+internal const val OFFLINE_AUTHORIZATION_SAFETY_MILLIS = 5_000L
+
+internal data class OfflineAuthorization(
+    val screenId: String,
+    val receivedElapsedMillis: Long,
+    val bootCount: Int,
+    val durationMillis: Long,
+    val serverTimeUtcMillis: Long,
+)
+
+/** A manifest lease is measured from the authenticated HTTPS response using monotonic time. */
+internal fun issueOfflineAuthorization(
+    screenId: String,
+    generatedAt: Instant?,
+    validUntil: Instant?,
+    authenticatedServerDate: Instant?,
+    receivedElapsedMillis: Long,
+    bootCount: Int?,
+): OfflineAuthorization? {
+    val issued = generatedAt ?: return null
+    val expiry = validUntil ?: return null
+    val serverNow = authenticatedServerDate ?: return null
+    val boot = bootCount ?: return null
+    if (screenId.isBlank() || receivedElapsedMillis < 0L || boot < 0) return null
+    if (expiry <= issued || serverNow < issued.minusSeconds(5) || serverNow >= expiry) return null
+    val authenticatedNow = maxOf(serverNow, issued)
+    val remaining = Duration.between(authenticatedNow, expiry).toMillis() - OFFLINE_AUTHORIZATION_SAFETY_MILLIS
+    if (remaining !in 1..MAX_OFFLINE_AUTHORIZATION_MILLIS) return null
+    return OfflineAuthorization(screenId, receivedElapsedMillis, boot, remaining, serverNow.toEpochMilli())
+}
+
+internal fun serverTimeDoesNotRollback(previousServerTimeUtcMillis: Long?, incomingServerTimeUtcMillis: Long): Boolean =
+    previousServerTimeUtcMillis == null || incomingServerTimeUtcMillis >= previousServerTimeUtcMillis
+
+internal fun offlineAuthorizationRemainingMillis(
+    authorization: OfflineAuthorization?,
+    pairedScreenId: String?,
+    currentElapsedMillis: Long,
+    currentBootCount: Int?,
+): Long {
+    if (authorization == null || pairedScreenId.isNullOrBlank() || authorization.screenId != pairedScreenId) return 0L
+    if (currentBootCount == null || currentBootCount != authorization.bootCount) return 0L
+    if (currentElapsedMillis < authorization.receivedElapsedMillis || authorization.durationMillis !in 1..MAX_OFFLINE_AUTHORIZATION_MILLIS) return 0L
+    return (authorization.durationMillis - (currentElapsedMillis - authorization.receivedElapsedMillis)).coerceAtLeast(0L)
+}
 
 internal fun shouldPollForManifestUpdate(nowElapsedMillis: Long, lastPollElapsedMillis: Long): Boolean =
     lastPollElapsedMillis <= 0L || nowElapsedMillis - lastPollElapsedMillis >= MANIFEST_UPDATE_POLL_INTERVAL_MILLIS
@@ -25,25 +70,20 @@ internal fun syncRetryDelayMillis(attempt: Int, jitterMillis: Long): Long {
     return baseMillis + jitterMillis.coerceIn(0L, 999L)
 }
 
-/** A cached manifest is usable only inside the server-issued authorization window. */
+/** Fresh response authorization comes from the authenticated HTTPS server time and bounded lease, never device wall time. */
 internal fun manifestIsAuthorizedAt(manifest: DeviceManifest, now: Instant): Boolean =
-    manifest.validUntil?.isAfter(now) == true
+    issueOfflineAuthorization(manifest.screenId, manifest.generatedAt, manifest.validUntil, manifest.authenticatedServerTime, 0L, 0) != null
 
-/** Recheck soon after the next schedule boundary, with a bounded poll for wall-clock corrections. */
+/** Compatibility timer for non-delivery UI refresh; no campaign time boundary controls playback. */
 internal fun scheduleReevaluationDelayMillis(
     manifest: DeviceManifest?,
     now: Instant,
     fallbackPollMillis: Long = 60_000L,
 ): Long {
-    val poll = fallbackPollMillis.coerceAtLeast(1L)
-    if (manifest == null) return poll
-    val zone = runCatching { ZoneId.of(manifest.timezone) }.getOrNull() ?: return poll
-    val nextBoundary = manifest.items.asSequence().mapNotNull { nextScheduleBoundary(it, now, zone) }.minOrNull() ?: return poll
-    val untilBoundary = Duration.between(now, nextBoundary).toMillis().coerceAtLeast(1L)
-    return minOf(untilBoundary, poll)
+    return fallbackPollMillis.coerceAtLeast(1L)
 }
 
-/** Refresh before the server lease ends; this never extends the authorization window. */
+/** Refresh before the manifest authorization lease ends; this never extends the authorization window. */
 internal fun manifestRefreshDelayMillis(
     validUntil: Instant?,
     now: Instant,
@@ -74,16 +114,10 @@ internal fun nextVerifiedManifestItem(
     offset: Int,
     verifiedItemIds: Set<String>,
 ): ManifestItem? {
-    if (!manifestIsAuthorizedAt(manifest, now)) return null
     return scheduler.next(manifest, now, offset, verifiedItemIds)
 }
 
-/**
- * Selects from a previously accepted local snapshot during an outage. The
- * manifest lease is not renewed here: item campaign dates and daily schedules
- * still apply, and callers must only use this for a manifest already committed
- * from an authenticated response and whose assets have been checksum-verified.
- */
+/** Selects cached items only after the caller confirms the paired, unexpired monotonic lease. */
 internal fun nextVerifiedCachedItem(
     manifest: DeviceManifest,
     scheduler: ScheduleEngine,
@@ -97,7 +131,6 @@ internal enum class CachedStartupBlock {
     NO_MANIFEST,
     UNPAIRED,
     SCREEN_ID_MISMATCH,
-    AUTHORIZATION_EXPIRED,
     NO_ELIGIBLE_VERIFIED_ASSET,
 }
 
@@ -115,15 +148,12 @@ internal fun resolveCachedStartup(
     verifiedItemIds: Set<String>,
     scheduler: ScheduleEngine,
     now: Instant,
-    allowExpiredForOfflinePlayback: Boolean = false,
+    allowExpiredForOfflinePlayback: Boolean = true,
 ): CachedStartupResolution {
     if (manifest == null) return CachedStartupResolution(null, null, CachedStartupBlock.NO_MANIFEST)
     if (pairedScreenId == null) return CachedStartupResolution(null, null, CachedStartupBlock.UNPAIRED)
     if (manifest.screenId != pairedScreenId) return CachedStartupResolution(null, null, CachedStartupBlock.SCREEN_ID_MISMATCH)
-    val authorized = manifestIsAuthorizedAt(manifest, now)
-    if (!authorized && !allowExpiredForOfflinePlayback) return CachedStartupResolution(manifest, null, CachedStartupBlock.AUTHORIZATION_EXPIRED)
-    val firstItem = if (authorized) nextVerifiedManifestItem(manifest, scheduler, now, 0, verifiedItemIds)
-        else nextVerifiedCachedItem(manifest, scheduler, now, 0, verifiedItemIds)
+    val firstItem = nextVerifiedCachedItem(manifest, scheduler, now, 0, verifiedItemIds)
     return if (firstItem == null) CachedStartupResolution(manifest, null, CachedStartupBlock.NO_ELIGIBLE_VERIFIED_ASSET)
     else CachedStartupResolution(manifest, firstItem, CachedStartupBlock.NONE)
 }
@@ -135,18 +165,33 @@ internal fun offlineEmptyMessage(
     allowExpiredCachedManifest: Boolean = false,
 ): String = when {
     manifest.version <= 0L -> "No cached ads are available\nConnect this screen and sync an approved campaign."
-    !allowExpiredCachedManifest && !manifestIsAuthorizedAt(manifest, now) -> "Offline ads paused\nAuthorization expired. Reconnect to refresh approved content."
-    manifest.items.isEmpty() -> "No approved ads are available\nAsk OORO to schedule a campaign for this screen."
+    manifest.deliveryReasons.isNotEmpty() -> manifest.deliveryReasons.distinct().joinToString("\n") { deliveryReasonMessage(it) }
+    manifest.items.isEmpty() -> "No delivery is authorized for this screen\nCheck campaign state, funding, approval, assignment, and device quota in the admin console."
     manifest.items.none { it.id in verifiedItemIds } -> "No verified ads are cached\nReconnect to download approved content."
-    else -> "No ad is eligible right now\nPlayback will resume when an approved schedule is active."
+    manifest.items.any { it.id in verifiedItemIds && it.deliveryQuota == null } -> "The manifest has no per-screen delivery quota\nThe server must issue an explicit bounded quota or approved unlimited grant."
+    manifest.items.none { it.hasAuthorizedDeliveryQuota } -> "Authorized delivery quota is exhausted\nReconnect for a new approved grant."
+    else -> "No eligible verified creative is available\nCheck local asset integrity and campaign delivery state."
+}
+
+internal fun deliveryReasonMessage(reason: String): String = when (reason) {
+    "NO_ASSIGNMENT" -> "No campaign is assigned to this screen."
+    "DISPLAY_DISABLED" -> "This screen is disabled or unavailable for delivery."
+    "CLIENT_QUOTA_UNSUPPORTED" -> "This player version cannot enforce delivery quotas; update the player before assigning campaigns."
+    "CAMPAIGN_INACTIVE" -> "Assigned campaigns are not active. An administrator must explicitly activate an approved campaign."
+    "APPROVAL_REQUIRED" -> "Campaign approval is required before delivery."
+    "FUNDING_REQUIRED" -> "Campaign funding or payment is not complete."
+    "NO_DELIVERY_QUOTA" -> "No per-screen delivery quota is authorized."
+    "NO_APPROVED_CREATIVE" -> "No campaign has an approved creative."
+    "ASSET_UNAVAILABLE" -> "Approved creative assets are missing or do not have valid checksum metadata."
+    "NO_ELIGIBLE_CREATIVE" -> "No approved creative asset is eligible for this screen."
+    else -> "Delivery is unavailable ($reason). Check the campaign and screen authorization in admin."
 }
 
 internal fun eligibleSponsoredItem(manifest: DeviceManifest, now: Instant, verifiedItemIds: Set<String>): ManifestItem? {
-    if (manifest.layoutContractVersion < 3 || manifest.layout !in setOf(DisplayLayout.FOUR_ZONE, DisplayLayout.AD_NAV_OFFER) || !manifestIsAuthorizedAt(manifest, now)) return null
+    if (manifest.layoutContractVersion < 3 || manifest.layout !in setOf(DisplayLayout.FOUR_ZONE, DisplayLayout.AD_NAV_OFFER)) return null
     val item = manifest.sponsoredItem ?: return null
     if (item.type != CreativeType.IMAGE || item.id !in verifiedItemIds) return null
-    val zone = runCatching { java.time.ZoneId.of(manifest.timezone) }.getOrNull() ?: return null
-    return item.takeIf { it.isActive(now, zone) }
+    return item.takeIf { it.hasAuthorizedDeliveryQuota }
 }
 
 internal fun acknowledgedProofEventIds(selectedIds: Set<String>, serverAcceptedIds: Set<String>): Set<String> =

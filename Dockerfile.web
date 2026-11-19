@@ -17,7 +17,9 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/api/package.json apps/api/package.json
 COPY packages/api-contracts/package.json packages/api-contracts/package.json
 COPY packages/shared-types/package.json packages/shared-types/package.json
-RUN pnpm install --frozen-lockfile
+# Coolify may expose the app's production runtime env during image builds;
+# Next/TypeScript/ESLint are still required to compile the production bundle.
+RUN pnpm install --frozen-lockfile --prod=false
 
 COPY . .
 

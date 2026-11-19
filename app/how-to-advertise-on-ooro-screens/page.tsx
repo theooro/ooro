@@ -12,16 +12,16 @@ export default function HowToAdvertiseOnOoroScreensPage() {
   return <ServiceLanding
     eyebrow="OORO / Screen campaigns"
     title="How to advertise on OORO screens"
-    intro="OORO is building a digital advertising network inside auto-rickshaws, starting in Bengaluru. A business can submit a campaign request for available passenger-facing screen inventory; OORO reviews the brief and creative, checks eligible availability, and confirms dates and commercial terms before booking."
+    intro="OORO is building a digital advertising network inside auto-rickshaws, starting in Bengaluru. A business can submit a campaign request for available passenger-facing screen inventory; OORO reviews the brief and creative, checks eligible availability, and confirms campaign state and commercial terms before delivery."
     image
     sections={[
       {
         title: "Who can enquire",
-        body: "Brands, local businesses and advertising agencies can enquire about a campaign. A useful first request names the business, the product or service, the campaign objective, preferred dates, total budget and a contact person. You can mention preferred areas to guide planning; this does not guarantee a specific vehicle, route, neighborhood exposure or audience.",
+        body: "Brands, local businesses and advertising agencies can enquire about a campaign. A useful first request names the business, the product or service, the campaign objective, total budget and a contact person. You can mention preferred areas to guide planning; this does not guarantee a specific vehicle, route, neighborhood exposure or audience.",
       },
       {
         title: "The campaign steps",
-        body: "1. Share your objective, dates, budget, area preferences and draft creative through [campaign planning](/advertise) or the [campaign brief builder](/tools/campaign-brief-builder).\n\n2. OORO reviews the request and creative requirements, then checks eligible screen inventory for the requested period.\n\n3. Review the proposal, schedule, total commercial terms and reporting details. Ask questions about exclusions before you commit.\n\n4. After you accept confirmed terms and the creative is approved, the team shares the next steps for campaign delivery. An enquiry or planner input alone is not a booking.",
+        body: "1. Share your objective, budget, area preferences and draft creative through [campaign planning](/advertise) or the [campaign brief builder](/tools/campaign-brief-builder).\n\n2. OORO reviews the request and creative requirements, then checks eligible screen inventory.\n\n3. Review the proposal, total commercial terms and reporting details. Ask questions about exclusions before you commit.\n\n4. After you accept confirmed terms and the creative is approved, the team shares the next steps for campaign delivery. An enquiry or planner input alone is not a booking.",
       },
       {
         title: "Prepare a screen-ready message",
@@ -29,7 +29,7 @@ export default function HowToAdvertiseOnOoroScreensPage() {
       },
       {
         title: "Confirm what is available and what reporting means",
-        body: "Bengaluru is OORO's initial operating focus. Screen inventory, dates, schedule and commercial terms are confirmed for each request. Ask which screens can be included and what the final report records. Device playback information where supported is evidence of playback events; it does not independently establish unique viewers, attention, enquiries or sales. Review [coverage](/coverage) and [measurement methodology](/methodology).",
+        body: "Bengaluru is OORO's initial operating focus. Screen inventory, campaign state and commercial terms are confirmed for each request. Ask which screens can be included and what the final report records. Device playback information where supported is evidence of playback events; it does not independently establish unique viewers, attention, enquiries or sales. Review [coverage](/coverage) and [measurement methodology](/methodology).",
       },
       {
         title: "Enquire with OORO",

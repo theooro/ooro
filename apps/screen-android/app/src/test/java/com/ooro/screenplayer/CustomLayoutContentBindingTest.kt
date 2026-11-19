@@ -6,6 +6,7 @@ import com.ooro.screenplayer.layoutstudio.resolveCustomWidgetContent
 import com.ooro.screenplayer.model.CreativeType
 import com.ooro.screenplayer.model.DeviceManifest
 import com.ooro.screenplayer.model.DisplayLayout
+import com.ooro.screenplayer.model.DeliveryQuota
 import com.ooro.screenplayer.model.FitMode
 import com.ooro.screenplayer.model.ManifestItem
 import com.ooro.screenplayer.model.OfferMetadata
@@ -32,6 +33,7 @@ class CustomLayoutContentBindingTest {
         priority = 0, startAt = null, endAt = null,
         daysOfWeek = emptySet(), startTime = null, endTime = null, assetId = "asset-$id",
         fitMode = FitMode.FIT, offer = offer,
+        deliveryQuota = DeliveryQuota("campaign-$id:screen-a", 1, 10, false),
     )
     private fun zone(type: String, binding: String = "APPROVED_CREATIVE", reference: String? = "creative-main") = LayoutStudioZone(
         id = "zone-$type", type = type, label = "Test $type", x = 0.0, y = 0.0,
@@ -75,8 +77,8 @@ class CustomLayoutContentBindingTest {
     }
 
     @Test fun `expired manifest and screen mismatch fail closed`() {
-        assertTrue(resolveCustomWidgetContent(zone("MAIN_AD"), manifest.copy(validUntil = now), "screen-a", verified, main, now) is CustomWidgetContent.Fallback)
-        assertEquals(CustomWidgetContent.Fallback("manifest-expired"), resolveCustomWidgetContent(zone("MAIN_AD"), manifest, "screen-a", verified, main, now, authorizationExpired = true))
+        assertEquals(CustomWidgetContent.MainAd(main), resolveCustomWidgetContent(zone("MAIN_AD"), manifest.copy(validUntil = now), "screen-a", verified, main, now, allowCachedOffline = true))
+        assertEquals(CustomWidgetContent.Fallback("manifest-authorization-invalid"), resolveCustomWidgetContent(zone("MAIN_AD"), manifest, "screen-a", verified, main, now, authorizationExpired = true))
         assertTrue(resolveCustomWidgetContent(zone("MAIN_AD"), manifest, "screen-b", verified, main, now) is CustomWidgetContent.Fallback)
     }
 

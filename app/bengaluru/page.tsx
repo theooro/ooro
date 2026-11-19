@@ -7,10 +7,10 @@ export const metadata: Metadata = pageMetadata("bengaluru", "Ads in Bengaluru fo
 export default function BengaluruPage() {
  return <PublicPage eyebrow="Bengaluru / Mobility advertising" title="Reach customers on the move in Bengaluru." description="OORO helps businesses and brands request advertising placements on digital screens inside autos and cabs. Our Bengaluru network is the initial launch focus, and live screen availability is confirmed for every campaign." primaryAction={{ href: "/advertise", label: "Plan a Bengaluru campaign" }} secondaryAction={{ href: "/coverage", label: "Review coverage" }}>
  <PublicSection title="Advertising that moves through the city">
- <p>Plan a campaign around areas such as BTM Layout, Koramangala, Indiranagar or Marathahalli. Tell OORO the audience, schedule and budget you have in mind, and our team will confirm eligible vehicles and screens before booking. Neighborhood examples are targeting preferences, not a guarantee of coverage.</p>
+ <p>Plan a campaign around areas such as BTM Layout, Koramangala, Indiranagar or Marathahalli. Tell OORO the audience, budget and creative direction you have in mind, and our team will confirm eligible vehicles and screens before booking. Neighborhood examples are targeting preferences, not a guarantee of coverage.</p>
  </PublicSection>
  <PublicSection title="From request to verified delivery">
- <ol className="list-decimal space-y-3 pl-6"><li>Submit a campaign brief with your target Bengaluru areas, dates and budget.</li><li>Share image or video artwork for review.</li><li>OORO checks available screens, confirms commercial terms and schedules approved media.</li><li>Review playback reporting and QR engagement where supported. A campaign assignment alone is not proof of play.</li></ol>
+ <ol className="list-decimal space-y-3 pl-6"><li>Submit a campaign brief with your target Bengaluru areas and budget.</li><li>Share image or video artwork for review.</li><li>OORO checks eligible screens, approval, funding and delivery authorization.</li><li>Review playback reporting and QR engagement where supported. A campaign assignment alone is not proof of play.</li></ol>
  <div className="mt-8"><PublicCta href="/advertise">Plan Bengaluru advertising</PublicCta></div>
  <p className="mt-6 text-sm">For campaign questions, <Link className="underline underline-offset-4" href="/about">meet OORO&apos;s founders and team</Link>.</p>
  </PublicSection>

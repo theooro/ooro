@@ -1,33 +1,76 @@
 package com.ooro.screenplayer
 
 import com.ooro.screenplayer.model.*
+import com.ooro.screenplayer.player.ScheduleEngine
 import org.junit.Assert.*
 import org.junit.Test
 import java.time.*
 
 class SchedulingTest {
-    @Test fun overnightWindowIncludesBothSidesOfMidnight() { val item = ManifestItem("x", "c", "cr", CreativeType.IMAGE, "", null, 10, 1, null, null, emptySet(), LocalTime.of(22, 0), LocalTime.of(2, 0)); assertTrue(item.isActive(Instant.parse("2026-08-22T22:30:00Z"), ZoneOffset.UTC)); assertTrue(item.isActive(Instant.parse("2026-08-23T01:30:00Z"), ZoneOffset.UTC)); assertFalse(item.isActive(Instant.parse("2026-08-23T12:00:00Z"), ZoneOffset.UTC)) }
-    @Test fun expiredItemIsInactive() { val item = ManifestItem("x", "c", "cr", CreativeType.IMAGE, "", null, 10, 1, null, Instant.parse("2026-01-01T00:00:00Z"), emptySet(), null, null); assertFalse(item.isActive(Instant.parse("2026-08-22T00:00:00Z"), ZoneOffset.UTC)) }
-    @Test fun completionOffsetAdvancesAndWrapsAcrossCreatives() { val first = ManifestItem("a", "campaign-a", "creative-a", CreativeType.IMAGE, "", null, 10, 1, null, null, emptySet(), null, null, offer = OfferMetadata(offerTitle = "Offer A", qrUrl = "https://example.com/a")); val second = first.copy(id = "b", campaignId = "campaign-b", creativeId = "creative-b", offer = OfferMetadata(offerTitle = "Offer B", qrUrl = "https://example.com/b")); val manifest = DeviceManifest(1, "screen", "UTC", listOf(first, second), null); val engine = com.ooro.screenplayer.player.ScheduleEngine(); assertEquals("creative-a", engine.next(manifest, offset = 0)?.creativeId); assertEquals("Offer B", engine.next(manifest, offset = 1)?.offer?.offerTitle); assertEquals("https://example.com/b", engine.next(manifest, offset = 1)?.offer?.qrUrl); assertEquals("creative-a", engine.next(manifest, offset = 2)?.creativeId) }
+    private fun item(id: String, quota: Int? = 4, priority: Int = 1) = ManifestItem(
+        id, "campaign-$id", "creative-$id", CreativeType.IMAGE, "", null, 10, priority,
+        null, null, emptySet(), null, null,
+        deliveryQuota = quota?.let { DeliveryQuota("campaign-$id:screen", 1, it, false) }
+    )
 
-    @Test fun indiaDaypartAndExclusiveEnd() {
-        val item = ManifestItem("x", "c", "cr", CreativeType.IMAGE, "", null, 10, 100, null, null, setOf(DayOfWeek.MONDAY), LocalTime.of(9,0), LocalTime.of(10,0))
-        assertTrue(item.isActive(Instant.parse("2026-09-28T03:30:00Z"), ZoneId.of("Asia/Kolkata")))
-        assertFalse(item.isActive(Instant.parse("2026-09-28T04:30:00Z"), ZoneId.of("Asia/Kolkata")))
-        assertFalse(item.isActive(Instant.parse("2026-09-29T03:30:00Z"), ZoneId.of("Asia/Kolkata")))
+    @Test fun legacyDateAndDaypartMetadataDoNotGateAuthorizedStateBasedDelivery() {
+        val active = item("active").copy(
+            startAt = Instant.parse("2099-01-01T00:00:00Z"),
+            endAt = Instant.parse("2000-01-01T00:00:00Z"),
+            daysOfWeek = setOf(DayOfWeek.SUNDAY),
+            startTime = LocalTime.of(23, 0), endTime = LocalTime.of(23, 1),
+        )
+        assertTrue(active.hasAuthorizedDeliveryQuota)
     }
-    @Test fun emergencyPreemptsPaidAndPacingDoesNotRepeatInBucket() {
-        val paid = ManifestItem("paid", "c", "cr", CreativeType.IMAGE, "", null, 10, 100, null, null, emptySet(), null, null)
-        val emergency = paid.copy(id="emergency", campaignId="e", priority=1000)
-        val manifest = DeviceManifest(1,"screen","Asia/Kolkata",listOf(paid, emergency),null)
-        val engine = com.ooro.screenplayer.player.ScheduleEngine()
-        assertEquals("emergency",engine.next(manifest)?.id)
-        val paced = paid.copy(intervalSeconds=600.0,scheduleId="schedule")
-        val pacedManifest = manifest.copy(items=listOf(paced))
-        val now=Instant.parse("2026-09-28T03:30:00Z")
-        assertEquals("paid",engine.next(pacedManifest,now)?.id)
-        engine.recordStarted(paced,now)
-        assertNull(engine.next(pacedManifest,now.plusSeconds(20)))
-        assertEquals("paid",engine.next(pacedManifest,now.plusSeconds(600))?.id)
+
+    @Test fun missingFutureExpiredAndInactiveLegacyWindowsAllRemainQuotaEligible() {
+        val now = Instant.parse("2026-11-19T12:00:00Z")
+        val variants = listOf(
+            item("missing"),
+            item("future").copy(startAt = now.plusSeconds(86_400), endAt = now.plusSeconds(172_800)),
+            item("expired").copy(startAt = now.minusSeconds(172_800), endAt = now.minusSeconds(86_400)),
+            item("inactive-daypart").copy(daysOfWeek = emptySet(), startTime = LocalTime.of(23, 59), endTime = LocalTime.MIDNIGHT),
+        )
+
+        variants.forEach { legacy ->
+            assertTrue("${legacy.id} was incorrectly time-gated", ScheduleEngine().next(
+                DeviceManifest(1, "screen", "Pacific/Honolulu", listOf(legacy), null), now, availableItemIds = setOf(legacy.id),
+            )?.id == legacy.id)
+        }
+    }
+
+    @Test fun absentOrExhaustedQuotaFailsClosed() {
+        val noGrant = item("missing", quota = null)
+        val exhausted = item("exhausted", quota = 0)
+        assertFalse(noGrant.hasAuthorizedDeliveryQuota)
+        assertFalse(exhausted.hasAuthorizedDeliveryQuota)
+        assertTrue(item("authorized", quota = 1).hasAuthorizedDeliveryQuota)
+        assertTrue(item("unlimited", quota = null).copy(deliveryQuota = DeliveryQuota("g", 1, null, true)).hasAuthorizedDeliveryQuota)
+    }
+
+    @Test fun quotaEligibilityDoesNotDependOnWallClockOrTimezone() {
+        val authorized = item("authorized")
+        val manifest = DeviceManifest(1, "screen", "UTC", listOf(authorized), null)
+        val engine = ScheduleEngine()
+        assertEquals("authorized", engine.next(manifest, Instant.parse("1900-01-01T00:00:00Z"), 0)?.id)
+        assertEquals("authorized", engine.next(manifest, Instant.parse("2200-01-01T00:00:00Z"), 0)?.id)
+    }
+
+    @Test fun completionOffsetAdvancesAcrossAuthorizedCreativesAndQuotaExhaustionRemovesItem() {
+        val first = item("a", quota = 2).copy(offer = OfferMetadata(offerTitle = "Offer A", qrUrl = "https://example.com/a"))
+        val second = item("b", quota = 2).copy(offer = OfferMetadata(offerTitle = "Offer B", qrUrl = "https://example.com/b"))
+        val manifest = DeviceManifest(1, "screen", "UTC", listOf(first, second), null)
+        val engine = ScheduleEngine()
+        assertEquals("creative-a", engine.next(manifest, offset = 0)?.creativeId)
+        assertEquals("Offer B", engine.next(manifest, offset = 1)?.offer?.offerTitle)
+        assertEquals("creative-b", engine.next(manifest.copy(items = listOf(first.copy(deliveryQuota = DeliveryQuota("a", 2, 0, false)), second)), offset = 0)?.creativeId)
+    }
+
+    @Test fun priorityOrdersOnlyStateAndQuotaEligibleItems() {
+        val paid = item("paid", priority = 100)
+        val emergency = item("emergency", priority = 1000)
+        val exhausted = item("exhausted", quota = 0, priority = 2000)
+        val manifest = DeviceManifest(1, "screen", "Asia/Kolkata", listOf(paid, emergency, exhausted), null)
+        assertEquals("emergency", ScheduleEngine().next(manifest)?.id)
     }
 }

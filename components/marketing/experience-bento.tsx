@@ -4,7 +4,7 @@ import { motion, useReducedMotion } from "framer-motion";
 import { MapPin, Clapperboard, Route, ShieldCheck, ArrowUpRight } from "lucide-react";
 import Link from "next/link";
 const items=[
- {eyebrow:"01 / SMART TARGETING",title:"Bengaluru, your way.",copy:"Choose neighborhoods, areas, and campaign dates. OORO checks eligible inventory before confirmation.",Icon:MapPin,span:"lg:col-span-2",large:true},
+ {eyebrow:"01 / SMART TARGETING",title:"Bengaluru, your way.",copy:"Choose neighborhoods and areas. OORO checks eligible inventory before confirmation.",Icon:MapPin,span:"lg:col-span-2",large:true},
  {eyebrow:"02 / REAL-WORLD MEDIA",title:"Made to move.",copy:"Screens inside autos and cabs, not another ad lost in a feed.",Icon:Route,span:"",large:false},
  {eyebrow:"03 / CREATIVE CONTROL",title:"Your story, on screen.",copy:"Bring an image or video. Our team reviews the creative before scheduling.",Icon:Clapperboard,span:"",large:false},
  {eyebrow:"04 / DELIVERY EVIDENCE",title:"Know what played.",copy:"Review supported proof-of-play events and available campaign reports instead of confusing estimates with verified plays.",Icon:ShieldCheck,span:"lg:col-span-2",large:true},

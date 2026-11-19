@@ -16,11 +16,11 @@ export default function OutdoorAdvertisingPage() {
     sections={[
       {
         title: "Fixed DOOH and mobile DOOH are different placements",
-        body: "Digital out-of-home (DOOH) uses digital screens in physical settings. A screen attached to a fixed venue stays in one location; a screen inside an auto or cab is a mobile placement viewed by passengers. Neither description by itself promises a specific audience or campaign result.\n\nWhen you request a quote, identify the exact screen or vehicle format, dates, schedule, creative duration and who confirms the placement. OORO’s mobile format is described on the [Bengaluru DOOH page](/digital-advertising-bengaluru) and [cab advertising page](/cab-advertising-bengaluru).",
+        body: "Digital out-of-home (DOOH) uses digital screens in physical settings. A screen attached to a fixed venue stays in one location; a screen inside an auto or cab is a mobile placement viewed by passengers. Neither description by itself promises a specific audience or campaign result.\n\nWhen you request a quote, identify the screen or vehicle format, creative requirements and who confirms the placement. OORO’s mobile format is described on the [Bengaluru DOOH page](/digital-advertising-bengaluru) and [cab advertising page](/cab-advertising-bengaluru).",
       },
       {
         title: "Compare the full cost, not just a headline rate",
-        body: "Ask what the price includes: media time, dates, production, installation if applicable, taxes, cancellation, maintenance and reporting. Confirm whether the rate is for one location, a screen group, a period or another unit. A quote is only comparable when the unit and inclusions match.\n\nFor vehicle screens, confirm eligible inventory and commercial terms for the requested campaign before booking. Area preferences and planning estimates are not a final placement confirmation.",
+        body: "Ask what the price includes: media placement, production, installation if applicable, taxes, cancellation, maintenance and reporting. Confirm whether the rate is for one location, a screen group, a period or another unit. A quote is only comparable when the unit and inclusions match.\n\nFor vehicle screens, confirm campaign approval, eligible inventory and commercial terms before delivery. Area preferences and planning estimates are not a final placement confirmation.",
       },
       {
         title: "Check current rules for the exact format",

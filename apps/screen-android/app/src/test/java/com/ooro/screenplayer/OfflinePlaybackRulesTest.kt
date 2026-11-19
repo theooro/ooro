@@ -12,6 +12,7 @@ import com.ooro.screenplayer.player.ScheduleEngine
 import com.ooro.screenplayer.player.isVerifiedCachedAsset
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -29,9 +30,10 @@ class OfflinePlaybackRulesTest {
         priority = priority, startAt = null, endAt = null, daysOfWeek = emptySet(),
         startTime = null, endTime = null, assetId = "asset-$id", fitMode = FitMode.FIT,
         intervalSeconds = intervalSeconds,
+        deliveryQuota = com.ooro.screenplayer.model.DeliveryQuota("campaign-$id:screen-test", 1, 100, false),
     )
     private fun manifest(items: List<ManifestItem>, validUntil: Instant? = now.plusSeconds(900)) =
-        DeviceManifest(7, "screen-test", "UTC", items, validUntil)
+        DeviceManifest(7, "screen-test", "UTC", items, validUntil, generatedAt = now.minusSeconds(1), authenticatedServerTime = now)
 
     @Test fun freshVerifiedAssetRemainsSelectableWhenNetworkIsUnavailable() {
         val directory = kotlin.io.path.createTempDirectory("ooro-offline-playlist-").toFile()
@@ -93,18 +95,53 @@ class OfflinePlaybackRulesTest {
     }
 
     @Test fun manifestExpiresAtExclusiveBoundaryWithoutOfflineGrace() {
-        assertTrue(manifestIsAuthorizedAt(manifest(listOf(item("a")), now.plusNanos(1)), now))
+        assertTrue(manifestIsAuthorizedAt(manifest(listOf(item("a")), now.plusSeconds(30)), now))
         assertFalse(manifestIsAuthorizedAt(manifest(listOf(item("a")), now), now))
         assertFalse(manifestIsAuthorizedAt(manifest(listOf(item("a")), now.minusNanos(1)), now))
     }
 
-    @Test fun sponsoredOfflineAssetRequiresV3LeaseScheduleImageAndVerifiedChecksum() {
+    @Test fun offlineLeaseUsesAuthenticatedServerDateAndMonotonicTimeRatherThanWallClock() {
+        val expiry = now.plusSeconds(900)
+        val lease = issueOfflineAuthorization("screen-test", now.minusSeconds(2), expiry, now, 50_000L, 17)
+        assertNotNull(lease)
+        assertEquals(895_000L, offlineAuthorizationRemainingMillis(lease, "screen-test", 50_000L, 17))
+        // Wall-clock values are intentionally absent from the evaluator; time only moves monotonically.
+        assertEquals(595_000L, offlineAuthorizationRemainingMillis(lease, "screen-test", 350_000L, 17))
+        assertEquals(0L, offlineAuthorizationRemainingMillis(lease, "screen-test", 945_000L, 17))
+    }
+
+    @Test fun offlineLeaseFailsClosedForWrongScreenRebootRollbackMalformedOrOverlongWindow() {
+        val expiry = now.plusSeconds(900)
+        val lease = issueOfflineAuthorization("screen-test", now.minusSeconds(1), expiry, now, 10_000L, 3)
+        assertEquals(0L, offlineAuthorizationRemainingMillis(lease, "other-screen", 11_000L, 3))
+        assertEquals(0L, offlineAuthorizationRemainingMillis(lease, "screen-test", 11_000L, 4))
+        assertEquals(0L, offlineAuthorizationRemainingMillis(lease, "screen-test", 9_999L, 3))
+        assertNull(issueOfflineAuthorization("screen-test", null, expiry, now, 10_000L, 3))
+        assertNull(issueOfflineAuthorization("screen-test", now, expiry, null, 10_000L, 3))
+        assertNull(issueOfflineAuthorization("screen-test", now, now.plusSeconds(3_600), now, 10_000L, 3))
+    }
+
+    @Test fun authenticatedServerTimeRollbackCannotRenewAnOfflineLease() {
+        val earlier = now.minusSeconds(2).toEpochMilli()
+        assertTrue(serverTimeDoesNotRollback(earlier, now.toEpochMilli()))
+        assertFalse(serverTimeDoesNotRollback(now.toEpochMilli(), earlier))
+    }
+
+    @Test fun eligibilityMessageNamesMissingQuotaInsteadOfCampaignSchedule() {
+        val noGrant = manifest(listOf(item("legacy").copy(deliveryQuota = null)))
+        val message = offlineEmptyMessage(noGrant, now, setOf("legacy"))
+        assertTrue(message.contains("no per-screen delivery quota"))
+        assertFalse(message.contains("schedule"))
+    }
+
+    @Test fun sponsoredOfflineAssetRequiresV3GrantImageAndVerifiedChecksum() {
         val sponsor = item("sponsor").copy(startAt = now.minusSeconds(5), endAt = now.plusSeconds(50))
         val v3 = manifest(emptyList()).copy(layout = DisplayLayout.FOUR_ZONE, layoutContractVersion = 3, sponsoredItem = sponsor)
         assertEquals("sponsor", eligibleSponsoredItem(v3, now, setOf("sponsor"))?.id)
         assertNull(eligibleSponsoredItem(v3, now, emptySet()))
-        assertNull(eligibleSponsoredItem(v3.copy(validUntil = now), now, setOf("sponsor")))
-        assertNull(eligibleSponsoredItem(v3, now.plusSeconds(50), setOf("sponsor")))
+        assertEquals("sponsor", eligibleSponsoredItem(v3.copy(validUntil = now), now, setOf("sponsor"))?.id)
+        assertEquals("sponsor", eligibleSponsoredItem(v3, now.plusSeconds(50), setOf("sponsor"))?.id)
+        assertNull(eligibleSponsoredItem(v3.copy(sponsoredItem = sponsor.copy(deliveryQuota = sponsor.deliveryQuota?.copy(remainingPlays = 0))), now, setOf("sponsor")))
         assertNull(eligibleSponsoredItem(v3.copy(layoutContractVersion = 2), now, setOf("sponsor")))
         assertNull(eligibleSponsoredItem(v3.copy(sponsoredItem = sponsor.copy(type = CreativeType.VIDEO)), now, setOf("sponsor")))
     }
@@ -122,12 +159,10 @@ class OfflinePlaybackRulesTest {
         assertTrue(shouldPollForManifestUpdate(181_000L, 1_000L))
     }
 
-    @Test fun scheduleEligibilityIsRecheckedAtTheNextManifestBoundary() {
-        val starts = now.plusSeconds(300)
-        val scheduled = item("starts-soon").copy(startAt = starts)
-        assertEquals(60_000L, scheduleReevaluationDelayMillis(manifest(listOf(scheduled)), now))
-        assertEquals(60_000L, scheduleReevaluationDelayMillis(manifest(listOf(item("no-boundary"))), now))
-        assertEquals(starts, nextScheduleBoundary(scheduled, now, ZoneId.of("UTC")))
+    @Test fun campaignDateMetadataDoesNotCreateTimeBasedDeliveryBoundaries() {
+        val scheduled = item("starts-soon").copy(startAt = now.plusSeconds(300), endAt = now.minusSeconds(1))
+        assertEquals(scheduled.id, nextVerifiedCachedItem(manifest(listOf(scheduled)), ScheduleEngine(), now, 0, setOf(scheduled.id))?.id)
+        assertEquals(scheduled.id, nextVerifiedCachedItem(manifest(listOf(scheduled)), ScheduleEngine(), now.plusSeconds(3600), 0, setOf(scheduled.id))?.id)
     }
 
     @Test fun staleColdStartClockCanSelectCachedCampaignAfterSystemTimeCorrection() {
@@ -135,7 +170,7 @@ class OfflinePlaybackRulesTest {
         val campaign = item("active-after-time-sync").copy(startAt = correctedTime.minusSeconds(60), endAt = correctedTime.plusSeconds(3_600))
         val cached = manifest(listOf(campaign), correctedTime.plusSeconds(900))
         val staleClock = correctedTime.minusSeconds(459L * 24 * 60 * 60)
-        assertNull(nextVerifiedCachedItem(cached, ScheduleEngine(), staleClock, 0, setOf(campaign.id)))
+        assertEquals(campaign.id, nextVerifiedCachedItem(cached, ScheduleEngine(), staleClock, 0, setOf(campaign.id))?.id)
         assertEquals(campaign.id, nextVerifiedCachedItem(cached, ScheduleEngine(), correctedTime, 0, setOf(campaign.id))?.id)
         assertEquals(60_000L, scheduleReevaluationDelayMillis(cached, correctedTime))
     }
@@ -153,17 +188,19 @@ class OfflinePlaybackRulesTest {
         assertTrue(shouldRefreshAfterNetworkRecovery(31_000L, 1_000L))
     }
 
-    @Test fun refreshedManifestCannotExtendPlaybackPastCampaignOrAllocationEnd() {
+    @Test fun legacyCampaignEndMetadataDoesNotEndAnAuthorizedStateGrant() {
         val item = item("allocated-slot").copy(startAt = now.minusSeconds(60), endAt = now.plusSeconds(600))
         val refreshed = manifest(listOf(item), now.plusSeconds(900))
         assertTrue(manifestIsAuthorizedAt(refreshed, now.plusSeconds(599)))
-        assertEquals(item.id, nextVerifiedManifestItem(refreshed, ScheduleEngine(), now.plusSeconds(599), 0, setOf(item.id))?.id)
-        assertNull(nextVerifiedManifestItem(refreshed, ScheduleEngine(), now.plusSeconds(600), 0, setOf(item.id)))
+        assertEquals(item.id, nextVerifiedManifestItem(refreshed, ScheduleEngine(), now.plusSeconds(600), 0, setOf(item.id))?.id)
+        assertEquals(item.id, nextVerifiedManifestItem(refreshed, ScheduleEngine(), now.plusSeconds(86_400), 0, setOf(item.id))?.id)
     }
 
-    @Test fun missingExpiryDoesNotCreateAnOfflineGracePeriod() {
-        assertFalse(manifestIsAuthorizedAt(manifest(listOf(item("a")), null), now))
-        assertNull(nextVerifiedManifestItem(manifest(listOf(item("a")), null), ScheduleEngine(), now, 0, setOf("a")))
+    @Test fun missingRefreshExpiryDoesNotGatePreviouslyAcceptedCachedStateGrant() {
+        val cached = manifest(listOf(item("a")), null)
+        assertFalse(manifestIsAuthorizedAt(cached, now))
+        assertFalse(canCommitManifestResponse(cached, 1, 1, now))
+        assertEquals("a", nextVerifiedCachedItem(cached, ScheduleEngine(), now, 0, setOf("a"))?.id)
     }
 
     @Test fun playlistTransitionsOnlyAcrossVerifiedScheduledItems() {
@@ -175,12 +212,12 @@ class OfflinePlaybackRulesTest {
         assertEquals("a", nextVerifiedManifestItem(list, scheduler, now, 2, verified)?.id)
     }
 
-    @Test fun pacedItemsRemainSubjectToTheirScheduleBucket() {
+    @Test fun legacyPacingMetadataDoesNotGateStateAndQuotaEligibleDelivery() {
         val paced = item("paced", priority = 1, intervalSeconds = 600.0)
         val scheduler = ScheduleEngine()
         assertEquals("paced", nextVerifiedManifestItem(manifest(listOf(paced)), scheduler, now, 0, setOf("paced"))?.id)
         scheduler.recordStarted(paced, now)
-        assertNull(nextVerifiedManifestItem(manifest(listOf(paced)), scheduler, now.plusSeconds(20), 0, setOf("paced")))
+        assertEquals("paced", nextVerifiedManifestItem(manifest(listOf(paced)), scheduler, now.plusSeconds(20), 0, setOf("paced"))?.id)
     }
 
     @Test fun unavailableEmergencyCreativeDoesNotFallThroughToLowerPriorityAd() {
@@ -206,11 +243,11 @@ class OfflinePlaybackRulesTest {
 
     @Test fun emptyPlayerMessageExplainsMissingOrUnavailableAdsWithoutPromisingAutomaticResume() {
         val emptyServerManifest = manifest(emptyList())
-        assertTrue(offlineEmptyMessage(emptyServerManifest, now, emptySet()).contains("No approved ads are available"))
+        assertTrue(offlineEmptyMessage(emptyServerManifest, now, emptySet()).contains("No delivery is authorized for this screen"))
         assertTrue(offlineEmptyMessage(manifest(listOf(item("a"))), now, emptySet()).contains("No verified ads are cached"))
-        assertTrue(offlineEmptyMessage(manifest(listOf(item("a"))), now, setOf("a")).contains("No ad is eligible right now"))
-        assertTrue(offlineEmptyMessage(manifest(listOf(item("a")), now), now, setOf("a")).contains("Authorization expired"))
-        assertFalse(offlineEmptyMessage(manifest(listOf(item("a")), now), now, emptySet(), allowExpiredCachedManifest = true).contains("Authorization expired"))
+        assertTrue(offlineEmptyMessage(manifest(listOf(item("a").copy(deliveryQuota = com.ooro.screenplayer.model.DeliveryQuota("g", 1, 0, false)))), now, setOf("a")).contains("quota is exhausted"))
+        assertTrue(offlineEmptyMessage(manifest(listOf(item("a").copy(deliveryQuota = null))), now, setOf("a")).contains("per-screen delivery quota"))
+        assertFalse(offlineEmptyMessage(manifest(listOf(item("a")), now), now, emptySet(), allowExpiredCachedManifest = true).contains("campaign schedule"))
     }
 
     @Test fun cachedStartupSelectsVerifiedAuthorizedCreativeForThePairedScreenWithoutNetwork() {
@@ -224,8 +261,8 @@ class OfflinePlaybackRulesTest {
     @Test fun cachedStartupFailsClosedForExpiredOrWrongScreenManifest() {
         val playlist = manifest(listOf(item("cached")))
         val expired = resolveCachedStartup(playlist.copy(validUntil = now), "screen-test", setOf("cached"), ScheduleEngine(), now)
-        assertEquals(CachedStartupBlock.AUTHORIZATION_EXPIRED, expired.block)
-        assertNull(expired.firstItem)
+        assertEquals(CachedStartupBlock.NONE, expired.block)
+        assertEquals("cached", expired.firstItem?.id)
         val wrongScreen = resolveCachedStartup(playlist, "different-screen", setOf("cached"), ScheduleEngine(), now)
         assertEquals(CachedStartupBlock.SCREEN_ID_MISMATCH, wrongScreen.block)
         assertNull(wrongScreen.manifest)
@@ -248,7 +285,7 @@ class OfflinePlaybackRulesTest {
         )
         assertEquals(CachedStartupBlock.NONE, resolution.block)
         assertEquals("cached", resolution.firstItem?.id)
-        assertNull(nextVerifiedManifestItem(expiredLease, ScheduleEngine(), now, 0, setOf("cached")))
+        assertEquals("cached", nextVerifiedManifestItem(expiredLease, ScheduleEngine(), now, 0, setOf("cached"))?.id)
         assertEquals("cached", nextVerifiedCachedItem(expiredLease, ScheduleEngine(), now, 0, setOf("cached"))?.id)
     }
 
@@ -259,16 +296,16 @@ class OfflinePlaybackRulesTest {
         )
         val issued = manifest(listOf(item), validUntil = now.plusSeconds(15 * 60))
         val afterTenHours = now.plusSeconds(10 * 60 * 60)
-        assertNull(nextVerifiedManifestItem(issued, ScheduleEngine(), afterTenHours, 0, setOf(item.id)))
+        assertEquals(item.id, nextVerifiedManifestItem(issued, ScheduleEngine(), afterTenHours, 0, setOf(item.id))?.id)
         assertEquals(item.id, nextVerifiedCachedItem(issued, ScheduleEngine(), afterTenHours, 0, setOf(item.id))?.id)
-        assertNull(nextVerifiedCachedItem(issued, ScheduleEngine(), now.plusSeconds(24 * 60 * 60), 0, setOf(item.id)))
+        assertEquals(item.id, nextVerifiedCachedItem(issued, ScheduleEngine(), now.plusSeconds(24 * 60 * 60), 0, setOf(item.id))?.id)
     }
 
-    @Test fun offlineCachedPlaybackStillHonorsCampaignEndTimeAndScreenIdentity() {
-        val ended = item("ended").copy(endAt = now)
+    @Test fun offlineCachedPlaybackIgnoresLegacyCampaignDatesButHonorsScreenIdentity() {
+        val ended = item("ended").copy(endAt = now.minusSeconds(1))
         val expiredLease = manifest(listOf(ended), now.minusSeconds(1))
         val endedResolution = resolveCachedStartup(expiredLease, "screen-test", setOf("ended"), ScheduleEngine(), now, allowExpiredForOfflinePlayback = true)
-        assertEquals(CachedStartupBlock.NO_ELIGIBLE_VERIFIED_ASSET, endedResolution.block)
+        assertEquals(CachedStartupBlock.NONE, endedResolution.block)
         val wrongScreen = resolveCachedStartup(expiredLease, "different-screen", setOf("ended"), ScheduleEngine(), now, allowExpiredForOfflinePlayback = true)
         assertEquals(CachedStartupBlock.SCREEN_ID_MISMATCH, wrongScreen.block)
         assertNull(wrongScreen.firstItem)

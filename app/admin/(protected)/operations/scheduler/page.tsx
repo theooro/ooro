@@ -1,18 +1,7 @@
 import { redirect } from "next/navigation";
-import { canAdmin } from "@/apps/api/src/domain/admin-auth";
-import { AdminAuthError } from "@/lib/auth/backend-session";
-import { OperationsScheduler } from "@/components/admin/operations-scheduler";
-import { getAuthenticatedAdmin } from "@/lib/auth/backend-session";
 
-export default async function Page({ searchParams }: { searchParams: Promise<{ campaignId?: string }> }) {
-  try {
-    const admin = await getAuthenticatedAdmin({ refreshSession: false });
-    if (!canAdmin(admin.role, "campaign:schedule")) redirect("/unauthorized");
-    const { campaignId } = await searchParams;
-    return <OperationsScheduler canOverrideInventory={admin.role === "SUPER_ADMIN"} canApproveCreative={["SUPER_ADMIN", "ADMIN"].includes(admin.role)} initialCampaignId={campaignId} />;
-  } catch (error) {
-    if (error instanceof AdminAuthError && error.status === 401) redirect("/admin/login");
-    if (error instanceof AdminAuthError && error.status === 403) redirect("/unauthorized");
-    throw error;
-  }
+// Historical campaign date windows remain stored for audit, but new delivery
+// is controlled by campaign state and an explicit device quota.
+export default function DeprecatedSchedulerPage() {
+  redirect("/admin/campaigns");
 }

@@ -34,8 +34,7 @@ class DeviceOsApi {
     fun commands(credentials: DeviceCredentials): List<DeviceOsCommand> {
         val commands = request("/api/deviceos/commands", "GET", credentials.token, null).optJSONArray("data") ?: JSONArray()
         return (0 until commands.length()).map { index ->
-            val item = commands.getJSONObject(index)
-            DeviceOsCommand(item.getString("id"), item.getString("commandType"), item.getString("packageName"), item.optJSONObject("payload"), item.optString("expiresAt").takeIf { it.isNotBlank() })
+            parseDeviceOsCommand(commands.getJSONObject(index))
         }
     }
     fun acknowledgeCommand(credentials: DeviceCredentials, commandId: String, status: String, errorCode: String? = null, errorMessage: String? = null, metadata: JSONObject? = null) {
@@ -74,6 +73,31 @@ class DeviceOsApi {
         }
     }
     private fun bodyMethod(method: String) = method == "POST" || method == "PUT"
+}
+
+/** Parses the fields returned by GET /api/deviceos/commands and rejects unsafe records. */
+internal fun parseDeviceOsCommand(item: JSONObject): DeviceOsCommand {
+    fun requiredString(key: String): String = item.opt(key).let { value ->
+        (value as? String)?.takeIf { it.isNotBlank() } ?: error("DEVICEOS_COMMAND_${key.uppercase()}_INVALID")
+    }
+
+    val id = requiredString("id")
+    require(runCatching { java.util.UUID.fromString(id) }.isSuccess) { "DEVICEOS_COMMAND_ID_INVALID" }
+    val commandType = requiredString("commandType")
+    require(commandType in setOf("RESTART_APP", "UNINSTALL_APP")) { "DEVICEOS_COMMAND_TYPE_INVALID" }
+    val packageName = requiredString("packageName")
+    require(packageName.matches(Regex("^[a-zA-Z][a-zA-Z0-9_]*(?:\\.[a-zA-Z0-9_]+)+$"))) { "DEVICEOS_COMMAND_PACKAGE_INVALID" }
+    val payload = when (val value = item.opt("payload")) {
+        null, JSONObject.NULL -> null
+        is JSONObject -> value
+        else -> error("DEVICEOS_COMMAND_PAYLOAD_INVALID")
+    }
+    val expiresAt = when (val value = item.opt("expiresAt")) {
+        null, JSONObject.NULL -> null
+        is String -> value.also { require(runCatching { java.time.Instant.parse(it) }.isSuccess) { "DEVICEOS_COMMAND_EXPIRY_INVALID" } }
+        else -> error("DEVICEOS_COMMAND_EXPIRY_INVALID")
+    }
+    return DeviceOsCommand(id, commandType, packageName, payload, expiresAt)
 }
 
 fun resumeRangeStartsAt(contentRange: String?, expectedStart: Long): Boolean {

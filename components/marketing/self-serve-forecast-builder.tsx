@@ -5,7 +5,7 @@ import type { GeocodingResult } from "@/lib/geocoding";
 import { MIN_SELF_SERVE_BUDGET_RUPEES } from "@/lib/campaign-policy";
 
 const CampaignTargetMap = dynamic(() => import("./campaign-target-map").then(module => module.CampaignTargetMap), { ssr: false, loading: () => <div className="flex h-[230px] items-center justify-center rounded-[10px] border bg-[#e6ece0] text-xs text-neutral-500">Loading coverage map…</div> });
-const MIN_CAMPAIGN_DAYS = 30;
+const FORECAST_HORIZON_DAYS = 30;
 const STANDARD_AUTO_DAY_RATE = 59;
 const AGENCY_AUTO_DAY_RATE = 49;
 const PREMIUM_AUTO_DAY_RATE = 69;
@@ -13,24 +13,13 @@ const cities: Record<string, [number, number]> = { bengaluru: [12.9716, 77.5946]
 type Forecast = { estimatedImpressionsLow: number; estimatedImpressionsHigh: number; campaignDays: number; availability: "AVAILABLE" | "LIMITED" | "UNSUPPORTED"; confidence: string; forecastVersion?: string; generatedAt?: string; forecastExpiresAt?: string };
 const money = (value: number) => `₹${Math.round(value).toLocaleString("en-IN")}`;
 
-function currentIndiaDate() {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
-  const part = (type: string) => parts.find(item => item.type === type)?.value ?? "";
-  return `${part("year")}-${part("month")}-${part("day")}`;
-}
-function addDays(date: string, days: number) { const value = new Date(`${date}T00:00:00.000Z`); value.setUTCDate(value.getUTCDate() + days); return value.toISOString().slice(0, 10); }
-function inclusiveDays(start: string, end: string) { return Math.max(0, Math.floor((Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86400000) + 1); }
-
 export function SelfServeForecastBuilder() {
   const [location, setLocation] = useState("Bengaluru");
   const [selected, setSelected] = useState<GeocodingResult | null>(null);
   const [suggestions, setSuggestions] = useState<GeocodingResult[]>([]);
   const [searching, setSearching] = useState(false);
-  const [today, setToday] = useState("");
   const [area, setArea] = useState("");
   const [radiusKm, setRadiusKm] = useState(3);
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
   const [tier, setTier] = useState<"STANDARD" | "PREMIUM_PLUS">("STANDARD");
   const [customerType, setCustomerType] = useState<"BRAND" | "AGENCY">("BRAND");
   const [autos, setAutos] = useState(5);
@@ -39,38 +28,20 @@ export function SelfServeForecastBuilder() {
   const [error, setError] = useState("");
   const [retryNonce, setRetryNonce] = useState(0);
   const locationInput = useRef<HTMLInputElement>(null);
-  const startDateRef = useRef("");
 
   const unitRate = tier === "PREMIUM_PLUS" ? PREMIUM_AUTO_DAY_RATE : customerType === "AGENCY" ? AGENCY_AUTO_DAY_RATE : STANDARD_AUTO_DAY_RATE;
-  const campaignDays = startDate && endDate ? inclusiveDays(startDate, endDate) : 0;
+  const campaignDays = FORECAST_HORIZON_DAYS;
   const parsedBudget = unitRate * autos * campaignDays;
   const validAutos = Number.isInteger(autos) && autos >= 1;
   const validBudget = Number.isFinite(parsedBudget) && parsedBudget >= MIN_SELF_SERVE_BUDGET_RUPEES;
-  const validDates = Boolean(today && startDate && endDate && startDate >= today && campaignDays >= MIN_CAMPAIGN_DAYS);
-  const minimumEndDate = startDate ? addDays(startDate, MIN_CAMPAIGN_DAYS - 1) : today ? addDays(today, MIN_CAMPAIGN_DAYS - 1) : "";
 
   // Never reinterpret an unknown advertiser address as Bengaluru: that would
   // produce a credible-looking forecast for the wrong physical location.
   const resolvedCenter = useMemo<[number, number] | null>(() => selected ? [selected.latitude, selected.longitude] : cities[location.trim().toLowerCase()] ?? null, [location, selected]);
   const locationResolved = Boolean(resolvedCenter && resolvedCenter.every(Number.isFinite));
   const center: [number, number] = resolvedCenter ?? cities.bengaluru;
-  const key = `${location}|${area}|${radiusKm}|${startDate}|${endDate}|${tier}|${customerType}|${autos}|${parsedBudget}|${center.join(",")}`;
+  const key = `${location}|${area}|${radiusKm}|${tier}|${customerType}|${autos}|${parsedBudget}|${center.join(",")}`;
 
-  useEffect(() => {
-    // Refresh date bounds when the tab returns to the foreground.
-    const refreshDate = () => {
-      const localDay = currentIndiaDate();
-      setToday(localDay);
-      const nextStart = startDateRef.current && startDateRef.current >= localDay ? startDateRef.current : localDay;
-      startDateRef.current = nextStart;
-      setStartDate(nextStart);
-      setEndDate(previous => previous && previous >= addDays(nextStart, MIN_CAMPAIGN_DAYS - 1) ? previous : addDays(nextStart, MIN_CAMPAIGN_DAYS - 1));
-    };
-    refreshDate();
-    window.addEventListener("focus", refreshDate);
-    document.addEventListener("visibilitychange", refreshDate);
-    return () => { window.removeEventListener("focus", refreshDate); document.removeEventListener("visibilitychange", refreshDate); };
-  }, []);
   useEffect(() => {
     if (selected?.formattedAddress === location || location.trim().length < 3) { setSuggestions([]); return; }
     const controller = new AbortController();
@@ -86,12 +57,12 @@ export function SelfServeForecastBuilder() {
     return () => { controller.abort(); window.clearTimeout(timer); };
   }, [location, selected]);
   useEffect(() => {
-    if (!validAutos || !validBudget || !validDates || !locationResolved) { setForecast(null); setError(""); return; }
+    if (!validAutos || !validBudget || !locationResolved) { setForecast(null); setError(""); return; }
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       setLoading(true); setError("");
       try {
-        const response = await fetch("/api/campaigns/forecast", { method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal, body: JSON.stringify({ location, latitude: center[0], longitude: center[1], radiusKm, startDate, endDate, deliveryTier: tier, budget: parsedBudget }) });
+        const response = await fetch("/api/campaigns/forecast", { method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal, body: JSON.stringify({ location, latitude: center[0], longitude: center[1], radiusKm, deliveryTier: tier, budget: parsedBudget }) });
         const body = await response.json().catch(() => null);
         if (!response.ok) throw new Error(response.status === 503 ? "We couldn't calculate delivery right now. Please try again." : body?.error?.message || "Forecast unavailable");
         setForecast(body);
@@ -100,18 +71,11 @@ export function SelfServeForecastBuilder() {
       } finally { if (!controller.signal.aborted) setLoading(false); }
     }, 250);
     return () => { controller.abort(); window.clearTimeout(timer); };
-  }, [key, retryNonce, validAutos, validBudget, validDates, locationResolved, location, radiusKm, startDate, endDate, tier, parsedBudget, center]);
+  }, [key, retryNonce, validAutos, validBudget, locationResolved, location, radiusKm, tier, parsedBudget, center]);
 
-  function changeStartDate(value: string) {
-    startDateRef.current = value;
-    setStartDate(value);
-    if (!value) { setEndDate(""); return; }
-    const minimumEnd = addDays(value, MIN_CAMPAIGN_DAYS - 1);
-    setEndDate(previous => !previous || previous < minimumEnd ? minimumEnd : previous);
-  }
   function launch() {
-    if (!validAutos || !validBudget || !validDates || !locationResolved) return;
-    window.localStorage.setItem("ooro.campaign-draft", JSON.stringify({ city: selected?.city || location, area: selected?.locality || area, location, formattedLocation: selected?.formattedAddress || location, start: startDate, end: endDate, budget: parsedBudget.toFixed(2), autos, autoDayRate: unitRate, customerType, deliveryTier: tier, campaignCenterLat: center[0], campaignCenterLng: center[1], radiusKm, forecastSnapshot: forecast && forecast.availability !== "UNSUPPORTED" ? forecast : null, forecastGeneratedAt: forecast?.generatedAt, forecastExpiresAt: forecast?.forecastExpiresAt, forecastVersion: forecast?.forecastVersion }));
+    if (!validAutos || !validBudget || !locationResolved) return;
+    window.localStorage.setItem("ooro.campaign-draft", JSON.stringify({ city: selected?.city || location, area: selected?.locality || area, location, formattedLocation: selected?.formattedAddress || location, budget: parsedBudget.toFixed(2), autos, autoDayRate: unitRate, customerType, deliveryTier: tier, campaignCenterLat: center[0], campaignCenterLng: center[1], radiusKm, forecastSnapshot: forecast && forecast.availability !== "UNSUPPORTED" ? forecast : null, forecastGeneratedAt: forecast?.generatedAt, forecastExpiresAt: forecast?.forecastExpiresAt, forecastVersion: forecast?.forecastVersion }));
     window.location.href = "/signup?next=/campaigns/new";
   }
   const unsupported = forecast?.availability === "UNSUPPORTED";
@@ -127,25 +91,21 @@ export function SelfServeForecastBuilder() {
           <label className="text-sm font-medium">Target area (optional)<input value={area} onChange={event => setArea(event.target.value)} placeholder="Neighbourhood or landmark" className="mt-2 block w-full rounded-[8px] border border-neutral-300 px-3 py-3"/></label>
         </div>
         <div><p className="text-sm font-medium">Coverage radius</p><div className="mt-3 flex flex-wrap gap-2">{[1, 2, 3, 5, 8, 10].map(value => <button key={value} type="button" aria-pressed={value === radiusKm} onClick={() => setRadiusKm(value)} className={`rounded-full border px-4 py-2 text-sm ${value === radiusKm ? "border-black bg-black text-white" : "border-neutral-300"}`}>{value} km</button>)}</div></div>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <label className="text-sm font-medium">Start date<input type="date" min={today} value={startDate} onChange={event => changeStartDate(event.target.value)} className="mt-2 block w-full rounded-[8px] border border-neutral-300 px-3 py-3"/></label>
-          <label className="text-sm font-medium">End date<input type="date" min={minimumEndDate} value={endDate} onChange={event => setEndDate(event.target.value)} className="mt-2 block w-full rounded-[8px] border border-neutral-300 px-3 py-3"/><span className="mt-1 block text-xs text-neutral-500">Minimum campaign duration: 30 days.</span></label>
-        </div>
+
       </div>
 
       <div className="min-w-0 space-y-6 rounded-[10px] bg-[#111] p-5 text-white sm:p-7">
-        <div><p className="text-xs uppercase tracking-[.18em] text-neutral-400">Build your campaign</p><h2 className="mt-2 text-2xl font-medium">Plan your campaign</h2><p className="mt-2 text-xs leading-5 text-neutral-400">Choose a delivery tier, auto count and dates. We’ll show the base media estimate and an indicative delivery scenario.</p></div>
+        <div><p className="text-xs uppercase tracking-[.18em] text-neutral-400">Build your campaign</p><h2 className="mt-2 text-2xl font-medium">Plan your campaign</h2><p className="mt-2 text-xs leading-5 text-neutral-400">Choose a delivery tier, auto count and location. The 30-day figure is a planning estimate, not a campaign delivery window.</p></div>
         <div><p className="text-sm font-medium">Who is planning this campaign?</p><div className="mt-3 grid grid-cols-2 gap-2"><button type="button" aria-pressed={customerType === "BRAND"} onClick={() => setCustomerType("BRAND")} className={`min-h-10 rounded-lg border px-3 py-2 text-sm ${customerType === "BRAND" ? "border-white bg-white font-medium text-black" : "border-white/30 text-white"}`}>Brand · ₹59</button><button type="button" aria-pressed={customerType === "AGENCY"} onClick={() => setCustomerType("AGENCY")} className={`min-h-10 rounded-lg border px-3 py-2 text-sm ${customerType === "AGENCY" ? "border-white bg-white font-medium text-black" : "border-white/30 text-white"}`}>Agency · ₹49</button></div><p className="mt-2 text-xs text-neutral-400">Standard rate per auto per day. Agency pricing is for verified agency accounts.</p></div>
         <div><p className="text-sm font-medium">Delivery tier</p><div className="mt-3 grid gap-3 sm:grid-cols-2"><TierButton selected={tier === "STANDARD"} onClick={() => setTier("STANDARD")} title="Standard" rate={customerType === "AGENCY" ? AGENCY_AUTO_DAY_RATE : STANDARD_AUTO_DAY_RATE} text="Flexible everyday delivery across eligible OORO inventory."/><TierButton selected={tier === "PREMIUM_PLUS"} onClick={() => setTier("PREMIUM_PLUS")} title="Premium+" rate={PREMIUM_AUTO_DAY_RATE} text="Priority access to premium OORO inventory." badge/></div></div>
         <label className="block text-sm font-medium">Number of autos<input inputMode="numeric" type="number" min="1" step="1" value={autos} onChange={event => setAutos(Number(event.target.value))} className="mt-2 block w-full rounded-[8px] border border-white/20 bg-white/10 px-3 py-3 text-xl text-white"/><span className="mt-1 block text-xs font-normal text-neutral-400">Enter how many auto screens you want included in the estimate.</span></label>
-        {validAutos && validDates && <div className="rounded-lg border border-white/15 bg-white/[.04] p-4"><p className="text-xs font-medium text-neutral-300">Indicative base media estimate</p><p className="mt-2 text-2xl font-semibold">{money(parsedBudget)}</p><p className="mt-1 text-xs leading-5 text-neutral-400">{money(unitRate)} × {autos} {autos === 1 ? "auto" : "autos"} × {campaignDays} days</p><p className="mt-3 border-t border-white/10 pt-3 text-xs leading-5 text-neutral-400">One month minimum. Campaigns of 3 months or longer may qualify for a negotiated discount; this estimate uses the listed daily rate and does not apply a discount.</p></div>}
+        {validAutos && validBudget && <div className="rounded-lg border border-white/15 bg-white/[.04] p-4"><p className="text-xs font-medium text-neutral-300">Indicative base media estimate</p><p className="mt-2 text-2xl font-semibold">{money(parsedBudget)}</p><p className="mt-1 text-xs leading-5 text-neutral-400">{money(unitRate)} × {autos} {autos === 1 ? "auto" : "autos"} × {campaignDays} days</p><p className="mt-3 border-t border-white/10 pt-3 text-xs leading-5 text-neutral-400">Planning estimate only. Campaign delivery has no start/end date or daily-hour window; OORO confirms budget, approval, state and delivery quota separately.</p></div>}
         {!validAutos && <p role="alert" className="text-sm text-[#f7df72]">Enter a whole number of autos, starting from 1.</p>}
-        {today && !validDates && <p role="alert" className="text-sm text-[#f7df72]">Choose dates from today onward with at least 30 campaign days.</p>}
         <div className="border-t border-white/15 pt-5">
-          {loading ? <p role="status" className="text-sm text-neutral-400">Updating estimated delivery…</p> : error ? <div role="alert" className="space-y-3 text-sm text-[#f7df72]"><p>{error}</p><button type="button" onClick={() => setRetryNonce(value => value + 1)} className="rounded border border-[#f7df72]/50 px-3 py-2 text-xs text-[#f7df72]">Retry forecast</button></div> : unsupported ? <div className="space-y-3 text-sm text-neutral-300"><p>Confirmed delivery is not currently available for this location. You can still submit your requirements for a manual availability review.</p><button type="button" onClick={() => { locationInput.current?.focus(); locationInput.current?.select(); }} className="rounded border border-white/25 px-3 py-2 text-xs">Change location</button></div> : forecast ? <div className="grid gap-4 sm:grid-cols-2"><Metric label="Estimated passenger impressions" value={`${forecast.estimatedImpressionsLow.toLocaleString("en-IN")} – ${forecast.estimatedImpressionsHigh.toLocaleString("en-IN")}`}/><Metric label="Campaign duration" value={`${forecast.campaignDays} ${forecast.campaignDays === 1 ? "day" : "days"}`}/><p className="col-span-full text-xs leading-5 text-neutral-400">Delivery is an indicative scenario based on model assumptions and the estimated media total. OORO confirms eligible inventory and final commercial terms before scheduling.</p></div> : !locationResolved ? <p role="status" className="text-sm text-[#f7df72]">Choose a supported city or select a verified address suggestion. OORO cannot estimate delivery for an unverified location.</p> : <p className="text-sm text-neutral-400">Enter a valid auto count and campaign dates to see the forecast.</p>}
+          {loading ? <p role="status" className="text-sm text-neutral-400">Updating estimated delivery…</p> : error ? <div role="alert" className="space-y-3 text-sm text-[#f7df72]"><p>{error}</p><button type="button" onClick={() => setRetryNonce(value => value + 1)} className="rounded border border-[#f7df72]/50 px-3 py-2 text-xs text-[#f7df72]">Retry forecast</button></div> : unsupported ? <div className="space-y-3 text-sm text-neutral-300"><p>Confirmed delivery is not currently available for this location. You can still submit your requirements for a manual availability review.</p><button type="button" onClick={() => { locationInput.current?.focus(); locationInput.current?.select(); }} className="rounded border border-white/25 px-3 py-2 text-xs">Change location</button></div> : forecast ? <div className="grid gap-4 sm:grid-cols-2"><Metric label="Estimated passenger impressions" value={`${forecast.estimatedImpressionsLow.toLocaleString("en-IN")} – ${forecast.estimatedImpressionsHigh.toLocaleString("en-IN")}`}/><Metric label="Planning estimate horizon" value={`${forecast.campaignDays} days`}/><p className="col-span-full text-xs leading-5 text-neutral-400">Delivery is an indicative scenario based on model assumptions and the estimated media total. OORO confirms eligibility and final commercial terms before campaign activation.</p></div> : !locationResolved ? <p role="status" className="text-sm text-[#f7df72]">Choose a supported city or select a verified address suggestion. OORO cannot estimate delivery for an unverified location.</p> : <p className="text-sm text-neutral-400">Enter a valid auto count and a supported location to see the forecast.</p>}
         </div>
         <p className="text-xs leading-5 text-neutral-400">Availability and final pricing are confirmed before booking. This estimate does not guarantee screens, passenger impressions or campaign results.</p>
-        <button type="button" disabled={!validAutos || !validBudget || !validDates || !locationResolved} onClick={launch} className="w-full rounded-[8px] bg-[var(--brand-yellow)] px-4 py-3 text-sm font-medium text-black disabled:cursor-not-allowed disabled:opacity-50">{forecast && !unsupported ? "Continue to campaign request" : "Request manual availability review"}</button>
+        <button type="button" disabled={!validAutos || !validBudget || !locationResolved} onClick={launch} className="w-full rounded-[8px] bg-[var(--brand-yellow)] px-4 py-3 text-sm font-medium text-black disabled:cursor-not-allowed disabled:opacity-50">{forecast && !unsupported ? "Continue to campaign request" : "Request manual availability review"}</button>
       </div>
     </div>
   </section>;

@@ -29,7 +29,7 @@ const questions = [
   },
   {
     question: "How much does digital advertising inside an auto cost?",
-    answer: "Costs depend on the campaign scope, dates, eligible inventory and creative needs. The OORO planning tool accepts budgets starting at ₹500; that input minimum is not a guaranteed media rate or booking."
+    answer: "Costs depend on campaign scope, eligible inventory and creative needs. The OORO planning tool accepts budgets starting at ₹500; that input minimum is not a guaranteed media rate or booking."
   },
   {
     question: "What does proof of play tell me?",
@@ -104,7 +104,7 @@ export default function Page() {
 
       <section className="mt-12 border-t border-black/15 pt-8">
         <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">Budget, creative and measurement</h2>
-        <p className="mt-5 max-w-3xl text-base leading-8 text-neutral-700">A useful proposal separates media delivery from creative production, taxes, campaign dates and any optional services. OORO&apos;s planning tool starts at a ₹500 input budget, but a planning estimate is not confirmed availability or a final quote. For a first test, decide what you want the passenger to remember and how you will measure the result outside the screen.</p>
+        <p className="mt-5 max-w-3xl text-base leading-8 text-neutral-700">A useful proposal separates media delivery from creative production, taxes and any optional services. OORO&apos;s planning tool starts at a ₹500 input budget, but a planning estimate is not confirmed availability or a final quote. For a first test, decide what you want the passenger to remember and how you will measure the result outside the screen.</p>
         <div className="mt-5 flex flex-wrap gap-4 text-sm font-medium">
           <Link href="/auto-advertising-cost-bengaluru" className="underline underline-offset-4">Understand auto advertising costs</Link>
           <Link href="/tools/ad-budget-planner" className="underline underline-offset-4">Use the budget planner</Link>
@@ -117,7 +117,7 @@ export default function Page() {
         <p className="mt-5 max-w-3xl text-base leading-8 text-neutral-700">Use these questions to compare an OORO proposal with any other advertising quote. Get the answers in writing so a preference, estimate or sample report is not mistaken for a confirmed placement.</p>
         <ul className="mt-5 grid gap-3 sm:grid-cols-2">
           {[
-            "Which screens and campaign dates are confirmed for this request?",
+            "Which screens and campaign state are confirmed for this request?",
             "What is included in the price, and what costs extra?",
             "What file dimensions, duration and review deadline apply to this screen?",
             "Which delivery records will the report show, and which figures are estimates?",

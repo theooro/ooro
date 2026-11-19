@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { authorizedAllocationWindow, deliveryAssetUrl, manifestValidUntil, MANIFEST_AUTHORIZATION_LEASE_MS, manifestVersionFor, manifestVersionFromDigest, selectManifestDeliverySlots } from './campaign-eligibility.js'
+import { campaignDeliveryQuota, deliveryAssetUrl, hasVerifiedAssetMetadata, manifestDeliveryReasons, manifestValidUntil, MANIFEST_AUTHORIZATION_LEASE_MS, manifestVersionFor, manifestVersionFromDigest, selectManifestDeliverySlots } from './campaign-eligibility.js'
 import { safeDestination } from './qr-destination.js'
 
 test('manifest versions fit persisted signed INT4 fields', () => {
@@ -24,27 +24,88 @@ test('sponsored creative is selected independently and never promoted from a mai
   assert.equal(v2.sponsoredItem, null)
 })
 
-test('manifest lease is a fixed 15 minutes; creative schedule dates remain separate playback gates', () => {
+test('manifest expiry is refresh metadata, not campaign delivery eligibility', () => {
   const now = new Date('2026-11-04T12:00:00.000Z')
   const until = manifestValidUntil(now)
   assert.equal(MANIFEST_AUTHORIZATION_LEASE_MS, 900_000)
   assert.equal(until.toISOString(), '2026-11-04T12:15:00.000Z')
-  const campaignEndsAt = new Date('2026-11-04T12:10:00.000Z')
-  assert.ok(until > campaignEndsAt) // The Android selector must still enforce item.endAt.
+  assert.ok(until > now)
 })
 
-test('scheduled item validity is clipped to campaign and single-day allocation bounds', () => {
-  const allocation = new Date('2026-11-05T00:00:00.000Z')
-  const window = authorizedAllocationWindow(
-    new Date('2026-11-05T08:00:00.000Z'),
-    new Date('2026-11-06T12:00:00.000Z'),
-    allocation,
-    new Date('2026-11-05T09:00:00.000Z'),
-    new Date('2026-11-05T20:00:00.000Z'),
-  )
-  assert.equal(window?.startAt.toISOString(), '2026-11-05T09:00:00.000Z')
-  assert.equal(window?.endAt.toISOString(), '2026-11-05T20:00:00.000Z')
-  assert.equal(authorizedAllocationWindow(new Date('2026-11-04T00:00:00.000Z'), new Date('2026-11-04T23:00:00.000Z'), allocation, new Date('2026-11-05T00:00:00.000Z'), null), null)
+test('campaign delivery requires active approved funding and an explicit bounded or unlimited grant', () => {
+  const base = { campaignId: 'campaign', displayId: 'screen', revision: 2, status: 'ACTIVE', fundingStatus: 'PAID', authorizedPlays: 5, unlimited: false, consumedPlays: 2 }
+  assert.deepEqual(campaignDeliveryQuota(base), { id: 'campaign:screen', revision: 2, remainingPlays: 3, unlimited: false })
+  assert.equal(campaignDeliveryQuota({ ...base, status: 'PAUSED' }), null)
+  assert.equal(campaignDeliveryQuota({ ...base, status: 'APPROVED' }), null)
+  assert.equal(campaignDeliveryQuota({ ...base, fundingStatus: 'UNFUNDED' }), null)
+  assert.equal(campaignDeliveryQuota({ ...base, authorizedPlays: null }), null)
+  assert.equal(campaignDeliveryQuota({ ...base, consumedPlays: 5 }), null)
+  assert.deepEqual(campaignDeliveryQuota({ ...base, authorizedPlays: null, unlimited: true }), { id: 'campaign:screen', revision: 2, remainingPlays: null, unlimited: true })
+})
+
+test('missing, future, expired, and inactive legacy timing metadata never gates valid delivery', () => {
+  const base = { campaignId: 'campaign', displayId: 'assigned-screen', revision: 4, status: 'ACTIVE', fundingStatus: 'PAID', authorizedPlays: 8, unlimited: false, consumedPlays: 1 }
+  const validCampaign = { status: 'ACTIVE', fundingStatus: 'PAID', quotaAuthorized: true, approvedCreativeCount: 1, checksumVerifiedAssetCount: 1 }
+  const timingVariants = [
+    {},
+    { startsAt: new Date('2099-01-01T00:00:00Z'), endsAt: new Date('2099-02-01T00:00:00Z') },
+    { startsAt: new Date('2000-01-01T00:00:00Z'), endsAt: new Date('2000-02-01T00:00:00Z') },
+    { startTime: '23:55', endTime: '00:05', daysOfWeek: [], timezone: 'Pacific/Honolulu', scheduleActive: false },
+  ]
+
+  for (const legacyTiming of timingVariants) {
+    const quota = campaignDeliveryQuota({ ...base, ...legacyTiming })
+    assert.deepEqual(quota, { id: 'campaign:assigned-screen', revision: 4, remainingPlays: 7, unlimited: false })
+    assert.deepEqual(manifestDeliveryReasons({
+      displayEnabled: true,
+      supportsDeliveryQuota: true,
+      assignmentCount: 1,
+      campaigns: [{ ...validCampaign, ...legacyTiming }],
+      eligibleItemCount: 1,
+    }), [])
+  }
+})
+
+test('state, creative approval, screen assignment, and quota still fail closed', () => {
+  const base = { campaignId: 'campaign', displayId: 'assigned-screen', revision: 4, status: 'ACTIVE', fundingStatus: 'PAID', authorizedPlays: 8, unlimited: false, consumedPlays: 1 }
+  assert.equal(campaignDeliveryQuota({ ...base, status: 'PAUSED' }), null)
+  assert.equal(campaignDeliveryQuota({ ...base, status: 'REJECTED' }), null)
+  assert.equal(campaignDeliveryQuota({ ...base, authorizedPlays: 1, consumedPlays: 1 }), null)
+
+  const reasons = (assignmentCount: number, approvedCreativeCount: number, eligibleItemCount: number) => manifestDeliveryReasons({
+    displayEnabled: true,
+    supportsDeliveryQuota: true,
+    assignmentCount,
+    campaigns: [{ status: 'ACTIVE', fundingStatus: 'PAID', quotaAuthorized: true, approvedCreativeCount, checksumVerifiedAssetCount: approvedCreativeCount }],
+    eligibleItemCount,
+  })
+  assert.deepEqual(reasons(0, 1, 0), ['NO_ASSIGNMENT'])
+  assert.deepEqual(reasons(1, 0, 0), ['NO_APPROVED_CREATIVE'])
+  assert.deepEqual(reasons(1, 1, 0), ['NO_ELIGIBLE_CREATIVE'])
+})
+
+test('manifest diagnostics distinguish assignment, state, funding, quota, approval, and asset blockers', () => {
+  const reasons = (campaigns: Array<{ status: string; fundingStatus: string; quotaAuthorized: boolean; approvedCreativeCount: number; checksumVerifiedAssetCount: number }>, assignmentCount = campaigns.length, eligibleItemCount = 0) => manifestDeliveryReasons({ displayEnabled: true, supportsDeliveryQuota: true, assignmentCount, campaigns, eligibleItemCount })
+  assert.deepEqual(reasons([], 0), ['NO_ASSIGNMENT'])
+  assert.deepEqual(reasons([{ status: 'APPROVED', fundingStatus: 'PAID', quotaAuthorized: true, approvedCreativeCount: 1, checksumVerifiedAssetCount: 1 }]), ['CAMPAIGN_INACTIVE'])
+  assert.deepEqual(reasons([{ status: 'PAUSED', fundingStatus: 'PAID', quotaAuthorized: true, approvedCreativeCount: 1, checksumVerifiedAssetCount: 1 }]), ['CAMPAIGN_INACTIVE'])
+  assert.deepEqual(reasons([{ status: 'REJECTED', fundingStatus: 'PAID', quotaAuthorized: true, approvedCreativeCount: 1, checksumVerifiedAssetCount: 1 }]), ['CAMPAIGN_INACTIVE'])
+  assert.deepEqual(reasons([{ status: 'DRAFT', fundingStatus: 'PAID', quotaAuthorized: false, approvedCreativeCount: 0, checksumVerifiedAssetCount: 0 }]), ['APPROVAL_REQUIRED'])
+  assert.deepEqual(reasons([{ status: 'ACTIVE', fundingStatus: 'UNFUNDED', quotaAuthorized: false, approvedCreativeCount: 1, checksumVerifiedAssetCount: 1 }]), ['FUNDING_REQUIRED'])
+  assert.deepEqual(reasons([{ status: 'ACTIVE', fundingStatus: 'PAID', quotaAuthorized: false, approvedCreativeCount: 1, checksumVerifiedAssetCount: 1 }]), ['NO_DELIVERY_QUOTA'])
+  assert.deepEqual(reasons([{ status: 'ACTIVE', fundingStatus: 'PAID', quotaAuthorized: true, approvedCreativeCount: 0, checksumVerifiedAssetCount: 0 }]), ['NO_APPROVED_CREATIVE'])
+  assert.deepEqual(reasons([{ status: 'ACTIVE', fundingStatus: 'PAID', quotaAuthorized: true, approvedCreativeCount: 1, checksumVerifiedAssetCount: 0 }]), ['ASSET_UNAVAILABLE'])
+  assert.deepEqual(reasons([{ status: 'ACTIVE', fundingStatus: 'PAID', quotaAuthorized: true, approvedCreativeCount: 0, checksumVerifiedAssetCount: 0 }], 0), ['NO_ASSIGNMENT'])
+  // Legacy campaign dates and daily windows are deliberately not inputs to state-based eligibility.
+  assert.deepEqual(reasons([{ status: 'ACTIVE', fundingStatus: 'PAID', quotaAuthorized: true, approvedCreativeCount: 1, checksumVerifiedAssetCount: 1 }], 1, 1), [])
+})
+
+test('manifest delivery requires active asset metadata and an actual SHA-256 digest', () => {
+  assert.equal(hasVerifiedAssetMetadata({ active: true, url: 'https://cdn.example/ad.mp4', checksum: 'a'.repeat(64) }), true)
+  assert.equal(hasVerifiedAssetMetadata({ active: true, url: 'https://cdn.example/ad.mp4', checksum: null }), false)
+  assert.equal(hasVerifiedAssetMetadata({ active: true, url: 'https://cdn.example/ad.mp4', checksum: 'not-a-digest' }), false)
+  assert.equal(hasVerifiedAssetMetadata({ active: false, url: 'https://cdn.example/ad.mp4', checksum: 'a'.repeat(64) }), false)
+  assert.equal(hasVerifiedAssetMetadata(null), false)
 })
 
 test('relative asset URLs become device-fetchable URLs in development', () => {

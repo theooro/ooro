@@ -9,11 +9,7 @@ export interface DeviceManifestItem {
   checksum?: string;
   durationSeconds?: number;
   priority?: number;
-  startAt?: string;
-  endAt?: string;
-  daysOfWeek?: number[];
-  startTime?: string;
-  endTime?: string;
+  deliveryQuota?: { id: string; revision: number; remainingPlays: number | null; unlimited: boolean };
 }
 
 export type DriverType = "INDIVIDUAL" | "FLEET_OWNER";

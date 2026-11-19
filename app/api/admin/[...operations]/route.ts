@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { AdminAuthError, proxyAdminRequest } from "@/lib/auth/backend-session";
-const allowed = new Set(["scheduler", "scheduler/check", "scheduler/publish", "screen-groups", "overview", "proof-of-play", "audit-log", "network"]);
+const allowed = new Set(["scheduler", "screen-groups", "overview", "proof-of-play", "audit-log", "network"]);
 async function handle(request: Request, { params }: { params: Promise<{ operations: string[] }> }) {
  const requestId = randomUUID(); const path = (await params).operations.join("/");
+ if (path === "scheduler/check" || path === "scheduler/publish") return NextResponse.json({ error: { code: "CAMPAIGN_SCHEDULING_REMOVED", message: "Campaign delivery no longer accepts date or daily-window schedules. Use approved campaign state, screen assignment, and authorized delivery quota." }, requestId }, { status: 410 });
  if (!allowed.has(path)) return NextResponse.json({error:{message:"Not found"}},{status:404});
  try {
   const response = await proxyAdminRequest(`/api/admin/${path}${new URL(request.url).search}`, { method: request.method, headers: {"content-type":"application/json", "x-request-id":requestId}, ...(request.method === "GET" ? {} : { body: await request.text() }) });

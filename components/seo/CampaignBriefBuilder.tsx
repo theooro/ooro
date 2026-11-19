@@ -7,7 +7,7 @@ const fields = [
   { key: "objective", label: "Campaign objective", placeholder: "e.g. introduce a new location" },
   { key: "audience", label: "Audience context", placeholder: "Who may find this offer useful, and why?" },
   { key: "areas", label: "Preferred Bengaluru areas", placeholder: "List preferences; these are not guaranteed placements" },
-  { key: "dates", label: "Campaign dates and timing", placeholder: "Start/end dates, days or hours" },
+  { key: "delivery", label: "Delivery notes (optional)", placeholder: "Audience or placement preferences for OORO to review" },
   { key: "budget", label: "Working budget (₹)", placeholder: "Amount and what it includes" },
   { key: "message", label: "Main message and offer", placeholder: "One short message, including important terms" },
   { key: "action", label: "Call to action", placeholder: "Visit, scan, call, or remember" },
@@ -20,7 +20,7 @@ type BriefKey = (typeof fields)[number]["key"];
 
 export function CampaignBriefBuilder() {
   const [values, setValues] = useState<Record<BriefKey, string>>({
-    brand: "", objective: "", audience: "", areas: "", dates: "", budget: "",
+    brand: "", objective: "", audience: "", areas: "", delivery: "", budget: "",
     message: "", action: "", creative: "", destination: "", reporting: "",
   });
   const [copyState, setCopyState] = useState("");
