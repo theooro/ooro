@@ -40,7 +40,7 @@ internal fun resolveCustomWidgetContent(
     val binding = zone.bindingKind
     val reference = zone.referenceId
     fun activeAndVerified(item: ManifestItem?) = item?.takeIf {
-        it.id in verifiedItemIds && it.hasAuthorizedDeliveryQuota
+        it.id in verifiedItemIds && it.hasAuthorizedDeliveryQuota && it.isCampaignDateEligibleAt(now)
     }
 
     return when (zone.type) {

@@ -3,10 +3,11 @@ import { randomBytes } from 'node:crypto'
 import { prisma } from '../prisma.js'
 import { config } from '../config.js'
 import { safeDestination } from './qr-destination.js'
+import { isCampaignDateEligible } from './campaign-date-window.js'
 
 export type ManifestReason = 'NO_ASSIGNMENT' | 'DISPLAY_DISABLED' | 'CLIENT_QUOTA_UNSUPPORTED' | 'CAMPAIGN_INACTIVE' | 'APPROVAL_REQUIRED' | 'FUNDING_REQUIRED' | 'NO_DELIVERY_QUOTA' | 'NO_APPROVED_CREATIVE' | 'ASSET_UNAVAILABLE' | 'NO_ELIGIBLE_CREATIVE'
 export type DeliveryQuota = { id: string; revision: number; remainingPlays: number | null; unlimited: boolean }
-export type DisplayManifestItem = { id: string; campaignId: string; creativeId: string; assetId: string; type: string; url: string; checksum: string; durationSeconds: number; priority: number; deliveryQuota: DeliveryQuota; fitMode: string; qrEnabled: boolean; qrTargetUrl: string | null; qrLabel: string | null; qrVersion: number; offer: Record<string, unknown> }
+export type DisplayManifestItem = { id: string; campaignId: string; creativeId: string; assetId: string; type: string; url: string; checksum: string; durationSeconds: number; priority: number; startAt: string | null; endAt: string | null; deliveryQuota: DeliveryQuota; fitMode: string; qrEnabled: boolean; qrTargetUrl: string | null; qrLabel: string | null; qrVersion: number; offer: Record<string, unknown> }
 export type DisplayManifest = { manifestId: string; version: number; generatedAt: string; expiresAt: string; deliveryReasons: ManifestReason[]; layout: string | { type: string; contractVersion: number; primaryWidthPercent: number; adHeightPercent: number; qrHeightPercent: number; newsScrollSpeed: number }; news: { scrollSpeed: number; announcements: Array<{ id: string; text: string; priority: number }> }; items: DisplayManifestItem[]; sponsoredItem?: DisplayManifestItem | null }
 export type ManifestCampaignDiagnostic = { status: string; fundingStatus: string; quotaAuthorized: boolean; approvedCreativeCount: number; checksumVerifiedAssetCount: number }
 export const MANIFEST_AUTHORIZATION_LEASE_MS = 15 * 60_000
@@ -78,7 +79,7 @@ export async function buildDisplayManifest(displayId: string, now = new Date()):
   if (!display.supportsDeliveryQuota) return { manifest: emptyManifest(now), reasons: ['CLIENT_QUOTA_UNSUPPORTED'] }
   // Legacy date/schedule fields remain audit-only. Only an explicitly ACTIVE,
   // funded campaign with a bounded or explicitly unlimited device grant ships.
-  const active = display.campaignAssignments.filter(({ campaign }) => campaign.status === 'ACTIVE' && ['INTERNAL_TEST', 'PAID', 'FUNDED'].includes(campaign.commercialFundingStatus))
+  const active = display.campaignAssignments.filter(({ campaign }) => campaign.status === 'ACTIVE' && ['INTERNAL_TEST', 'PAID', 'FUNDED'].includes(campaign.commercialFundingStatus) && isCampaignDateEligible({ startsAt: campaign.startsAt, endsAt: campaign.endsAt }, now))
   const eligible: typeof active = []
   const quotaByCampaign = new Map<string, DeliveryQuota>()
   for (const assignment of active) {
@@ -96,7 +97,7 @@ export async function buildDisplayManifest(displayId: string, now = new Date()):
     const trackingUrl = trackingLink?.url ?? null
     const indiaDayStart = new Date(`${now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })}T00:00:00+05:30`)
     const scanCount = trackingUrl ? await prisma.qrScan.count({ where: { campaignId: campaign.id, creativeId: creative.id, displayId, occurredAt: { gte: indiaDayStart } } }) : null
-    return { id: creative.id, campaignId: campaign.id, creativeId: creative.id, assetId: creative.asset!.id, type: creative.type.toUpperCase() === 'VIDEO' ? 'VIDEO' : 'IMAGE', url: deliveryAssetUrl(creative.asset!.url), checksum: creative.asset!.checksum!, durationSeconds: creative.asset!.durationSeconds ?? creative.durationSeconds, priority: campaign.priority, deliveryQuota: quotaByCampaign.get(campaign.id)!, fitMode: typeof metadata.fitMode === 'string' ? metadata.fitMode : 'FIT', qrEnabled: Boolean(trackingUrl), qrTargetUrl: trackingUrl, qrLabel: creative.qrLabel ?? (typeof legacyOffer.ctaLabel === 'string' ? legacyOffer.ctaLabel : null), qrVersion: creative.qrVersion, offer: { ...offer, brandName: creative.brandName ?? metadata.brand ?? metadata.brandName, promotionalText: creative.promotionalText, ...(trackingUrl ? { qrUrl: trackingUrl, authorizedDestinationId: trackingLink?.id, scanCount, scanCountDisplayEnabled: offer.scanCountDisplayEnabled === true } : { qrUrl: null, authorizedDestinationId: null, scanCount: null }) } }
+    return { id: creative.id, campaignId: campaign.id, creativeId: creative.id, assetId: creative.asset!.id, type: creative.type.toUpperCase() === 'VIDEO' ? 'VIDEO' : 'IMAGE', url: deliveryAssetUrl(creative.asset!.url), checksum: creative.asset!.checksum!, durationSeconds: creative.asset!.durationSeconds ?? creative.durationSeconds, priority: campaign.priority, startAt: campaign.startsAt?.toISOString() ?? null, endAt: campaign.endsAt?.toISOString() ?? null, deliveryQuota: quotaByCampaign.get(campaign.id)!, fitMode: typeof metadata.fitMode === 'string' ? metadata.fitMode : 'FIT', qrEnabled: Boolean(trackingUrl), qrTargetUrl: trackingUrl, qrLabel: creative.qrLabel ?? (typeof legacyOffer.ctaLabel === 'string' ? legacyOffer.ctaLabel : null), qrVersion: creative.qrVersion, offer: { ...offer, brandName: creative.brandName ?? metadata.brand ?? metadata.brandName, promotionalText: creative.promotionalText, ...(trackingUrl ? { qrUrl: trackingUrl, authorizedDestinationId: trackingLink?.id, scanCount, scanCountDisplayEnabled: offer.scanCountDisplayEnabled === true } : { qrUrl: null, authorizedDestinationId: null, scanCount: null }) } }
   })))).sort((a, b) => b.priority - a.priority || a.campaignId.localeCompare(b.campaignId) || a.id.localeCompare(b.id))
   const deliveryItems = items
   const diagnosticCampaigns = display.campaignAssignments.map(({ campaign, offlinePlaysAuthorized, unlimitedOfflineAuthorized, offlinePlaysConsumed, offlineQuotaRevision }) => ({

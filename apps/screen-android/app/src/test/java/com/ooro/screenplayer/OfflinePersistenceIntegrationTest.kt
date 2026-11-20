@@ -126,7 +126,7 @@ class OfflinePersistenceIntegrationTest {
             }
             server.close()
         }
-        val item = ManifestItem(itemId, "campaign-approved", "creative-approved", CreativeType.IMAGE, "http://127.0.0.1:${server.localPort}/creative", checksum, 10, 1, null, null, emptySet(), null, null, deliveryQuota = DeliveryQuota("campaign-approved:${credentials.screenId}", 1, 5, false))
+        val item = ManifestItem(itemId, "campaign-approved", "creative-approved", CreativeType.IMAGE, "http://127.0.0.1:${server.localPort}/creative", checksum, 10, 1, Instant.parse("2020-01-01T00:00:00Z"), Instant.parse("2031-01-01T00:00:00Z"), emptySet(), null, null, deliveryQuota = DeliveryQuota("campaign-approved:${credentials.screenId}", 1, 5, false))
         val downloaded = AssetManager(context).ensure(item)
         serving.join()
         assertNotNull("production AssetManager should persist the downloaded asset", downloaded)
@@ -188,7 +188,7 @@ class OfflinePersistenceIntegrationTest {
     @Test fun cachedStartupRejectsAnotherDisplayAndExpiredAuthorizationAfterDatabaseReopen() = runBlocking {
         val database = open()
         val now = Instant.parse("2026-11-05T10:00:00Z")
-        val item = ManifestItem("identity-item", "campaign", "creative", CreativeType.IMAGE, "https://invalid.test/media", "a".repeat(64), 10, 0, null, null, emptySet(), null, null, deliveryQuota = DeliveryQuota("campaign:${credentials.screenId}", 1, 5, false))
+        val item = ManifestItem("identity-item", "campaign", "creative", CreativeType.IMAGE, "https://invalid.test/media", "a".repeat(64), 10, 0, now.minusSeconds(60), now.plusSeconds(600), emptySet(), null, null, deliveryQuota = DeliveryQuota("campaign:${credentials.screenId}", 1, 5, false))
         val cached = DeviceManifest(2, credentials.screenId, "UTC", listOf(item), now.plusSeconds(600))
         database.manifestDao().put(ManifestEntity(version = cached.version, timezone = cached.timezone, validUntil = cached.validUntil.toString(), json = ManifestCodec.encode(cached)))
         database.close(); db = null
@@ -238,7 +238,7 @@ class OfflinePersistenceIntegrationTest {
         val reopened = open()
         val restored = ManifestCodec.parse(reopened.manifestDao().active()!!.json)
         val proofsBefore = reopened.proofDao().pendingCount()
-        assertEquals(CachedStartupBlock.NONE,
+        assertEquals(CachedStartupBlock.NO_ELIGIBLE_VERIFIED_ASSET,
             resolveCachedStartup(restored, credentials.screenId, setOf(item.id), ScheduleEngine(), staleClock, allowExpiredForOfflinePlayback = true).block)
         val afterClockCorrection = resolveCachedStartup(
             restored, credentials.screenId, setOf(item.id), ScheduleEngine(), correctedTime,
@@ -299,7 +299,7 @@ class OfflinePersistenceIntegrationTest {
         assertEquals(item.id, nextVerifiedManifestItem(lastKnownGood, ScheduleEngine(), now.plusSeconds(300), 0, setOf(item.id))?.id)
         assertEquals(item.id, nextVerifiedManifestItem(lastKnownGood, ScheduleEngine(), now.plusSeconds(900), 0, setOf(item.id))?.id)
         assertEquals(item.id, nextVerifiedCachedItem(lastKnownGood, ScheduleEngine(), now.plusSeconds(900), 0, setOf(item.id))?.id)
-        assertEquals(item.id, nextVerifiedCachedItem(lastKnownGood, ScheduleEngine(), now.plusSeconds(3_600), 0, setOf(item.id))?.id)
+        assertNull(nextVerifiedCachedItem(lastKnownGood, ScheduleEngine(), now.plusSeconds(3_600), 0, setOf(item.id)))
     }
 
     @Test fun successfulRefreshExtendsManifestLeaseWithoutApplyingLegacyItemDates() = runBlocking {
@@ -315,7 +315,7 @@ class OfflinePersistenceIntegrationTest {
         database.manifestDao().put(ManifestEntity(version = response.version, timezone = response.timezone, validUntil = response.validUntil.toString(), json = ManifestCodec.encode(response)))
         val committed = ManifestCodec.parse(database.manifestDao().active()!!.json)
         assertTrue(manifestIsAuthorizedAt(committed, now.plusSeconds(899)))
-        assertEquals(item.id, nextVerifiedManifestItem(committed, ScheduleEngine(), now.plusSeconds(600), 0, setOf(item.id))?.id)
+        assertNull(nextVerifiedManifestItem(committed, ScheduleEngine(), now.plusSeconds(600), 0, setOf(item.id)))
     }
 
     @Test fun productionWorkerKeepsPartialAcknowledgementsForRetryAndDeduplicatesIds() = runBlocking {

@@ -6,9 +6,11 @@ import java.time.Instant
 class ScheduleEngine {
     fun recordStarted(item: ManifestItem, now: Instant = Instant.now()) = Unit
     fun eligible(manifest: DeviceManifest, now: Instant = Instant.now()): List<ManifestItem> {
-        // `now` is retained for call-site compatibility; legacy campaign windows
-        // are not delivery gates. The server-issued quota is the eligibility bound.
-        return manifest.items.filter { it.hasAuthorizedDeliveryQuota }
+        // Date bounds are server-issued UTC instants representing inclusive dates in the campaign timezone.
+        // Daily hour/day legacy fields are intentionally ignored.
+        return manifest.items.filter { item ->
+            item.hasAuthorizedDeliveryQuota && item.isCampaignDateEligibleAt(now)
+        }
             .sortedWith(compareByDescending<ManifestItem> { it.priority }.thenBy { it.campaignId }.thenBy { it.id })
     }
     fun next(manifest: DeviceManifest, now: Instant = Instant.now(), offset: Int = 0, availableItemIds: Set<String>? = null): ManifestItem? {
