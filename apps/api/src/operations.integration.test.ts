@@ -20,6 +20,12 @@ test('state-based delivery: manifest grants, idempotent proof quota, pause and l
  await prisma.layoutAssignment.create({data:{displayId:screen.id,templateId:layout.id,revisionId:revision.id,state:'ACTIVE',compatibility:{testOnly:true}}})
  const deviceHeaders={authorization:`Bearer ${rawToken}`}
  try {
+  const manifestResponse=await app.inject({method:'GET',url:'/api/device/manifest',headers:deviceHeaders})
+  assert.equal(manifestResponse.statusCode,200,manifestResponse.body)
+  const manifestData=manifestResponse.json().data
+  assert.ok(Number.isFinite(Date.parse(manifestData.authenticatedServerTime)))
+  assert.ok(Date.parse(manifestData.generatedAt)<=Date.parse(manifestData.authenticatedServerTime))
+  assert.ok(Date.parse(manifestData.authenticatedServerTime)<Date.parse(manifestData.validUntil))
   const {manifest}=await buildDisplayManifest(screen.id)
   assert.equal(manifest.items.length,1)
   assert.deepEqual(manifest.items[0].deliveryQuota,{id:`${campaign.id}:${screen.id}`,revision:assignment.offlineQuotaRevision,remainingPlays:2,unlimited:false})

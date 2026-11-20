@@ -75,6 +75,21 @@ class ManifestCodecTest {
         assertEquals("legacy", com.ooro.screenplayer.player.ScheduleEngine().next(legacy, java.time.Instant.parse("2026-11-19T12:00:00Z"))?.id)
     }
 
+    @Test fun trustedTimeMustComeFromTheAuthenticatedManifestBody() {
+        val serverTime = "2026-11-20T10:15:30Z"
+        val response = """{"version":3,"screenId":"screen-1","generatedAt":"2026-11-20T10:15:00Z","authenticatedServerTime":"$serverTime","validUntil":"2026-11-20T10:30:00Z","items":[]}"""
+        assertEquals(java.time.Instant.parse(serverTime), ManifestCodec.parse(response).authenticatedServerTime)
+
+        val missing = """{"version":3,"screenId":"screen-1","generatedAt":"2026-11-20T10:15:00Z","validUntil":"2026-11-20T10:30:00Z","items":[]}"""
+        assertEquals(null, ManifestCodec.parse(missing).authenticatedServerTime)
+
+        val invalid = response.replace(serverTime, "not-a-server-time")
+        try {
+            ManifestCodec.parse(invalid)
+            fail("An invalid authenticated server time must reject the manifest")
+        } catch (_: java.time.format.DateTimeParseException) { }
+    }
+
     @Test fun `authorized QR destination record ID survives manifest cache round trip`() {
         val payloadWithDestination = payload.replace("\"qrUrl\":\"https://theooro.com/go/token-a\"", "\"qrUrl\":\"https://theooro.com/go/token-a\",\"authorizedDestinationId\":\"destination-uuid\"")
         val parsed = ManifestCodec.parse(payloadWithDestination)
