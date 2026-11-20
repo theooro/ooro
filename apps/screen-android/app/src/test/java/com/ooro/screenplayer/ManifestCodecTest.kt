@@ -65,14 +65,29 @@ class ManifestCodecTest {
         assertEquals(null, withoutOffer.items.single().offer.offerTitle)
     }
 
-    @Test fun legacyTimingMetadataIsIgnoredForAnAuthorizedManifestItem() {
-        val legacy = ManifestCodec.parse("""{"version":3,"screenId":"screen-1","timezone":"Pacific/Honolulu","items":[{"id":"legacy","campaignId":"campaign","creativeId":"creative","type":"IMAGE","url":"https://cdn.example/a.png","checksum":"${"a".repeat(64)}","durationSeconds":10,"startAt":"2099-01-01T00:00:00Z","endAt":"2000-01-01T00:00:00Z","daysOfWeek":[],"startTime":"23:55","endTime":"00:05","deliveryQuota":{"id":"campaign:screen-1","revision":1,"remainingPlays":3,"unlimited":false}}]}""")
+    @Test fun dateBoundsRoundTripWhileLegacyTimeOfDayFieldsAreIgnored() {
+        val legacy = ManifestCodec.parse("""{"version":3,"screenId":"screen-1","timezone":"Pacific/Honolulu","items":[{"id":"legacy","campaignId":"campaign","creativeId":"creative","type":"IMAGE","url":"https://cdn.example/a.png","checksum":"${"a".repeat(64)}","durationSeconds":10,"startAt":"2026-11-19T00:00:00Z","endAt":"2026-11-21T00:00:00Z","daysOfWeek":[],"startTime":"23:55","endTime":"00:05","deliveryQuota":{"id":"campaign:screen-1","revision":1,"remainingPlays":3,"unlimited":false}}]}""")
         val item = legacy.items.single()
 
-        assertEquals(null, item.startAt)
-        assertEquals(null, item.endAt)
+        assertEquals(java.time.Instant.parse("2026-11-19T00:00:00Z"), item.startAt)
+        assertEquals(java.time.Instant.parse("2026-11-21T00:00:00Z"), item.endAt)
         assertEquals(emptySet< java.time.DayOfWeek >(), item.daysOfWeek)
         assertEquals("legacy", com.ooro.screenplayer.player.ScheduleEngine().next(legacy, java.time.Instant.parse("2026-11-19T12:00:00Z"))?.id)
+    }
+
+    @Test fun trustedTimeMustComeFromTheAuthenticatedManifestBody() {
+        val serverTime = "2026-11-20T10:15:30Z"
+        val response = """{"version":3,"screenId":"screen-1","generatedAt":"2026-11-20T10:15:00Z","authenticatedServerTime":"$serverTime","validUntil":"2026-11-20T10:30:00Z","items":[]}"""
+        assertEquals(java.time.Instant.parse(serverTime), ManifestCodec.parse(response).authenticatedServerTime)
+
+        val missing = """{"version":3,"screenId":"screen-1","generatedAt":"2026-11-20T10:15:00Z","validUntil":"2026-11-20T10:30:00Z","items":[]}"""
+        assertEquals(null, ManifestCodec.parse(missing).authenticatedServerTime)
+
+        val invalid = response.replace(serverTime, "not-a-server-time")
+        try {
+            ManifestCodec.parse(invalid)
+            fail("An invalid authenticated server time must reject the manifest")
+        } catch (_: java.time.format.DateTimeParseException) { }
     }
 
     @Test fun `authorized QR destination record ID survives manifest cache round trip`() {

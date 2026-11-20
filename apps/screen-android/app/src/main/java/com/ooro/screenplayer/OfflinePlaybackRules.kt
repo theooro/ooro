@@ -58,6 +58,19 @@ internal fun offlineAuthorizationRemainingMillis(
     return (authorization.durationMillis - (currentElapsedMillis - authorization.receivedElapsedMillis)).coerceAtLeast(0L)
 }
 
+/** Secure schedule time advances from the HTTPS server Date using monotonic elapsed time only. */
+internal fun trustedScheduleTime(
+    authorization: OfflineAuthorization?,
+    pairedScreenId: String?,
+    currentElapsedMillis: Long,
+    currentBootCount: Int?,
+): Instant? {
+    val remaining = offlineAuthorizationRemainingMillis(authorization, pairedScreenId, currentElapsedMillis, currentBootCount)
+    if (remaining <= 0L) return null
+    val value = authorization ?: return null
+    return runCatching { Instant.ofEpochMilli(value.serverTimeUtcMillis + (currentElapsedMillis - value.receivedElapsedMillis)) }.getOrNull()
+}
+
 internal fun shouldPollForManifestUpdate(nowElapsedMillis: Long, lastPollElapsedMillis: Long): Boolean =
     lastPollElapsedMillis <= 0L || nowElapsedMillis - lastPollElapsedMillis >= MANIFEST_UPDATE_POLL_INTERVAL_MILLIS
 
@@ -191,7 +204,7 @@ internal fun eligibleSponsoredItem(manifest: DeviceManifest, now: Instant, verif
     if (manifest.layoutContractVersion < 3 || manifest.layout !in setOf(DisplayLayout.FOUR_ZONE, DisplayLayout.AD_NAV_OFFER)) return null
     val item = manifest.sponsoredItem ?: return null
     if (item.type != CreativeType.IMAGE || item.id !in verifiedItemIds) return null
-    return item.takeIf { it.hasAuthorizedDeliveryQuota }
+    return item.takeIf { it.hasAuthorizedDeliveryQuota && it.isCampaignDateEligibleAt(now) }
 }
 
 internal fun acknowledgedProofEventIds(selectedIds: Set<String>, serverAcceptedIds: Set<String>): Set<String> =

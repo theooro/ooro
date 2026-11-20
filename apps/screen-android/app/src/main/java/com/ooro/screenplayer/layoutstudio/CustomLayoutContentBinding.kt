@@ -40,7 +40,7 @@ internal fun resolveCustomWidgetContent(
     val binding = zone.bindingKind
     val reference = zone.referenceId
     fun activeAndVerified(item: ManifestItem?) = item?.takeIf {
-        it.id in verifiedItemIds && it.hasAuthorizedDeliveryQuota
+        it.id in verifiedItemIds && it.hasAuthorizedDeliveryQuota && it.isCampaignDateEligibleAt(now)
     }
 
     return when (zone.type) {
@@ -60,7 +60,7 @@ internal fun resolveCustomWidgetContent(
             val selected = ScheduleEngine().eligible(manifest, now)
                 .firstOrNull { it.creativeId == reference && it.type == expectedType && it.id in verifiedItemIds }
             if (selected == null) CustomWidgetContent.Fallback("creative-not-eligible-or-verified")
-            else CustomWidgetContent.DecorativeMedia(selected)
+            else CustomWidgetContent.DecorativeMedia(selected.copy(durationSeconds = zone.rotationDurationSeconds ?: selected.durationSeconds))
         }
         "QR_OFFER" -> {
             if (binding != "AUTHORIZED_DESTINATION" || reference == null) return CustomWidgetContent.Fallback("destination-binding-required")

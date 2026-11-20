@@ -55,7 +55,9 @@ data class PairResponse(val credentials: DeviceCredentials)
 data class DeliveryQuota(val id: String, val revision: Int, val remainingPlays: Int?, val unlimited: Boolean)
 data class ManifestItem(val id: String, val campaignId: String, val creativeId: String, val type: CreativeType, val url: String, val checksum: String?, val durationSeconds: Int, val priority: Int, val startAt: Instant?, val endAt: Instant?, val daysOfWeek: Set<DayOfWeek>, val startTime: LocalTime?, val endTime: LocalTime?, val assetId: String? = null, val fitMode: FitMode = FitMode.FIT, val offer: OfferMetadata = OfferMetadata(), val playsPerLoop: Int = 1, val exclusive: Boolean = false, val sequence: Int = 0, val intervalSeconds: Double = 0.0, val scheduleId: String? = null, val deliveryQuota: DeliveryQuota? = null) {
     val qrEnabled: Boolean get() = offer.validQrUrl != null
-    /** Legacy manifest timing fields are parsed for compatibility only; state/quota authorize delivery. */
+    /** Server-issued UTC half-open window for inclusive campaign calendar dates. */
+    fun isCampaignDateEligibleAt(now: Instant): Boolean = startAt != null && endAt != null && !now.isBefore(startAt) && now.isBefore(endAt)
+    /** Legacy day/hour fields are parsed for compatibility and never control delivery. */
     val hasAuthorizedDeliveryQuota: Boolean get() = deliveryQuota?.let { it.unlimited || (it.remainingPlays ?: 0) > 0 } == true
 }
 data class LayoutConfig(val primaryWidthPercent: Int = 67, val adHeightPercent: Int = 89, val qrHeightPercent: Int = 32, val newsScrollSpeed: Int = 42) {

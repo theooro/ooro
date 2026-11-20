@@ -3,11 +3,13 @@ import { randomBytes } from 'node:crypto'
 import { prisma } from '../prisma.js'
 import { config } from '../config.js'
 import { safeDestination } from './qr-destination.js'
+import { isCampaignDateEligible } from './campaign-date-window.js'
+import { validateLayoutDraft } from './layout-studio.js'
 
 export type ManifestReason = 'NO_ASSIGNMENT' | 'DISPLAY_DISABLED' | 'CLIENT_QUOTA_UNSUPPORTED' | 'CAMPAIGN_INACTIVE' | 'APPROVAL_REQUIRED' | 'FUNDING_REQUIRED' | 'NO_DELIVERY_QUOTA' | 'NO_APPROVED_CREATIVE' | 'ASSET_UNAVAILABLE' | 'NO_ELIGIBLE_CREATIVE'
 export type DeliveryQuota = { id: string; revision: number; remainingPlays: number | null; unlimited: boolean }
-export type DisplayManifestItem = { id: string; campaignId: string; creativeId: string; assetId: string; type: string; url: string; checksum: string; durationSeconds: number; priority: number; deliveryQuota: DeliveryQuota; fitMode: string; qrEnabled: boolean; qrTargetUrl: string | null; qrLabel: string | null; qrVersion: number; offer: Record<string, unknown> }
-export type DisplayManifest = { manifestId: string; version: number; generatedAt: string; expiresAt: string; deliveryReasons: ManifestReason[]; layout: string | { type: string; contractVersion: number; primaryWidthPercent: number; adHeightPercent: number; qrHeightPercent: number; newsScrollSpeed: number }; news: { scrollSpeed: number; announcements: Array<{ id: string; text: string; priority: number }> }; items: DisplayManifestItem[]; sponsoredItem?: DisplayManifestItem | null }
+export type DisplayManifestItem = { id: string; campaignId: string; creativeId: string; assetId: string; type: string; url: string; checksum: string; durationSeconds: number; priority: number; startAt: string | null; endAt: string | null; deliveryQuota: DeliveryQuota; fitMode: string; qrEnabled: boolean; qrTargetUrl: string | null; qrLabel: string | null; qrVersion: number; offer: Record<string, unknown> }
+export type DisplayManifest = { manifestId: string; version: number; generatedAt: string; expiresAt: string; deliveryReasons: ManifestReason[]; layout: string | { type: string; contractVersion: number; primaryWidthPercent: number; adHeightPercent: number; qrHeightPercent: number; newsScrollSpeed: number }; layoutStudioContract?: Record<string, unknown> | null; news: { scrollSpeed: number; announcements: Array<{ id: string; text: string; priority: number }> }; items: DisplayManifestItem[]; sponsoredItem?: DisplayManifestItem | null }
 export type ManifestCampaignDiagnostic = { status: string; fundingStatus: string; quotaAuthorized: boolean; approvedCreativeCount: number; checksumVerifiedAssetCount: number }
 export const MANIFEST_AUTHORIZATION_LEASE_MS = 15 * 60_000
 export const manifestValidUntil = (now: Date) => new Date(now.getTime() + MANIFEST_AUTHORIZATION_LEASE_MS)
@@ -72,13 +74,13 @@ async function trackingUrlFor(displayId: string, campaignId: string, creativeId:
 }
 
 export async function buildDisplayManifest(displayId: string, now = new Date()): Promise<{ manifest: DisplayManifest; reasons: ManifestReason[] }> {
-  const display = await prisma.display.findUnique({ where: { id: displayId }, include: { vehicle: true, zoneConfig: true, campaignAssignments: { where: { active: true }, include: { campaign: { include: { creatives: { where: { status: 'APPROVED' }, include: { asset: true } } } } } } } })
+  const display = await prisma.display.findUnique({ where: { id: displayId }, include: { vehicle: true, zoneConfig: true, layoutAssignments: { where: { state: 'ACTIVE', revokedAt: null }, orderBy: { assignedAt: 'desc' }, take: 1, include: { revision: true, template: { select: { state: true, mode: true } } } }, campaignAssignments: { where: { active: true }, include: { campaign: { include: { creatives: { where: { status: 'APPROVED' }, include: { asset: true } } } } } } } })
   const reasons: ManifestReason[] = []
   if (!display || !display.deviceTokenHash || ['DISABLED','BLOCKED','MAINTENANCE'].includes(display.state)) return { manifest: emptyManifest(now), reasons: ['DISPLAY_DISABLED'] }
   if (!display.supportsDeliveryQuota) return { manifest: emptyManifest(now), reasons: ['CLIENT_QUOTA_UNSUPPORTED'] }
   // Legacy date/schedule fields remain audit-only. Only an explicitly ACTIVE,
   // funded campaign with a bounded or explicitly unlimited device grant ships.
-  const active = display.campaignAssignments.filter(({ campaign }) => campaign.status === 'ACTIVE' && ['INTERNAL_TEST', 'PAID', 'FUNDED'].includes(campaign.commercialFundingStatus))
+  const active = display.campaignAssignments.filter(({ campaign }) => campaign.status === 'ACTIVE' && ['INTERNAL_TEST', 'PAID', 'FUNDED'].includes(campaign.commercialFundingStatus) && isCampaignDateEligible({ startsAt: campaign.startsAt, endsAt: campaign.endsAt }, now))
   const eligible: typeof active = []
   const quotaByCampaign = new Map<string, DeliveryQuota>()
   for (const assignment of active) {
@@ -96,7 +98,7 @@ export async function buildDisplayManifest(displayId: string, now = new Date()):
     const trackingUrl = trackingLink?.url ?? null
     const indiaDayStart = new Date(`${now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })}T00:00:00+05:30`)
     const scanCount = trackingUrl ? await prisma.qrScan.count({ where: { campaignId: campaign.id, creativeId: creative.id, displayId, occurredAt: { gte: indiaDayStart } } }) : null
-    return { id: creative.id, campaignId: campaign.id, creativeId: creative.id, assetId: creative.asset!.id, type: creative.type.toUpperCase() === 'VIDEO' ? 'VIDEO' : 'IMAGE', url: deliveryAssetUrl(creative.asset!.url), checksum: creative.asset!.checksum!, durationSeconds: creative.asset!.durationSeconds ?? creative.durationSeconds, priority: campaign.priority, deliveryQuota: quotaByCampaign.get(campaign.id)!, fitMode: typeof metadata.fitMode === 'string' ? metadata.fitMode : 'FIT', qrEnabled: Boolean(trackingUrl), qrTargetUrl: trackingUrl, qrLabel: creative.qrLabel ?? (typeof legacyOffer.ctaLabel === 'string' ? legacyOffer.ctaLabel : null), qrVersion: creative.qrVersion, offer: { ...offer, brandName: creative.brandName ?? metadata.brand ?? metadata.brandName, promotionalText: creative.promotionalText, ...(trackingUrl ? { qrUrl: trackingUrl, authorizedDestinationId: trackingLink?.id, scanCount, scanCountDisplayEnabled: offer.scanCountDisplayEnabled === true } : { qrUrl: null, authorizedDestinationId: null, scanCount: null }) } }
+    return { id: creative.id, campaignId: campaign.id, creativeId: creative.id, assetId: creative.asset!.id, type: creative.type.toUpperCase() === 'VIDEO' ? 'VIDEO' : 'IMAGE', url: deliveryAssetUrl(creative.asset!.url), checksum: creative.asset!.checksum!, durationSeconds: creative.asset!.durationSeconds ?? creative.durationSeconds, priority: campaign.priority, startAt: campaign.startsAt?.toISOString() ?? null, endAt: campaign.endsAt?.toISOString() ?? null, deliveryQuota: quotaByCampaign.get(campaign.id)!, fitMode: typeof metadata.fitMode === 'string' ? metadata.fitMode : 'FIT', qrEnabled: Boolean(trackingUrl), qrTargetUrl: trackingUrl, qrLabel: creative.qrLabel ?? (typeof legacyOffer.ctaLabel === 'string' ? legacyOffer.ctaLabel : null), qrVersion: creative.qrVersion, offer: { ...offer, brandName: creative.brandName ?? metadata.brand ?? metadata.brandName, promotionalText: creative.promotionalText, ...(trackingUrl ? { qrUrl: trackingUrl, authorizedDestinationId: trackingLink?.id, scanCount, scanCountDisplayEnabled: offer.scanCountDisplayEnabled === true } : { qrUrl: null, authorizedDestinationId: null, scanCount: null }) } }
   })))).sort((a, b) => b.priority - a.priority || a.campaignId.localeCompare(b.campaignId) || a.id.localeCompare(b.id))
   const deliveryItems = items
   const diagnosticCampaigns = display.campaignAssignments.map(({ campaign, offlinePlaysAuthorized, unlimitedOfflineAuthorized, offlinePlaysConsumed, offlineQuotaRevision }) => ({
@@ -116,9 +118,15 @@ export async function buildDisplayManifest(displayId: string, now = new Date()):
   const city = display.vehicle?.city
   const announcements = v3 ? [] : await prisma.newsAnnouncement.findMany({ where: { active: true, AND: [{ OR: [{ startsAt: null }, { startsAt: { lte: now } }] }, { OR: [{ endsAt: null }, { endsAt: { gt: now } }] }, display.vehicleId ? { OR: [{ vehicleId: null }, { vehicleId: display.vehicleId }] } : { vehicleId: null }, city ? { OR: [{ city: null }, { city }] } : { city: null }] }, orderBy: [{ priority: 'desc' }, { createdAt: 'desc' }], take: 12, select: { id: true, text: true, priority: true } })
   const { mainItems, sponsoredItem } = selectManifestDeliverySlots(deliveryItems, eligible.map(({ campaign }) => ({ id: campaign.id, deliverySlot: campaign.deliverySlot })), v3)
+  const assignment = display.layoutAssignments[0]
+  const candidateLayout = assignment?.template.state === 'PUBLISHED' && assignment.template.mode === 'CUSTOM' && assignment.revision.contract && typeof assignment.revision.contract === 'object' && !Array.isArray(assignment.revision.contract) ? assignment.revision.contract as Record<string, unknown> : null
+  const parsedLayout = candidateLayout ? validateLayoutDraft(candidateLayout) : null
+  const rotationReferences = parsedLayout?.draft?.zones.flatMap(zone => zone.rotation?.items.map(item => item.referenceId) ?? []) ?? []
+  const rotationMediaIsEligible = rotationReferences.every(referenceId => mainItems.some(item => item.creativeId === referenceId && item.type === 'IMAGE' && item.checksum))
+  const layoutStudioContract = parsedLayout?.draft && rotationMediaIsEligible && !parsedLayout.issues.some(issue => issue.code !== 'CAPABILITY_PROFILE_UNVERIFIED') ? candidateLayout : null
   const versionItems = mainItems.map((item) => ({ ...item, offer: Object.fromEntries(Object.entries(item.offer).filter(([key]) => key !== 'scanCount')) }))
   const news = { scrollSpeed: layout.newsScrollSpeed, announcements }
-  const digest = createHash('sha256').update(JSON.stringify({ displayId, layout, news, deliveryReasons: reasons, items: versionItems, ...(v3 ? { sponsoredItem } : {}) })).digest('hex')
-  return { manifest: { manifestId: `manifest-${digest.slice(0, 24)}`, version: manifestVersionFromDigest(digest), generatedAt: now.toISOString(), expiresAt: manifestValidUntil(now).toISOString(), deliveryReasons: reasons, layout, news, items: mainItems, ...(v3 ? { sponsoredItem } : {}) }, reasons }
+  const digest = createHash('sha256').update(JSON.stringify({ displayId, layout, layoutStudioContract, news, deliveryReasons: reasons, items: versionItems, ...(v3 ? { sponsoredItem } : {}) })).digest('hex')
+  return { manifest: { manifestId: `manifest-${digest.slice(0, 24)}`, version: manifestVersionFromDigest(digest), generatedAt: now.toISOString(), expiresAt: manifestValidUntil(now).toISOString(), deliveryReasons: reasons, layout, ...(layoutStudioContract ? { layoutStudioContract } : {}), news, items: mainItems, ...(v3 ? { sponsoredItem } : {}) }, reasons }
 }
 const emptyManifest = (now: Date): DisplayManifest => ({ manifestId: 'manifest-empty', version: 0, generatedAt: now.toISOString(), expiresAt: manifestValidUntil(now).toISOString(), deliveryReasons: [], layout: { type: 'FOUR_ZONE', contractVersion: 2, primaryWidthPercent: 67, adHeightPercent: 86, qrHeightPercent: 47, newsScrollSpeed: 42 }, news: { scrollSpeed: 42, announcements: [] }, items: [] })

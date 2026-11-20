@@ -30,7 +30,7 @@ class CustomLayoutContentBindingTest {
     private fun item(id: String, creativeId: String, type: CreativeType, offer: OfferMetadata = OfferMetadata()) = ManifestItem(
         id = id, campaignId = "campaign-$id", creativeId = creativeId, type = type,
         url = "https://cdn.example/$id", checksum = "sha256-$id", durationSeconds = 10,
-        priority = 0, startAt = null, endAt = null,
+        priority = 0, startAt = now.minusSeconds(86_400), endAt = now.plusSeconds(86_400),
         daysOfWeek = emptySet(), startTime = null, endTime = null, assetId = "asset-$id",
         fitMode = FitMode.FIT, offer = offer,
         deliveryQuota = DeliveryQuota("campaign-$id:screen-a", 1, 10, false),

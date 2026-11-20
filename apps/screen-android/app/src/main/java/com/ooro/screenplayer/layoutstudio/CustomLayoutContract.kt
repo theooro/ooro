@@ -24,7 +24,11 @@ data class LayoutStudioZone(
     val bindingKind: String,
     val referenceId: String?,
     val visible: Boolean,
+    val rotationItems: List<LayoutStudioRotationItem> = emptyList(),
+    val rotationDurationSeconds: Int? = null,
 )
+
+data class LayoutStudioRotationItem(val referenceId: String, val durationSeconds: Int)
 
 data class PixelRect(val left: Int, val top: Int, val right: Int, val bottom: Int) {
     val width: Int get() = right - left
@@ -90,10 +94,27 @@ object LayoutStudioInterpreter {
             if (type != "SPONSORED_AD" && bindingKind == "APPROVED_SPONSOR") return invalid("SPONSOR_SLOT_MISMATCH", "Sponsor content cannot be bound to a non-sponsor zone.")
             if (bindingKind == "APPROVED_CREATIVE" && type !in setOf("MAIN_AD", "IMAGE", "VIDEO", "LOGO", "BACKGROUND_IMAGE")) return invalid("CREATIVE_SLOT_MISMATCH", "Approved creative references cannot be attached to $type widgets.")
             if (bindingKind == "AUTHORIZED_DESTINATION" && type != "QR_OFFER") return invalid("DESTINATION_SLOT_MISMATCH", "Authorized destinations can only be attached to QR_OFFER widgets.")
+            val rotationItems = zone.optJSONObject("rotation")?.let { rotation ->
+                if (rotation.optInt("version", -1) != 1 || rotation.optString("mode") != "SEQUENTIAL") return invalid("UNSUPPORTED_ROTATION", "Zone $id uses an unsupported rotation contract.")
+                if (type != "IMAGE" || bindingKind != "NONE") return invalid("ROTATION_UNSUPPORTED_ZONE", "Sequential rotation is supported only on unbound IMAGE zones.")
+                val items = rotation.optJSONArray("items") ?: return invalid("INVALID_ROTATION", "Zone $id rotation items are missing.")
+                if (items.length() !in 1..12) return invalid("INVALID_ROTATION", "Zone $id must contain 1–12 ordered rotation items.")
+                val seen = HashSet<String>()
+                buildList {
+                    for (itemIndex in 0 until items.length()) {
+                        val item = items.optJSONObject(itemIndex) ?: return invalid("INVALID_ROTATION", "Zone $id has a malformed rotation item.")
+                        val reference = item.optString("referenceId")
+                        val duration = item.optInt("durationSeconds", -1)
+                        if (reference.isBlank() || !seen.add(reference)) return invalid("INVALID_ROTATION", "Zone $id rotation references must be present and unique.")
+                        if (duration !in 3..3600) return invalid("INVALID_ROTATION", "Zone $id rotation duration must be 3–3600 seconds.")
+                        add(LayoutStudioRotationItem(reference, duration))
+                    }
+                }
+            } ?: emptyList()
             val zIndex = zone.optInt("zIndex", index)
             if (zIndex !in 0..100) return invalid("INVALID_Z_ORDER", "Zone $id has an unsupported layer order.")
             val visible = zone.optBoolean("visible", true)
-            val parsedZone = LayoutStudioZone(id, type, label.ifBlank { type }, x, y, width, height, zIndex, fit, bindingKind, referenceId, visible)
+            val parsedZone = LayoutStudioZone(id, type, label.ifBlank { type }, x, y, width, height, zIndex, fit, bindingKind, referenceId, visible, rotationItems)
             val targetRect = toPixelRect(parsedZone, targetWidth, targetHeight)
             if (targetRect.width < 1 || targetRect.height < 1) return invalid("ZONE_TOO_SMALL", "Zone $id rounds to zero pixels at its declared target resolution.")
             zones += parsedZone

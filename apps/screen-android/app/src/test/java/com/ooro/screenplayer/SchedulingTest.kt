@@ -9,34 +9,34 @@ import java.time.*
 class SchedulingTest {
     private fun item(id: String, quota: Int? = 4, priority: Int = 1) = ManifestItem(
         id, "campaign-$id", "creative-$id", CreativeType.IMAGE, "", null, 10, priority,
-        null, null, emptySet(), null, null,
+        Instant.parse("2000-01-01T00:00:00Z"), Instant.parse("2100-01-01T00:00:00Z"), emptySet(), null, null,
         deliveryQuota = quota?.let { DeliveryQuota("campaign-$id:screen", 1, it, false) }
     )
 
-    @Test fun legacyDateAndDaypartMetadataDoNotGateAuthorizedStateBasedDelivery() {
+    @Test fun campaignDatesGateDeliveryAndLegacyDaypartsAreIgnored() {
         val active = item("active").copy(
-            startAt = Instant.parse("2099-01-01T00:00:00Z"),
-            endAt = Instant.parse("2000-01-01T00:00:00Z"),
+            startAt = Instant.parse("2026-11-19T00:00:00Z"),
+            endAt = Instant.parse("2026-11-20T00:00:00Z"),
             daysOfWeek = setOf(DayOfWeek.SUNDAY),
             startTime = LocalTime.of(23, 0), endTime = LocalTime.of(23, 1),
         )
         assertTrue(active.hasAuthorizedDeliveryQuota)
+        assertEquals("active", ScheduleEngine().next(DeviceManifest(1, "screen", "UTC", listOf(active), null), Instant.parse("2026-11-19T12:00:00Z"))?.id)
     }
 
-    @Test fun missingFutureExpiredAndInactiveLegacyWindowsAllRemainQuotaEligible() {
+    @Test fun missingFutureAndExpiredDateWindowsFailClosed() {
         val now = Instant.parse("2026-11-19T12:00:00Z")
         val variants = listOf(
-            item("missing"),
+            item("missing").copy(startAt = null, endAt = null),
             item("future").copy(startAt = now.plusSeconds(86_400), endAt = now.plusSeconds(172_800)),
             item("expired").copy(startAt = now.minusSeconds(172_800), endAt = now.minusSeconds(86_400)),
             item("inactive-daypart").copy(daysOfWeek = emptySet(), startTime = LocalTime.of(23, 59), endTime = LocalTime.MIDNIGHT),
         )
 
-        variants.forEach { legacy ->
-            assertTrue("${legacy.id} was incorrectly time-gated", ScheduleEngine().next(
-                DeviceManifest(1, "screen", "Pacific/Honolulu", listOf(legacy), null), now, availableItemIds = setOf(legacy.id),
-            )?.id == legacy.id)
-        }
+        assertNull(ScheduleEngine().next(DeviceManifest(1, "screen", "Pacific/Honolulu", listOf(variants[0]), null), now, availableItemIds = setOf(variants[0].id)))
+        assertNull(ScheduleEngine().next(DeviceManifest(1, "screen", "Pacific/Honolulu", listOf(variants[1]), null), now, availableItemIds = setOf(variants[1].id)))
+        assertNull(ScheduleEngine().next(DeviceManifest(1, "screen", "Pacific/Honolulu", listOf(variants[2]), null), now, availableItemIds = setOf(variants[2].id)))
+        assertEquals(variants[3].id, ScheduleEngine().next(DeviceManifest(1, "screen", "Pacific/Honolulu", listOf(variants[3]), null), now, availableItemIds = setOf(variants[3].id))?.id)
     }
 
     @Test fun absentOrExhaustedQuotaFailsClosed() {
@@ -52,8 +52,9 @@ class SchedulingTest {
         val authorized = item("authorized")
         val manifest = DeviceManifest(1, "screen", "UTC", listOf(authorized), null)
         val engine = ScheduleEngine()
-        assertEquals("authorized", engine.next(manifest, Instant.parse("1900-01-01T00:00:00Z"), 0)?.id)
-        assertEquals("authorized", engine.next(manifest, Instant.parse("2200-01-01T00:00:00Z"), 0)?.id)
+        val trustedNow = Instant.parse("2026-11-19T12:00:00Z")
+        assertEquals("authorized", engine.next(manifest, trustedNow, 0)?.id)
+        assertEquals("authorized", engine.next(manifest.copy(timezone = "Pacific/Honolulu"), trustedNow, 0)?.id)
     }
 
     @Test fun completionOffsetAdvancesAcrossAuthorizedCreativesAndQuotaExhaustionRemovesItem() {

@@ -341,14 +341,14 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     val authorizationValid by authorizationFlow.collectAsState(initial = preview != null)
     val pairedScreenIdFlow = vm?.pairedScreenId ?: remember(preview, manifest.screenId) { flowOf(manifest.screenId.takeIf { preview != null }) }
     val pairedScreenId by pairedScreenIdFlow.collectAsState(initial = manifest.screenId.takeIf { preview != null })
-    val scheduleClockFlow = vm?.scheduleClock ?: remember { flowOf(Instant.now()) }
-    val scheduleClock by scheduleClockFlow.collectAsState(initial = Instant.now())
+    val scheduleClockFlow = vm?.scheduleClock ?: remember { flowOf(Instant.EPOCH) }
+    val scheduleClock by scheduleClockFlow.collectAsState(initial = Instant.EPOCH)
     val manifestExpired = preview == null && !authorizationValid
     val scheduledItem = remember(manifest, playbackOffset, verifiedAssetIds, cachedPlaybackAllowed, scheduleClock, vm) {
         vm?.currentItem(manifest, playbackOffset, verifiedAssetIds, allowCachedOffline = cachedPlaybackAllowed, now = scheduleClock)
     }
     val sponsorCandidate = manifest.sponsoredItem?.takeIf { it.id in verifiedAssetIds && it.type == CreativeType.IMAGE }
-    val sponsoredItem = remember(sponsorCandidate, verifiedAssetIds, manifest.layoutContractVersion) { eligibleSponsoredItem(manifest, scheduleClock, verifiedAssetIds) }
+    val sponsoredItem = remember(sponsorCandidate, verifiedAssetIds, manifest.layoutContractVersion, authorizationValid) { if (preview != null || authorizationValid) eligibleSponsoredItem(manifest, scheduleClock, verifiedAssetIds) else null }
     // The local setting affects presentation geometry only. Accepted manifest state and
     // explicit per-display quota authorize cached delivery; timestamps are audit metadata.
     val geometryVersion = geometryContractVersion(manifest.layoutContractVersion, manifest.layout, presentationPreference)
@@ -356,7 +356,7 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
         manifest.items.firstOrNull { it.id == state.itemId }
     } ?: scheduledItem
     val emptyPlaybackMessage = if (manifestExpired) {
-        "Offline ads paused\nAuthorization expired. Reconnect to refresh approved content."
+        "Trusted time unavailable — device reboot detected, reconnect to establish secure schedule time."
     } else {
         offlineEmptyMessage(manifest, scheduleClock, verifiedAssetIds, allowExpiredCachedManifest = cachedPlaybackAllowed)
     }
@@ -370,7 +370,11 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     val parsedCustomLayout = (customLayoutParseResult as? LayoutParseResult.Valid)?.contract
     // Production rendering requires the contract to arrive inside a device-authenticated,
     // screen-bound manifest. Preview-only callers are isolated and proof-suppressed.
-    val customLayout = parsedCustomLayout?.takeIf { pairedScreenId == manifest.screenId }
+    val customLayout = parsedCustomLayout?.takeIf { contract ->
+        pairedScreenId == manifest.screenId && contract.zones.flatMap { it.rotationItems }.all { rotation ->
+            manifest.items.any { item -> item.creativeId == rotation.referenceId && item.id in verifiedAssetIds && item.hasAuthorizedDeliveryQuota && item.isCampaignDateEligibleAt(scheduleClock) }
+        }
+    }
     val rootModifier = if (preview == null) Modifier.fillMaxSize().background(Color.Black).clickable {
         taps++
         if (taps >= 7) { taps = 0; vm?.showAdmin() }
@@ -421,7 +425,7 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
         val resolved = remember(zone, manifest.version, manifest.validUntil, manifestExpired, pairedScreenId, verifiedAssetIds, currentMainItem?.id, scheduleClock) {
             resolveCustomWidgetContent(zone, manifest, pairedScreenId, verifiedAssetIds, currentMainItem, scheduleClock, authorizationExpired = manifestExpired, allowCachedOffline = cachedPlaybackAllowed)
         }
-        val emptyMessage = if (manifestExpired) "Offline ads paused\nAuthorization expired. Reconnect to refresh approved content." else offlineEmptyMessage(manifest, scheduleClock, verifiedAssetIds, allowExpiredCachedManifest = cachedPlaybackAllowed)
+        val emptyMessage = if (manifestExpired) "Trusted time unavailable — device reboot detected, reconnect to establish secure schedule time." else offlineEmptyMessage(manifest, scheduleClock, verifiedAssetIds, allowExpiredCachedManifest = cachedPlaybackAllowed)
         CustomLayoutZoneContent(vm, zone, resolved, playbackKey, preview, emptyMessage)
     }
 }

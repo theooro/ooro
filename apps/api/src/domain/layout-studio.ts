@@ -4,6 +4,9 @@ export const layoutModes = ['STANDARD', 'CUSTOM'] as const
 export const layoutPresets = ['OORO_STANDARD_V3', '65_35', '50_50', 'FULLSCREEN', 'MAIN_SIDEBAR', 'GRID', 'CUSTOM_CANVAS'] as const
 export const widgetTypes = ['MAIN_AD', 'SPONSORED_AD', 'IMAGE', 'VIDEO', 'QR_OFFER', 'LOGO', 'TEXT', 'BACKGROUND_IMAGE', 'CLOCK', 'WEATHER', 'TICKER', 'NAVIGATION_MAP', 'STATIC_QR', 'EXTERNAL_DESTINATION'] as const
 
+export const layoutRotationItemSchema = z.object({ referenceId: z.string().uuid(), durationSeconds: z.number().int().min(3).max(3600) }).strict()
+export const layoutRotationSchema = z.object({ version: z.literal(1), mode: z.literal('SEQUENTIAL'), items: z.array(layoutRotationItemSchema).min(1).max(12) }).strict()
+
 export const layoutZoneSchema = z.object({
   id: z.string().min(1).max(80),
   type: z.enum(widgetTypes),
@@ -13,6 +16,7 @@ export const layoutZoneSchema = z.object({
   zIndex: z.number().int().min(0).max(100),
   fit: z.enum(['FIT', 'CENTER_CROP']).default('FIT'),
   contentBinding: z.object({ kind: z.enum(['NONE', 'APPROVED_CREATIVE', 'APPROVED_SPONSOR', 'AUTHORIZED_DESTINATION']), referenceId: z.string().max(100).optional() }).strict(),
+  rotation: layoutRotationSchema.optional(),
   visible: z.boolean().default(true),
 }).strict()
 
@@ -73,6 +77,12 @@ export function validateLayoutDraft(input: unknown): { draft?: LayoutDraft; issu
     }
     if (zone.fit === 'CENTER_CROP' && !['MAIN_AD', 'SPONSORED_AD', 'IMAGE', 'VIDEO', 'BACKGROUND_IMAGE'].includes(zone.type)) issues.push({ code: 'INVALID_FIT', zoneId: zone.id, message: 'Crop fitting is supported only for media zones.' })
     if (zone.contentBinding.kind !== 'NONE' && !zone.contentBinding.referenceId) issues.push({ code: 'BINDING_REFERENCE_REQUIRED', zoneId: zone.id, message: 'A bound content reference is required.' })
+    if (zone.rotation) {
+      if (zone.type !== 'IMAGE') issues.push({ code: 'ROTATION_UNSUPPORTED_ZONE', zoneId: zone.id, message: 'Sequential rotation is currently supported only for IMAGE zones.' })
+      const refs = zone.rotation.items.map(item => item.referenceId)
+      if (new Set(refs).size !== refs.length) issues.push({ code: 'ROTATION_DUPLICATE_ITEM', zoneId: zone.id, message: 'A rotation sequence cannot contain the same creative more than once.' })
+      if (zone.contentBinding.kind !== 'NONE') issues.push({ code: 'ROTATION_BINDING_CONFLICT', zoneId: zone.id, message: 'Use either a single content binding or a rotation sequence for this zone.' })
+    }
     if (zone.type === 'VIDEO') videoZones += 1
     if (zone.type === 'MAIN_AD') mainAdZones += 1
     if (zone.type === 'SPONSORED_AD') sponsorZones += 1

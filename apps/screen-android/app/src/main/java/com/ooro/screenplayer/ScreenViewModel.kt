@@ -85,7 +85,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
     val authorizationValid: StateFlow<Boolean> = _authorizationValid.asStateFlow()
     private val _playbackOffset = MutableStateFlow(0)
     val playbackOffset: StateFlow<Int> = _playbackOffset
-    private val _scheduleClock = MutableStateFlow(Instant.now())
+    private val _scheduleClock = MutableStateFlow(Instant.EPOCH)
     val scheduleClock: StateFlow<Instant> = _scheduleClock.asStateFlow()
     private val _verifiedAssetIds = MutableStateFlow<Set<String>>(emptySet())
     val verifiedAssetIds: StateFlow<Set<String>> = _verifiedAssetIds
@@ -93,6 +93,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
     private var manifestRefreshJob: Job? = null
     private var authorizationExpiryJob: Job? = null
     private var activeAuthorization: OfflineAuthorization? = null
+    private var trustedTimeFailureMessage: String? = null
     private var technicianSnapshotJob: Job? = null
     private var reconnectAttempt = 0
     private var lastNetworkRecoveryAt = 0L
@@ -103,14 +104,22 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             _cachedPlaybackAllowed.value = currentOfflineAuthorizationRemainingMillis() > 0L
         }
         override fun onAvailable(network: Network) {
+            if (!isValidated(network)) return
+            recoverNetworkNow()
+        }
+        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+            if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) recoverNetworkNow()
+        }
+    }
+    private fun recoverNetworkNow() {
             val now = SystemClock.elapsedRealtime()
             if (!networkRecoveryReady || !shouldRefreshAfterNetworkRecovery(now, lastNetworkRecoveryAt) || store.credentials() == null) return
             lastNetworkRecoveryAt = now
             reconnectJob?.cancel()
             reconnectJob = null
             sync()
-        }
     }
+    private fun isValidated(network: Network): Boolean = runCatching { connectivityManager?.getNetworkCapabilities(network)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true }.getOrDefault(false)
     @Volatile private var repairMode = false
     private val syncMutex = Mutex()
     // The first network heartbeat can fail immediately after a reboot. Do not
@@ -120,6 +129,13 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
     init {
         runCatching { connectivityManager?.registerDefaultNetworkCallback(networkCallback) }
         location.start()
+        viewModelScope.launch {
+            cachedStartupReady.await()
+            while (true) {
+                _scheduleClock.value = trustedScheduleTime(activeAuthorization, store.credentials()?.screenId, SystemClock.elapsedRealtime(), currentBootCount()) ?: Instant.EPOCH
+                delay(1_000L)
+            }
+        }
         viewModelScope.launch {
             cachedStartupReady.await()
             while (true) {
@@ -198,7 +214,9 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
                 _verifiedAssetIds.value = identityMatched?.let { manifest ->
                     runCatching { assets.verifiedItemIds(manifest.items + listOfNotNull(manifest.sponsoredItem)) }.getOrDefault(emptySet())
                 } ?: emptySet()
-                val startup = resolveCachedStartup(identityMatched, pairedScreenId, _verifiedAssetIds.value, scheduler, Instant.now(), allowExpiredForOfflinePlayback = leaseRemaining > 0L)
+                val trustedNow = trustedScheduleTime(activeAuthorization, pairedScreenId, SystemClock.elapsedRealtime(), currentBootCount()) ?: Instant.EPOCH
+                _scheduleClock.value = trustedNow
+                val startup = resolveCachedStartup(identityMatched, pairedScreenId, _verifiedAssetIds.value, scheduler, trustedNow, allowExpiredForOfflinePlayback = leaseRemaining > 0L)
                 active = startup.manifest
                 _cachedPlaybackAllowed.value = startup.manifest != null && startup.manifest.screenId == pairedScreenId && leaseRemaining > 0L
                 scheduleAuthorizationExpiry()
@@ -213,7 +231,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
                         if (startup.block == CachedStartupBlock.NONE && leaseRemaining > 0L) {
                             _diagnostic.value = "Playing authorized cached delivery · refreshing manifest when connected"
                             scheduleManifestRefresh(cached)
-                        } else if (leaseRemaining <= 0L) _diagnostic.value = "Offline authorization expired or invalid · reconnect for a fresh authenticated manifest"
+                        } else if (leaseRemaining <= 0L) _diagnostic.value = "Trusted time unavailable — device reboot detected, reconnect to establish secure schedule time."
                         else if (startup.block == CachedStartupBlock.NO_ELIGIBLE_VERIFIED_ASSET) _diagnostic.value = offlineEmptyMessage(cached, Instant.now(), _verifiedAssetIds.value)
                     }
                 }
@@ -282,8 +300,9 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             val error = health.exceptionOrNull()
             if (error != null) persistDiagnosticError(error)
             online = false
+            if (currentOfflineAuthorizationRemainingMillis() <= 0L) trustedTimeFailureMessage = trustedTimeFailure(error)
             if (error is DeviceApiException && error.kind.requiresRepair()) showRecovery(error)
-            else { keepCachedPlayback(c); scheduleReconnect() }
+            else { keepCachedPlayback(c); trustedTimeFailureMessage?.let { _diagnostic.value = it }; scheduleReconnect() }
             return
         }
         // Report liveness before any manifest or asset network work. A slow or
@@ -326,6 +345,8 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             recordManifestSync(context)
             active=quotaHydrated
             activeAuthorization = authorization
+            trustedTimeFailureMessage = null
+            _scheduleClock.value = trustedScheduleTime(authorization, c.screenId, SystemClock.elapsedRealtime(), currentBootCount()) ?: Instant.EPOCH
             _authorizationValid.value = true
             _cachedPlaybackAllowed.value = false
             scheduleAuthorizationExpiry()
@@ -343,7 +364,8 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
         }.onFailure { error ->
             persistDiagnosticError(error)
             online=false
-            if (error is DeviceApiException && error.kind.requiresRepair()) showRecovery(error) else { keepCachedPlayback(c); scheduleReconnect() }
+            if (currentOfflineAuthorizationRemainingMillis() <= 0L) trustedTimeFailureMessage = trustedTimeFailure(error)
+            if (error is DeviceApiException && error.kind.requiresRepair()) showRecovery(error) else { keepCachedPlayback(c); trustedTimeFailureMessage?.let { _diagnostic.value = it }; scheduleReconnect() }
             Log.w("OoroScreen", "manifest unavailable; using LKG/fallback displayId=${c.screenId}", error)
         }
         if (_state.value !is ScreenState.AuthRecovery) _state.value = ScreenState.Player(active ?: fallback(c))
@@ -352,7 +374,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             val current = session
             api.heartbeat(c, if (current != null) PlayerStatus.PLAYING else if (manifestResult.isSuccess) PlayerStatus.READY else PlayerStatus.DEGRADED, active?.version ?: 0, withDeviceHealth(HeartbeatTelemetry(location.current(), current?.campaignId, current?.creativeId, current?.assetId, current?.let { "PLAYING" } ?: "IDLE", current?.startedAt, playbackPositionMs, current?.expectedDurationMs)))
             Log.w("OoroScreen", "heartbeat accepted displayId=${c.screenId} tokenPresent=true paired=true")
-            _diagnostic.value = if (manifestResult.isSuccess) "Manifest accepted · heartbeat accepted" else "LKG/fallback active · heartbeat accepted"
+            _diagnostic.value = trustedTimeFailureMessage ?: if (manifestResult.isSuccess) "Manifest accepted · heartbeat accepted" else "LKG/fallback active · heartbeat accepted"
         }.onFailure { error ->
             if (error is DeviceApiException && error.kind.requiresRepair()) showRecovery(error) else _diagnostic.value = "Heartbeat failed · cached content remains active"
             Log.w("OoroScreen", "heartbeat failed displayId=${c.screenId} tokenPresent=true paired=true", error)
@@ -363,7 +385,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
     private fun keepCachedPlayback(credentials: DeviceCredentials? = store.credentials()) {
         val authorized = credentials != null && active != null && currentOfflineAuthorizationRemainingMillis() > 0L
         _authorizationValid.value = authorized
-        _diagnostic.value = if (authorized) "Authorized cached playback active · reconnecting" else "Offline authorization expired or invalid · waiting for authenticated refresh"
+        _diagnostic.value = if (authorized) "Authorized cached playback active · reconnecting" else trustedTimeFailureMessage ?: "Trusted time unavailable — device reboot detected, reconnect to establish secure schedule time."
         _cachedPlaybackAllowed.value = authorized
         if (_state.value !is ScreenState.AuthRecovery && credentials != null) _state.value = ScreenState.Player(active ?: fallback(credentials))
     }
@@ -414,6 +436,17 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
         }
     }
     private fun showRecovery(error: DeviceApiException) { _cachedPlaybackAllowed.value = false; _diagnostic.value = recoveryMessage(error.kind); _state.value = ScreenState.AuthRecovery(error.kind, recoveryMessage(error.kind), cachedManifest = active) }
+    private fun trustedTimeFailure(error: Throwable?): String {
+        if (!hasValidatedInternet()) return "Trusted time unavailable: connectivity is not validated for internet access."
+        val kind = (error as? DeviceApiException)?.kind
+        return when (kind) {
+            DeviceFailureKind.DNS_ERROR -> "Trusted time unavailable: OORO API DNS lookup failed."
+            DeviceFailureKind.TLS_ERROR -> "Trusted time unavailable: HTTPS/TLS validation failed."
+            DeviceFailureKind.AUTH_EXPIRED, DeviceFailureKind.AUTH_INVALID, DeviceFailureKind.AUTH_REVOKED, DeviceFailureKind.PAIRING_REQUIRED -> "Trusted time unavailable: device authentication was rejected."
+            DeviceFailureKind.NETWORK_UNAVAILABLE, DeviceFailureKind.CONNECTION_REFUSED, DeviceFailureKind.TIMEOUT -> "Trusted time unavailable: OORO API connection failed."
+            else -> "Trusted time unavailable: authenticated server time response was missing, invalid, expired, or moved backwards."
+        }
+    }
     private fun recoveryMessage(kind: DeviceFailureKind): String = when (kind) {
         DeviceFailureKind.DNS_ERROR, DeviceFailureKind.CONNECTION_REFUSED, DeviceFailureKind.TIMEOUT, DeviceFailureKind.TLS_ERROR, DeviceFailureKind.NETWORK_UNAVAILABLE -> "Unable to reach OORO. Check the network connection and try again."
         DeviceFailureKind.AUTH_EXPIRED -> "Device session expired. Reconnect to request a fresh session."
@@ -430,8 +463,8 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             _authorizationValid.value = false
             return null
         }
-        val current = manifest.items.find { it.id == session?.itemId && it.id in verifiedIds }
-        val emergency = manifest.items.any { it.priority >= 1000 && it.hasAuthorizedDeliveryQuota }
+        val current = manifest.items.find { it.id == session?.itemId && it.id in verifiedIds && it.isCampaignDateEligibleAt(now) }
+        val emergency = manifest.items.any { it.priority >= 1000 && it.hasAuthorizedDeliveryQuota && it.isCampaignDateEligibleAt(now) }
         return current?.takeIf { !emergency || it.priority >= 1000 }
             ?: if (allowCachedOffline) nextVerifiedCachedItem(manifest, scheduler, now, offset, verifiedIds)
                 else nextVerifiedManifestItem(manifest, scheduler, now, offset, verifiedIds)
