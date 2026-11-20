@@ -2,6 +2,7 @@ package com.ooro.screenplayer
 
 import com.ooro.screenplayer.layoutstudio.LayoutParseResult
 import com.ooro.screenplayer.layoutstudio.LayoutStudioInterpreter
+import com.ooro.screenplayer.layoutstudio.nextLayoutRotationIndex
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -19,6 +20,21 @@ class LayoutStudioInterpreterTest {
         assertEquals(1024, LayoutStudioInterpreter.toPixelRect(hero, 1280, 720).width)
         assertEquals(683, LayoutStudioInterpreter.toPixelRect(hero, 854, 480).width)
         assertEquals(1536, LayoutStudioInterpreter.toPixelRect(hero, 1920, 1080).width)
+    }
+
+    @Test fun `parses ordered version one image rotation and duration bounds`() {
+        val rotating = """[{"id":"hero","type":"IMAGE","label":"Hero","schemaVersion":1,"geometry":{"x":0,"y":0,"width":0.8,"height":1},"zIndex":0,"fit":"FIT","contentBinding":{"kind":"NONE"},"rotation":{"version":1,"mode":"SEQUENTIAL","items":[{"referenceId":"creative-a","durationSeconds":3},{"referenceId":"creative-b","durationSeconds":3600}]},"visible":true}]"""
+        val parsed = LayoutStudioInterpreter.parse(contract(rotating)) as LayoutParseResult.Valid
+        assertEquals(listOf("creative-a", "creative-b"), parsed.contract.zones.single().rotationItems.map { it.referenceId })
+        assertEquals(listOf(3, 3600), parsed.contract.zones.single().rotationItems.map { it.durationSeconds })
+        val invalid = rotating.replace("\"durationSeconds\":3", "\"durationSeconds\":2")
+        assertEquals("INVALID_ROTATION", (LayoutStudioInterpreter.parse(contract(invalid)) as LayoutParseResult.Invalid).code)
+    }
+
+    @Test fun `sequential rotation wraps indices and empty rotation stays safe`() {
+        assertEquals(1, nextLayoutRotationIndex(0, 2))
+        assertEquals(0, nextLayoutRotationIndex(1, 2))
+        assertEquals(0, nextLayoutRotationIndex(0, 0))
     }
 
     @Test fun `main campaign ad is a supported slot but does not grant eligibility`() {

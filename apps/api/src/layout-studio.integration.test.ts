@@ -47,6 +47,16 @@ test('Layout Studio persists drafts, enforces Super Admin publication and keeps 
     assert.equal(assignment.statusCode, 409)
     assert.equal(assignment.json().error.code, 'LAYOUT_ASSIGNMENT_DISABLED')
 
+    const rotationCampaign = await prisma.campaign.create({
+      data: {
+        name: `Rotation fixtures ${suffix}`, status: 'ACTIVE', commercialFundingStatus: 'PAID',
+        creatives: { create: [
+          { name: 'Rotation image A', status: 'APPROVED', type: 'IMAGE', asset: { create: { fileName: 'rotation-a.png', storageKey: `layout-test/${suffix}-a.png`, url: 'https://example.com/rotation-a.png', checksum: 'c'.repeat(64), mimeType: 'image/png', active: true } } },
+          { name: 'Rotation image B', status: 'APPROVED', type: 'IMAGE', asset: { create: { fileName: 'rotation-b.png', storageKey: `layout-test/${suffix}-b.png`, url: 'https://example.com/rotation-b.png', checksum: 'd'.repeat(64), mimeType: 'image/png', active: true } } },
+        ] },
+      },
+      include: { creatives: true },
+    })
     const customDraft = {
       ...standardV3Draft(),
       mode: 'CUSTOM' as const,
@@ -56,8 +66,16 @@ test('Layout Studio persists drafts, enforces Super Admin publication and keeps 
         id: 'custom-image', type: 'IMAGE' as const, label: 'Custom media', schemaVersion: 1 as const,
         geometry: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 }, zIndex: 0,
         fit: 'FIT' as const, contentBinding: { kind: 'NONE' as const }, visible: true,
+        rotation: { version: 1 as const, mode: 'SEQUENTIAL' as const, items: [
+          { referenceId: rotationCampaign.creatives[0]!.id, durationSeconds: 5 },
+          { referenceId: rotationCampaign.creatives[1]!.id, durationSeconds: 12 },
+        ] },
       }],
     }
+    const invalidRotation = structuredClone(customDraft)
+    invalidRotation.zones[0]!.rotation!.items[0]!.durationSeconds = 2
+    const invalidRotationResponse = await app.inject({ method: 'POST', url: '/api/admin/layout-studio', headers: superHeaders, payload: { name: `Invalid rotation ${suffix}`, contract: invalidRotation } })
+    assert.equal(invalidRotationResponse.statusCode, 422)
     const customCreated = await app.inject({ method: 'POST', url: '/api/admin/layout-studio', headers: superHeaders, payload: { name: `Uncertified draft ${suffix}`, contract: customDraft } })
     assert.equal(customCreated.statusCode, 201, customCreated.body)
     const customId = customCreated.json().data.id as string
@@ -68,6 +86,7 @@ test('Layout Studio persists drafts, enforces Super Admin publication and keeps 
     const customSave = await app.inject({ method: 'PUT', url: `/api/admin/layout-studio/${customId}/draft`, headers: superHeaders, payload: { expectedRowVersion: 1, name: `Uncertified draft saved ${suffix}`, contract: customDraft } })
     assert.equal(customSave.statusCode, 200, customSave.body)
     assert.equal(customSave.json().data.rowVersion, 2)
+    assert.equal(customSave.json().data.draftContract.zones[0].rotation.items[1].durationSeconds, 12)
   } finally {
     await app.close()
     await prisma.$disconnect()

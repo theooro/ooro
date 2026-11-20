@@ -2,7 +2,7 @@
 
 ## Implementation boundary
 
-This feature is a separate integration branch stacked on `fix/screen-fit-thermal` (PR #58), because the locked Standard preview uses the V3 layout contract from that branch. This PR must target `fix/screen-fit-thermal`; it must not merge or modify PR #58.
+This implementation retains the original V1 layout contract lineage. Standard V3 remains the default and its geometry and delivery path are unchanged.
 
 Layout Studio V1 provides an authenticated Standard preview and Custom draft editor, versioned normalized contract validation, persistent draft rows, immutable published revision snapshots, role checks, optimistic revision checks and audit events. Publishing a revision only publishes a presentation contract to the catalog. It does **not** approve, schedule or authorize advertising content.
 
@@ -14,15 +14,15 @@ Standard V3 is locked and resolves normalized coordinates at the target resoluti
 
 ## Custom contract
 
-The editor persists schema version 1 with normalized zones, whitelisted widget types, explicit FIT/CENTER_CROP behavior, content reference IDs and hardware profile labels. API validation rejects out-of-bounds zones, unsupported schema values, invalid bindings and collisions outside supported static overlays. The declared hardware profiles are not certifications: because verified capability budgets are not yet registered, Custom drafts remain editable and previewable but fail validation/publication until the target profile's limits have test evidence. No arbitrary decoder or widget count is assumed.
+The editor persists schema version 1 with normalized zones, whitelisted widget types, explicit FIT/CENTER_CROP behavior, content reference IDs and hardware profile labels. Optional image-zone rotation uses `rotation.version: 1`, `mode: SEQUENTIAL`, ordered unique approved non-sponsored image references, and per-item `durationSeconds` from 3 through 3600 inclusive, with a maximum of 12 items. The sequence loops in order; omitted rotation retains the existing single-binding behavior. Empty or invalid contracts fail closed. API validation rejects out-of-bounds zones, unsupported schema values, invalid bindings, invalid rotation references/durations and collisions outside supported static overlays. The declared hardware profiles are not certifications: because verified capability budgets are not registered, Custom drafts remain editable but cannot be published until the target profile's limits have test evidence. No arbitrary decoder or widget count is assumed.
 
 Approved creative references are checked for current approval, an active asset URL and the requested MAIN/SPONSORED slot relationship when saved/validated/published. That check is a reference-integrity check, not a grant of delivery authorization. Runtime campaign eligibility, manifest leases, checksums, schedules and proof attribution remain owned by the existing advertising pipeline.
 
 ### Android interpretation and preview boundary
 
-The Screen Player now has a native Compose geometry host and a strict read-only parser for Custom contract version 1. It accepts the low-resource zone types `MAIN_AD`, `IMAGE`, `VIDEO`, `TEXT`, `LOGO`, `QR_OFFER`, `SPONSORED_AD` and `BACKGROUND_IMAGE`. `CLOCK`, `WEATHER`, `TICKER` and `NAVIGATION_MAP` are rejected unless the caller explicitly supplies the corresponding verified device capability. Unknown schema widget types fail closed. The parser bounds a layout to 24 zones, one video, one main campaign slot, one independent sponsor slot, and at most one each of clock, weather, ticker, navigation map and QR/offer. Zone edges are rounded from normalized edges (rather than independently rounded widths), clipped to the screen and clipped within each zone; each edge differs from its unrounded value by at most 0.5 physical pixel. The browser and native geometry implementations share this rule.
+The Screen Player has a native Compose geometry host and strict parser for Custom contract version 1, including sequential image rotation. It accepts the low-resource zone types `MAIN_AD`, `IMAGE`, `VIDEO`, `TEXT`, `LOGO`, `QR_OFFER`, `SPONSORED_AD` and `BACKGROUND_IMAGE`. `CLOCK`, `WEATHER`, `TICKER` and `NAVIGATION_MAP` are rejected unless the caller explicitly supplies the corresponding verified device capability. Unknown schema widget types fail closed. The parser bounds a layout to 24 zones, one video, one main campaign slot, one independent sponsor slot, and at most one each of clock, weather, ticker, navigation map and QR/offer. Zone edges are rounded from normalized edges (rather than independently rounded widths), clipped to the screen and clipped within each zone; each edge differs from its unrounded value by at most 0.5 physical pixel. The browser and native geometry implementations share this rule.
 
-The Compose host deliberately takes a content-rendering callback. This keeps media selection and campaign/proof authorization outside layout interpretation. The debug screenshot fixture supplies local synthetic zone content and has no API, playback proof or impression dependency. Custom manifests are not emitted or assigned to live displays, and the current host is not yet connected to production media-resolution adapters. Do not treat the synthetic preview as end-to-end media or advertising acceptance.
+The native host resolves rotated references only through the authenticated, screen-bound manifest and checksum-verified local assets. Every referenced creative must remain campaign-date eligible and have an authorized delivery quota. Custom reference zones do not create ad eligibility or proof authority; billable proof playback stays with the existing primary/sponsored slot pipeline. The backend includes a custom contract in the device manifest only when an ACTIVE, non-revoked assignment points to a PUBLISHED contract and every rotation item is in the eligible manifest. The assignment endpoint remains hard-disabled, so no operator can currently activate this path. Invalid/missing runtime references reject the whole custom contract and return to the existing Standard V3 fallback. The debug screenshot fixture is still synthetic and is not hardware or paid-ad acceptance.
 
 Connected instrumentation must use `apps/screen-android/scripts/connected-test-safe.py` with one exact disposable AVD serial. It checks sole-device status and emulator boot/product properties before invoking Gradle. If a physical board or any ambiguous target is visible to that ADB server, the guard refuses to run; do not bypass it.
 
@@ -36,10 +36,9 @@ Migration `20261106120000_layout_studio_v1` is additive. It creates template, re
 
 ## Safe activation sequence (future)
 
-1. Merge/ship the PR #58 V3 dependency and this Layout Studio API/web release separately.
-2. Validate the additive migration against a restored staging backup and apply it with database-owner approval.
-3. Live assignment remains hard-disabled in the API until native rendering, compatibility certification and staged rollout are complete.
-4. Finish native Compose renderer contract support; do not use WebView.
-5. Certify capabilities on representative hardware and add server-side assignment compatibility checks.
-6. Validate with synthetic previews and disposable devices, then perform an approved staged rollout with rollback and audit monitoring.
-7. Do not change active display assignments until explicit rollout authorization and acceptance.
+1. Validate the additive migration against a restored staging backup and apply it only with database-owner approval.
+2. Release the API/web contract after migration and release review.
+3. Keep live assignment hard-disabled until compatibility certification and staged rollout are complete.
+4. Certify native timing, capabilities, media proof semantics and resource budgets on representative hardware.
+5. Validate with synthetic previews and approved disposable devices, then perform an authorized staged rollout with rollback and audit monitoring.
+6. Do not change active display assignments until explicit rollout authorization and acceptance.

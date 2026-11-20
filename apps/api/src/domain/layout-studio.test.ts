@@ -87,6 +87,29 @@ test('custom zone geometry must be normalized and bound media needs a reference'
   assert.ok(issues.some(issue => issue.code === 'BINDING_REFERENCE_REQUIRED'))
 })
 
+test('versioned sequential image rotations keep ordered bounded durations and do not alter Standard V3', () => {
+  const standard = standardV3Draft()
+  const unchanged = structuredClone(standard)
+  const custom = structuredClone(standard)
+  custom.mode = 'CUSTOM'; custom.preset = 'CUSTOM_CANVAS'; custom.profileId = 'OORO_PREMIUM'
+  custom.zones = [{ ...custom.zones[0]!, id: 'rotating-image', type: 'IMAGE', contentBinding: { kind: 'NONE' }, rotation: { version: 1, mode: 'SEQUENTIAL', items: [
+    { referenceId: '00000000-0000-4000-8000-000000000001', durationSeconds: 3 },
+    { referenceId: '00000000-0000-4000-8000-000000000002', durationSeconds: 3600 },
+  ] } }]
+  const valid = validateLayoutDraft(custom)
+  assert.ok(valid.draft)
+  assert.equal(valid.issues.some(issue => issue.code.startsWith('ROTATION_')), false)
+  assert.deepEqual(valid.draft.zones[0]?.rotation?.items.map(item => item.durationSeconds), [3, 3600])
+  const invalidDuration = structuredClone(custom)
+  invalidDuration.zones[0]!.rotation!.items[0]!.durationSeconds = 2
+  assert.ok(validateLayoutDraft(invalidDuration).issues.some(issue => issue.code === 'SCHEMA_INVALID'))
+  const unsupported = structuredClone(custom)
+  unsupported.zones[0]!.type = 'VIDEO'
+  assert.ok(validateLayoutDraft(unsupported).issues.some(issue => issue.code === 'ROTATION_UNSUPPORTED_ZONE'))
+  assert.deepEqual(validateLayoutDraft(standard).issues, [])
+  assert.deepEqual(standard, unchanged)
+})
+
 test('custom publishing is blocked until the target runtime profile is certified', () => {
   const draft = standardV3Draft()
   draft.mode = 'CUSTOM'

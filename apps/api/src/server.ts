@@ -97,6 +97,12 @@ const bodyOf = <T>(request: any, schema: z.ZodType<T>) => {
 const validateLayoutBindings = async (draft: LayoutDraft, db: typeof prisma | Prisma.TransactionClient = prisma) => {
   const issues: Array<{ code: string; message: string; zoneId?: string }> = []
   for (const zone of draft.zones) {
+    if (zone.rotation) for (const item of zone.rotation.items) {
+      const creative = await db.creative.findUnique({ where: { id: item.referenceId }, select: { status: true, type: true, campaign: { select: { deliverySlot: true } }, asset: { select: { active: true, url: true } } } })
+      if (zone.type !== 'IMAGE' || creative?.status !== 'APPROVED' || creative.type.toUpperCase() !== 'IMAGE' || creative.campaign.deliverySlot === 'SPONSORED' || !creative.asset?.active || !creative.asset.url) {
+        issues.push({ code: 'ROTATION_CONTENT_INELIGIBLE', zoneId: zone.id, message: `${zone.label} rotation items must reference approved, available, non-sponsored image creatives.` })
+      }
+    }
     const binding = zone.contentBinding
     if (binding.kind === 'NONE') continue
     if (!binding.referenceId) { issues.push({ code: 'BINDING_REFERENCE_REQUIRED', zoneId: zone.id, message: `${zone.label} needs a valid existing content reference.` }); continue }
@@ -1237,7 +1243,7 @@ app.post('/api/device/heartbeat', async (request, reply) => {
   const commands = await prisma.displayCommand.findMany({ where: { displayId: display.id, status: 'QUEUED', OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] }, orderBy: { createdAt: 'asc' }, take: 20, select: { id: true, commandType: true, payload: true, expiresAt: true } })
   return ok(request, { accepted: true, heartbeatId: hb.id, serverTime: new Date(), currentManifestVersion: latest.manifest.version, manifestUpdateAvailable: latest.manifest.version !== (input.manifestVersion ?? -1), commands: asJson(commands) }, reply)
 })
-app.get('/api/device/manifest', async (request, reply) => { const display = await authenticateDisplay(request); const { manifest, reasons } = await buildDisplayManifest(display.id); request.log.info({ displayId: display.id, reasons, itemCount: manifest.items.length, hasSponsoredItem: Boolean(manifest.sponsoredItem) }, 'display manifest evaluated'); return ok(request, { version: manifest.version, manifestId: manifest.manifestId, screenId: display.id, generatedAt: manifest.generatedAt, validUntil: manifest.expiresAt, deliveryReasons: reasons, timezone: 'Asia/Kolkata', layout: manifest.layout, news: manifest.news, items: manifest.items, ...(manifest.sponsoredItem ? { sponsoredItem: manifest.sponsoredItem } : {}) }, reply) })
+app.get('/api/device/manifest', async (request, reply) => { const display = await authenticateDisplay(request); const { manifest, reasons } = await buildDisplayManifest(display.id); request.log.info({ displayId: display.id, reasons, itemCount: manifest.items.length, hasSponsoredItem: Boolean(manifest.sponsoredItem), hasCustomLayout: Boolean(manifest.layoutStudioContract) }, 'display manifest evaluated'); return ok(request, { version: manifest.version, manifestId: manifest.manifestId, screenId: display.id, generatedAt: manifest.generatedAt, validUntil: manifest.expiresAt, deliveryReasons: reasons, timezone: 'Asia/Kolkata', layout: manifest.layout, ...(manifest.layoutStudioContract ? { layoutStudioContract: manifest.layoutStudioContract } : {}), news: manifest.news, items: manifest.items, ...(manifest.sponsoredItem ? { sponsoredItem: manifest.sponsoredItem } : {}) }, reply) })
 app.get('/api/admin/displays/:displayId/manifest-debug', async (request, reply) => { await requireRoles(request, ['ADMIN', 'SUPER_ADMIN', 'OPERATIONS']); const { displayId } = request.params as { displayId: string }; const { manifest, reasons } = await buildDisplayManifest(displayId); return ok(request, { displayId, reasons, selected: manifest.items, manifestVersion: manifest.version }, reply) })
 app.get('/api/device/commands', async (request, reply) => {
   const display = await authenticateDisplay(request)

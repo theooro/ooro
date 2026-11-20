@@ -370,7 +370,11 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     val parsedCustomLayout = (customLayoutParseResult as? LayoutParseResult.Valid)?.contract
     // Production rendering requires the contract to arrive inside a device-authenticated,
     // screen-bound manifest. Preview-only callers are isolated and proof-suppressed.
-    val customLayout = parsedCustomLayout?.takeIf { pairedScreenId == manifest.screenId }
+    val customLayout = parsedCustomLayout?.takeIf { contract ->
+        pairedScreenId == manifest.screenId && contract.zones.flatMap { it.rotationItems }.all { rotation ->
+            manifest.items.any { item -> item.creativeId == rotation.referenceId && item.id in verifiedAssetIds && item.hasAuthorizedDeliveryQuota && item.isCampaignDateEligibleAt(scheduleClock) }
+        }
+    }
     val rootModifier = if (preview == null) Modifier.fillMaxSize().background(Color.Black).clickable {
         taps++
         if (taps >= 7) { taps = 0; vm?.showAdmin() }
