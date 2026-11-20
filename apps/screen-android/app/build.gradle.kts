@@ -16,6 +16,7 @@ android { namespace = "com.ooro.screenplayer"; compileSdk = 35
         ?: System.getenv("OORO_REPAIR_ACCESS_CODE"))?.trim().orEmpty()
     val debugRepairAccessCode = configuredRepairAccessCode
     val releaseApiUrl = (project.findProperty("deviceApiBaseUrl")?.toString() ?: System.getenv("OORO_DEVICE_API_URL"))?.trim()?.trimEnd('/').orEmpty()
+    val mapStyleUrl = (project.findProperty("mapStyleUrl")?.toString() ?: System.getenv("OORO_MAP_STYLE_URL"))?.trim().orEmpty()
     if (gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }) {
         require(releaseApiUrl.startsWith("https://")) { "Release requires deviceApiBaseUrl/OORO_DEVICE_API_URL pointing to the HTTPS device API" }
     }
@@ -34,12 +35,13 @@ android { namespace = "com.ooro.screenplayer"; compileSdk = 35
             buildConfigField("String", "REPAIR_ACCESS_CODE", "\"$debugRepairAccessCode\"")
             buildConfigField("String", "DEFAULT_TIMEZONE", "\"Asia/Kolkata\"")
             buildConfigField("int", "HEARTBEAT_INTERVAL_MINUTES", "15")
+            buildConfigField("String", "MAP_STYLE_URL", "\"${mapStyleUrl.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
             val syncIntervalSeconds = (project.findProperty("syncIntervalSeconds")?.toString()
                 ?: System.getenv("OORO_SYNC_INTERVAL_SECONDS")
                 ?: "90").toIntOrNull()?.coerceIn(5, 300) ?: 90
             buildConfigField("int", "SYNC_INTERVAL_SECONDS", syncIntervalSeconds.toString())
         }
-        release { isMinifyEnabled = true; isShrinkResources = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt")); manifestPlaceholders["allowCleartext"] = false; buildConfigField("String", "API_BASE_URL", "\"$releaseApiUrl\""); buildConfigField("boolean", "USE_MOCK_BACKEND", "false"); buildConfigField("boolean", "ALLOW_DEMO_PAIRING", "false"); buildConfigField("String", "REPAIR_ACCESS_CODE", "\"$configuredRepairAccessCode\""); buildConfigField("String", "DEFAULT_TIMEZONE", "\"Asia/Kolkata\""); buildConfigField("int", "HEARTBEAT_INTERVAL_MINUTES", "15"); buildConfigField("int", "SYNC_INTERVAL_SECONDS", "90") }
+        release { isMinifyEnabled = true; isShrinkResources = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt")); manifestPlaceholders["allowCleartext"] = false; buildConfigField("String", "API_BASE_URL", "\"$releaseApiUrl\""); buildConfigField("boolean", "USE_MOCK_BACKEND", "false"); buildConfigField("boolean", "ALLOW_DEMO_PAIRING", "false"); buildConfigField("String", "REPAIR_ACCESS_CODE", "\"$configuredRepairAccessCode\""); buildConfigField("String", "DEFAULT_TIMEZONE", "\"Asia/Kolkata\""); buildConfigField("int", "HEARTBEAT_INTERVAL_MINUTES", "15"); buildConfigField("int", "SYNC_INTERVAL_SECONDS", "90"); buildConfigField("String", "MAP_STYLE_URL", "\"${mapStyleUrl.replace("\\", "\\\\").replace("\"", "\\\"")}\"") }
     }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }

@@ -91,6 +91,7 @@ import com.ooro.screenplayer.layoutstudio.LayoutStudioInterpreter
 import com.ooro.screenplayer.layoutstudio.LayoutStudioRenderer
 import com.ooro.screenplayer.layoutstudio.LayoutStudioZone
 import com.ooro.screenplayer.layoutstudio.resolveCustomWidgetContent
+import com.ooro.screenplayer.map.ConfiguredMapStyleProvider
 import org.maplibre.android.annotations.Marker
 import org.maplibre.android.annotations.MarkerOptions
 import org.maplibre.android.camera.CameraUpdateFactory
@@ -755,6 +756,14 @@ private fun creativeDuration(item: ManifestItem) = item.durationSeconds * 1000L
     SideEffect { RuntimeDiagnostics.increment(RuntimeDiagnostics.Counter.MAP_COMPOSITION) }
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val styleUri = remember { ConfiguredMapStyleProvider(BuildConfig.MAP_STYLE_URL).styleUri() }
+    if (styleUri == null) {
+        LaunchedEffect(Unit) { onMapHealth(false, "Map provider is not configured") }
+        Box(modifier.background(Color(0xFF263238)), contentAlignment = Alignment.Center) {
+            Text("Map unavailable · ads continue", color = Color.LightGray, fontSize = 13.sp)
+        }
+        return
+    }
     remember(context.applicationContext) {
         org.maplibre.android.MapLibre.getInstance(context.applicationContext, "", org.maplibre.android.WellKnownTileServer.MapLibre)
         true
@@ -849,8 +858,8 @@ private fun creativeDuration(item: ManifestItem) = item.durationSeconds * 1000L
                 }
                 createdMapView.getMapAsync { readyMap ->
                     map = readyMap
-                    readyMap.setStyle(Style.Builder().fromJson(OSM_STYLE)) {
-                        Log.i("OoroScreen", "MAP_STYLE_LOADED provider=MapLibre source=OpenStreetMap")
+                    readyMap.setStyle(Style.Builder().fromUri(styleUri)) {
+                        Log.i("OoroScreen", "MAP_STYLE_LOADED provider=MapLibre styleConfigured=true")
                         mapError = null
                     }
                 }
@@ -871,7 +880,6 @@ private fun creativeDuration(item: ManifestItem) = item.durationSeconds * 1000L
         else if (!mapLoaded && mapError != null) Text("Map tiles unavailable · GPS active", color = Color.LightGray, fontSize = 13.sp, modifier = Modifier.align(Alignment.BottomStart).background(Color(0xAA121820)).padding(6.dp))
     }
 }
-private const val OSM_STYLE = """{"version":8,"sources":{"osm":{"type":"raster","tiles":["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],"tileSize":256,"attribution":"© OpenStreetMap contributors"}},"layers":[{"id":"osm","type":"raster","source":"osm"}]}"""
 
 private fun distanceMeters(start: LatLng, end: LatLng): Double {
     val earthRadius = 6_371_000.0
