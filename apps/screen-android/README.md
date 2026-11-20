@@ -17,6 +17,8 @@ Debug builds require an explicit backend URL unless mock mode is explicitly enab
 
 The device UUID and encrypted device token are persisted. Pairing stores the device session, manifests are activated only after required assets are cached, and the last valid manifest remains available during network loss. Images and videos are rendered from the local creative cache through Media3 for video playback. Fine/coarse location permission is requested for telemetry only; denying it does not block pairing or playback. While the player is active, heartbeats are sent about every 15 seconds when moving and 90 seconds when stationary; location fixes are requested at a 10-second/75-meter provider interval. No background-location permission is requested.
 
+The manifest refreshes every three minutes while Android reports validated internet. Map rendering uses MapLibre with a provider-neutral style URL configured at build time through `-PmapStyleUrl=https://...` or `OORO_MAP_STYLE_URL`. Configure a production tile provider whose license and usage limits cover the deployment. The player does not use the public OpenStreetMap tile endpoint as a production service; without a configured HTTPS style, the map zone shows a non-blocking unavailable message and advertising playback continues.
+
 ## Kiosk and boot
 
 `BootReceiver` starts paired devices after boot and package replacement. Without Device Owner, the player uses immersive fullscreen only. When provisioned as Device Owner, the app configures Lock Task and starts it from the display activity. Provision managed test hardware after a factory reset with:
