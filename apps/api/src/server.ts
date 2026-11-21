@@ -44,6 +44,7 @@ import { driverEmailOtpHash, normalizeDriverEmail, verifyGoogleIdToken } from '.
 import { sendDriverEmailOtp } from './domain/transactional-email.js'
 import { normalizeIndianPhone } from './domain/phone.js'
 import { creativeTypeMatchesWidget, layoutDraftSchema, standardV3Draft, validateLayoutDraft, type LayoutDraft } from './domain/layout-studio.js'
+import { readTrustedDatabaseTime, trustedServerInstanceId } from './domain/trusted-server-time.js'
 
 const app = Fastify({ logger: true })
 const deviceOsUploadBodyLimit = Math.ceil(config.deviceOsMaxApkBytes * 4 / 3) + 1024 * 1024
@@ -1243,7 +1244,21 @@ app.post('/api/device/heartbeat', async (request, reply) => {
   const commands = await prisma.displayCommand.findMany({ where: { displayId: display.id, status: 'QUEUED', OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] }, orderBy: { createdAt: 'asc' }, take: 20, select: { id: true, commandType: true, payload: true, expiresAt: true } })
   return ok(request, { accepted: true, heartbeatId: hb.id, serverTime: new Date(), currentManifestVersion: latest.manifest.version, manifestUpdateAvailable: latest.manifest.version !== (input.manifestVersion ?? -1), commands: asJson(commands) }, reply)
 })
-app.get('/api/device/manifest', async (request, reply) => { const display = await authenticateDisplay(request); const { manifest, reasons } = await buildDisplayManifest(display.id); request.log.info({ displayId: display.id, reasons, itemCount: manifest.items.length, hasSponsoredItem: Boolean(manifest.sponsoredItem), hasCustomLayout: Boolean(manifest.layoutStudioContract) }, 'display manifest evaluated'); return ok(request, { version: manifest.version, manifestId: manifest.manifestId, screenId: display.id, generatedAt: manifest.generatedAt, authenticatedServerTime: new Date().toISOString(), validUntil: manifest.expiresAt, deliveryReasons: reasons, timezone: 'Asia/Kolkata', layout: manifest.layout, ...(manifest.layoutStudioContract ? { layoutStudioContract: manifest.layoutStudioContract } : {}), news: manifest.news, items: manifest.items, ...(manifest.sponsoredItem ? { sponsoredItem: manifest.sponsoredItem } : {}) }, reply) })
+app.get('/api/device/manifest', async (request, reply) => {
+  const display = await authenticateDisplay(request)
+  // A request may be routed to any API process. Use the shared PostgreSQL
+  // clock, not process-local Date.now(), so adjacent responses have one time
+  // authority even when container clocks differ slightly.
+  const authenticatedServerTime = await readTrustedDatabaseTime(async () => {
+    const [timeRow] = await prisma.$queryRaw<Array<{ serverTime: Date }>>(Prisma.sql`SELECT clock_timestamp() AS "serverTime"`)
+    return timeRow?.serverTime
+  })
+  const serverInstanceId = trustedServerInstanceId()
+  const { manifest, reasons } = await buildDisplayManifest(display.id, authenticatedServerTime)
+  reply.header('x-server-instance-id', serverInstanceId).header('cache-control', 'private, no-store')
+  request.log.info({ requestId: request.id, displayId: display.id, serverInstanceId, authenticatedServerTime: authenticatedServerTime.toISOString(), generatedAt: manifest.generatedAt, reasons, itemCount: manifest.items.length, hasSponsoredItem: Boolean(manifest.sponsoredItem), hasCustomLayout: Boolean(manifest.layoutStudioContract) }, 'display manifest evaluated')
+  return ok(request, { version: manifest.version, manifestId: manifest.manifestId, screenId: display.id, generatedAt: manifest.generatedAt, authenticatedServerTime: authenticatedServerTime.toISOString(), serverInstanceId, validUntil: manifest.expiresAt, deliveryReasons: reasons, timezone: 'Asia/Kolkata', layout: manifest.layout, ...(manifest.layoutStudioContract ? { layoutStudioContract: manifest.layoutStudioContract } : {}), news: manifest.news, items: manifest.items, ...(manifest.sponsoredItem ? { sponsoredItem: manifest.sponsoredItem } : {}) }, reply)
+})
 app.get('/api/admin/displays/:displayId/manifest-debug', async (request, reply) => { await requireRoles(request, ['ADMIN', 'SUPER_ADMIN', 'OPERATIONS']); const { displayId } = request.params as { displayId: string }; const { manifest, reasons } = await buildDisplayManifest(displayId); return ok(request, { displayId, reasons, selected: manifest.items, manifestVersion: manifest.version }, reply) })
 app.get('/api/device/commands', async (request, reply) => {
   const display = await authenticateDisplay(request)

@@ -319,15 +319,47 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             Log.w("OoroScreen", "heartbeat failed displayId=${c.screenId} tokenPresent=true paired=true", error)
         }
 
+        var timeRequestStartElapsedMillis: Long? = null
+        var previousTrustedServerTimeMillis: Long? = null
+        var previousTrustedReceivedElapsedMillis: Long? = null
+        var previousTrustedBootCount: Int? = null
+        var timeRequestId: String? = null
+        var timeServerInstanceId: String? = null
+        var timeRawServerTime: String? = null
+        var timeHttpStatus: Int? = null
+        var expectedTrustedServerTimeMillis: Long? = null
+        var rollbackDeltaMillis: Long? = null
         val manifestResult = runCatching {
+            val previousAuthorizationEntity = db.manifestDao().active()
+            timeRequestStartElapsedMillis = SystemClock.elapsedRealtime()
+            previousTrustedServerTimeMillis = previousAuthorizationEntity?.authorizationServerTimeUtcMillis
+            previousTrustedReceivedElapsedMillis = previousAuthorizationEntity?.authorizationReceivedElapsedMillis
+            previousTrustedBootCount = previousAuthorizationEntity?.authorizationBootCount
+            expectedTrustedServerTimeMillis = expectedAuthenticatedServerTimeUtcMillis(
+                previousTrustedServerTimeMillis,
+                previousTrustedReceivedElapsedMillis,
+                previousTrustedBootCount,
+                timeRequestStartElapsedMillis ?: SystemClock.elapsedRealtime(),
+                currentBootCount(),
+            )
             val incoming = api.manifest(c)
+            timeRequestId = incoming.requestId
+            timeServerInstanceId = incoming.serverInstanceId
+            timeRawServerTime = incoming.rawAuthenticatedServerTime
+            timeHttpStatus = incoming.manifestHttpStatus
+            val incomingServerTimeMillis = incoming.authenticatedServerTime?.toEpochMilli()
+            val requestStart = timeRequestStartElapsedMillis ?: SystemClock.elapsedRealtime()
+            rollbackDeltaMillis = authenticatedTimeDeltaMillis(expectedTrustedServerTimeMillis, incomingServerTimeMillis)
+            Log.i("OoroTrustedTime", "manifest authorization requestId=${timeRequestId ?: "unavailable"} serverInstanceId=${timeServerInstanceId ?: "unavailable"} httpStatus=${timeHttpStatus ?: "unknown"} rawServerTime=${timeRawServerTime ?: "missing"} deviceElapsedStartMs=$requestStart deviceElapsedResponseMs=${SystemClock.elapsedRealtime()} previousAnchorUtcMs=${previousTrustedServerTimeMillis ?: "missing"} previousAnchorElapsedMs=${previousTrustedReceivedElapsedMillis ?: "missing"} previousAnchorBootCount=${previousTrustedBootCount ?: "missing"} currentBootCount=${currentBootCount() ?: "missing"} expectedServerTimeUtcMs=${expectedTrustedServerTimeMillis ?: "unavailable"} rollbackDeltaMs=${rollbackDeltaMillis ?: "unavailable"}")
+            check(incomingServerTimeMillis != null) { "authenticated server time is missing or malformed" }
+            check(expectedTrustedServerTimeMillis == null || incomingServerTimeMillis >= expectedTrustedServerTimeMillis!!) {
+                "authenticated server time regressed against the monotonic anchor by ${rollbackDeltaMillis ?: "unknown"} ms"
+            }
             check(incoming.screenId == c.screenId) { "manifest is assigned to a different screen" }
             val receivedElapsed = SystemClock.elapsedRealtime()
             val bootCount = currentBootCount()
             val authorization = issueOfflineAuthorization(c.screenId, incoming.generatedAt, incoming.validUntil, incoming.authenticatedServerTime, receivedElapsed, bootCount)
                 ?: error("authenticated offline authorization lease is missing, expired, or invalid")
-            val previousServerTime = db.manifestDao().active()?.authorizationServerTimeUtcMillis
-            check(serverTimeDoesNotRollback(previousServerTime, authorization.serverTimeUtcMillis)) { "authenticated server time moved backwards; previous authorization retained" }
             val currentlyPlayingItems = active?.items.orEmpty().filter { it.id == session?.itemId }
             val required = incoming.items.filter { it.url.isNotBlank() }
             val cachedMainIds = required.mapNotNull { item -> assets.ensure(item)?.let { item.id } }.toSet()
@@ -362,6 +394,9 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             scheduleManifestRefresh(incoming)
             Log.w("OoroScreen", "manifest accepted displayId=${c.screenId} version=${incoming.version} items=${incoming.items.size}")
         }.onFailure { error ->
+            if (timeRequestStartElapsedMillis != null) {
+                Log.w("OoroTrustedTime", "manifest authorization failed requestId=${timeRequestId ?: "unavailable"} serverInstanceId=${timeServerInstanceId ?: "unavailable"} httpStatus=${timeHttpStatus ?: "unknown"} rawServerTime=${timeRawServerTime ?: "missing"} deviceElapsedStartMs=$timeRequestStartElapsedMillis deviceElapsedFailureMs=${SystemClock.elapsedRealtime()} previousAnchorUtcMs=${previousTrustedServerTimeMillis ?: "missing"} previousAnchorElapsedMs=${previousTrustedReceivedElapsedMillis ?: "missing"} previousAnchorBootCount=${previousTrustedBootCount ?: "missing"} expectedServerTimeUtcMs=${expectedTrustedServerTimeMillis ?: "unavailable"} rollbackDeltaMs=${rollbackDeltaMillis ?: "unavailable"} error=${error.message ?: error.javaClass.simpleName}")
+            }
             persistDiagnosticError(error)
             online=false
             if (currentOfflineAuthorizationRemainingMillis() <= 0L) trustedTimeFailureMessage = trustedTimeFailure(error)

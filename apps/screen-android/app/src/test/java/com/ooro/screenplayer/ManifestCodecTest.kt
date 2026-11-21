@@ -84,10 +84,9 @@ class ManifestCodecTest {
         assertEquals(null, ManifestCodec.parse(missing).authenticatedServerTime)
 
         val invalid = response.replace(serverTime, "not-a-server-time")
-        try {
-            ManifestCodec.parse(invalid)
-            fail("An invalid authenticated server time must reject the manifest")
-        } catch (_: java.time.format.DateTimeParseException) { }
+        val invalidParsed = ManifestCodec.parse(invalid)
+        assertEquals("not-a-server-time", invalidParsed.rawAuthenticatedServerTime)
+        assertEquals(null, invalidParsed.authenticatedServerTime)
     }
 
     @Test fun `authorized QR destination record ID survives manifest cache round trip`() {
