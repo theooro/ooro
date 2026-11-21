@@ -46,6 +46,26 @@ internal fun issueOfflineAuthorization(
 internal fun serverTimeDoesNotRollback(previousServerTimeUtcMillis: Long?, incomingServerTimeUtcMillis: Long): Boolean =
     previousServerTimeUtcMillis == null || incomingServerTimeUtcMillis >= previousServerTimeUtcMillis
 
+/** Expected authenticated time at request start, advanced only from a signed anchor and monotonic elapsed time. */
+internal fun expectedAuthenticatedServerTimeUtcMillis(
+    previousServerTimeUtcMillis: Long?,
+    previousReceivedElapsedMillis: Long?,
+    previousBootCount: Int?,
+    requestStartElapsedMillis: Long,
+    currentBootCount: Int?,
+): Long? {
+    val previous = previousServerTimeUtcMillis ?: return null
+    if (previousBootCount == null || currentBootCount == null || previousBootCount != currentBootCount) return previous
+    val received = previousReceivedElapsedMillis ?: return previous
+    if (requestStartElapsedMillis < received) return previous
+    return runCatching { Math.addExact(previous, requestStartElapsedMillis - received) }.getOrNull() ?: previous
+}
+
+internal fun authenticatedTimeDeltaMillis(expectedServerTimeUtcMillis: Long?, incomingServerTimeUtcMillis: Long?): Long? {
+    if (expectedServerTimeUtcMillis == null || incomingServerTimeUtcMillis == null) return null
+    return runCatching { Math.subtractExact(incomingServerTimeUtcMillis, expectedServerTimeUtcMillis) }.getOrNull()
+}
+
 internal fun offlineAuthorizationRemainingMillis(
     authorization: OfflineAuthorization?,
     pairedScreenId: String?,

@@ -152,6 +152,48 @@ class OfflinePlaybackRulesTest {
         assertFalse(serverTimeDoesNotRollback(now.toEpochMilli(), earlier))
     }
 
+    @Test fun consecutiveManifestResponsesAreComparedWithMonotonicExpectedTime() {
+        val expected = expectedAuthenticatedServerTimeUtcMillis(10_000L, 1_000L, 7, 3_000L, 7)
+        assertEquals(12_000L, expected)
+        assertEquals(25L, authenticatedTimeDeltaMillis(expected, 12_025L))
+        assertTrue(12_025L >= requireNotNull(expected))
+    }
+
+    @Test fun smallServerClockSkewIsDetectedAgainstRequestStartExpectation() {
+        val previous = 10_000L
+        val expected = expectedAuthenticatedServerTimeUtcMillis(previous, 1_000L, 7, 3_000L, 7)
+        val slightlyBehind = 11_999L
+        assertTrue(serverTimeDoesNotRollback(previous, slightlyBehind))
+        assertEquals(-1L, authenticatedTimeDeltaMillis(expected, slightlyBehind))
+        assertFalse(slightlyBehind >= requireNotNull(expected))
+    }
+
+    @Test fun actualAuthenticatedServerTimeRollbackIsRejected() {
+        val previous = 12_000L
+        val expected = expectedAuthenticatedServerTimeUtcMillis(previous, 1_000L, 7, 3_000L, 7)
+        val rolledBack = 10_000L
+        assertEquals(-4_000L, authenticatedTimeDeltaMillis(expected, rolledBack))
+        assertFalse(serverTimeDoesNotRollback(previous, rolledBack))
+    }
+
+    @Test fun rebootRecoveryUsesFreshAuthenticatedTimeWithoutOldBootElapsedClock() {
+        val previous = 10_000L
+        val expected = expectedAuthenticatedServerTimeUtcMillis(previous, 90_000L, 7, 500L, 8)
+        assertEquals(previous, expected)
+        assertTrue(serverTimeDoesNotRollback(expected, 10_001L))
+        assertEquals(0L, offlineAuthorizationRemainingMillis(
+            OfflineAuthorization("screen-test", 90_000L, 7, 300_000L, previous),
+            "screen-test", 500L, 8,
+        ))
+    }
+
+    @Test fun missingOrMalformedAuthenticatedTimeNeverCreatesAnAuthorization() {
+        val expiry = now.plusSeconds(600)
+        assertNull(issueOfflineAuthorization("screen-test", now, expiry, null, 1_000L, 9))
+        val malformed = runCatching { java.time.Instant.parse("not-a-time") }.getOrNull()
+        assertNull(issueOfflineAuthorization("screen-test", now, expiry, malformed, 1_000L, 9))
+    }
+
     @Test fun eligibilityMessageNamesMissingQuotaInsteadOfCampaignSchedule() {
         val noGrant = manifest(listOf(item("legacy").copy(deliveryQuota = null)))
         val message = offlineEmptyMessage(noGrant, now, setOf("legacy"))

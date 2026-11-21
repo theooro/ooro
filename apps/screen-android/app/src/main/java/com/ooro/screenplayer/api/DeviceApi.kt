@@ -3,6 +3,7 @@ package com.ooro.screenplayer.api
 import com.ooro.screenplayer.BuildConfig
 import com.ooro.screenplayer.data.DeviceStore
 import com.ooro.screenplayer.model.*
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -59,19 +60,39 @@ class MockDeviceApi : DeviceApi {
 
 class HttpDeviceApi(private val baseUrl: String) : DeviceApi {
     init { require(BuildConfig.DEBUG || baseUrl.startsWith("https://")) { "Release screen builds require HTTPS" } }
-    private suspend fun request(path: String, method: String, token: String?, body: String? = null): String = withContext(Dispatchers.IO) {
-        val connection = try { (URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection).apply { requestMethod = method; connectTimeout = 10_000; readTimeout = 15_000; setRequestProperty("Accept", "application/json"); token?.let { setRequestProperty("Authorization", "Bearer $it") }; if (body != null) { doOutput = true; setRequestProperty("Content-Type", "application/json"); outputStream.use { it.write(body.toByteArray()) } } } } catch (error: IOException) { throw DeviceApiException(classifyNetworkFailure(error), endpoint = path, cause = error) }
+    private suspend fun request(path: String, method: String, token: String?, body: String? = null, onSuccess: ((Int, HttpURLConnection) -> Unit)? = null): String = withContext(Dispatchers.IO) {
+        val connection = try { (URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection).apply { requestMethod = method; useCaches = false; connectTimeout = 10_000; readTimeout = 15_000; setRequestProperty("Accept", "application/json"); if (path == "/api/device/manifest") setRequestProperty("Cache-Control", "no-cache"); token?.let { setRequestProperty("Authorization", "Bearer $it") }; if (body != null) { doOutput = true; setRequestProperty("Content-Type", "application/json"); outputStream.use { it.write(body.toByteArray()) } } } } catch (error: IOException) { throw DeviceApiException(classifyNetworkFailure(error), endpoint = path, cause = error) }
         val status = try { connection.responseCode } catch (error: IOException) { throw DeviceApiException(classifyNetworkFailure(error), endpoint = path, cause = error) }
         if (status !in 200..299) {
             val errorBody = runCatching { (connection.errorStream ?: connection.inputStream).bufferedReader().use { it.readText() } }.getOrDefault("")
             val detail = runCatching { JSONObject(errorBody).optJSONObject("error")?.optString("code") }.getOrNull().orEmpty()
+            if (path == "/api/device/manifest") {
+                val requestId = runCatching { JSONObject(errorBody).optString("requestId") }.getOrNull()?.takeIf { it.isNotBlank() && it != "null" }
+                Log.w("OoroTrustedTime", "manifest response httpStatus=$status requestId=${requestId ?: "unavailable"} serverInstanceId=${connection.getHeaderField("x-server-instance-id") ?: "unavailable"} rawServerTime=unavailable deviceElapsedMs=${android.os.SystemClock.elapsedRealtime()}")
+            }
             throw DeviceApiException(classifyDeviceFailure(status, detail.takeIf { it.isNotBlank() }), status, path)
         }
+        onSuccess?.invoke(status, connection)
         return@withContext connection.inputStream.bufferedReader().use { it.readText() }
     }
     override suspend fun health() { request("/api/health", "GET", null) }
     override suspend fun pair(request: PairRequest): PairResponse { val json = request.toJson(); val body = request("/api/device/pair", "POST", null, json); val envelope = JSONObject(body); val obj = envelope.optJSONObject("data") ?: envelope; return PairResponse(DeviceCredentials(request.deviceId, obj.getString("screenId"), obj.optString("workspaceId"), obj.getString("deviceToken"), obj.optString("deviceName", "OORO Screen"))) }
-    override suspend fun manifest(credentials: DeviceCredentials): DeviceManifest { com.ooro.screenplayer.RuntimeDiagnostics.increment(com.ooro.screenplayer.RuntimeDiagnostics.Counter.MANIFEST_REQUEST); val response = request("/api/device/manifest", "GET", credentials.token); val envelope = JSONObject(response); return ManifestCodec.parse((envelope.optJSONObject("data") ?: envelope).toString()) }
+    override suspend fun manifest(credentials: DeviceCredentials): DeviceManifest {
+        com.ooro.screenplayer.RuntimeDiagnostics.increment(com.ooro.screenplayer.RuntimeDiagnostics.Counter.MANIFEST_REQUEST)
+        var responseStatus: Int? = null
+        var responseInstanceId: String? = null
+        val response = request("/api/device/manifest", "GET", credentials.token, onSuccess = { status, connection ->
+            responseStatus = status
+            responseInstanceId = connection.getHeaderField("x-server-instance-id")
+        })
+        val envelope = JSONObject(response)
+        val data = envelope.optJSONObject("data") ?: envelope
+        val rawServerTime = data.optString("authenticatedServerTime").takeIf { it.isNotBlank() && it != "null" }
+        val requestId = envelope.optString("requestId").takeIf { it.isNotBlank() && it != "null" }
+        val instanceId = data.optString("serverInstanceId").takeIf { it.isNotBlank() && it != "null" } ?: responseInstanceId
+        Log.i("OoroTrustedTime", "manifest response httpStatus=${responseStatus ?: "unknown"} requestId=${requestId ?: "unavailable"} serverInstanceId=${instanceId ?: "unavailable"} rawServerTime=${rawServerTime ?: "missing"} deviceElapsedMs=${android.os.SystemClock.elapsedRealtime()}")
+        return ManifestCodec.parse(data.toString()).copy(rawAuthenticatedServerTime = rawServerTime, requestId = requestId, serverInstanceId = instanceId, manifestHttpStatus = responseStatus)
+    }
     override suspend fun heartbeat(credentials: DeviceCredentials, status: PlayerStatus, manifestVersion: Long, telemetry: HeartbeatTelemetry) { com.ooro.screenplayer.RuntimeDiagnostics.increment(com.ooro.screenplayer.RuntimeDiagnostics.Counter.HEARTBEAT_REQUEST); val location = telemetry.location; request("/api/device/heartbeat", "POST", credentials.token, JSONObject().put("screenId", credentials.screenId).put("deviceId", credentials.deviceId).put("status", status.name).put("screenState", status.name).put("playbackState", telemetry.playbackState).put("manifestVersion", manifestVersion).put("appVersion", BuildConfig.VERSION_NAME).put("androidVersion", android.os.Build.VERSION.RELEASE).put("manufacturer", android.os.Build.MANUFACTURER).put("model", android.os.Build.MODEL).put("networkType", telemetry.networkType).put("networkConnected", telemetry.networkConnected).put("storageFree", telemetry.storageFree).put("storageTotal", telemetry.storageTotal).put("currentCampaignId", telemetry.campaignId).put("currentCreativeId", telemetry.creativeId).put("currentAssetId", telemetry.assetId).put("playbackStartedAt", telemetry.playbackStartedAt?.toString()).put("playbackPositionMs", telemetry.playbackPositionMs).put("expectedDurationMs", telemetry.expectedDurationMs).put("supportsDeliveryQuota", true).put("latitude", location?.latitude).put("longitude", location?.longitude).put("accuracyMeters", location?.accuracyMeters).put("speedMps", location?.speedMps).put("headingDegrees", location?.headingDegrees).put("locationOccurredAt", location?.occurredAt?.let { Instant.ofEpochMilli(it).toString() }).put("timestamp", Instant.now().toString()).toString()) }
     override suspend fun uploadProof(credentials: DeviceCredentials, events: List<ProofOfPlay>): ProofUploadResult {
         val payload = JSONArray().apply {
@@ -123,8 +144,9 @@ object ManifestCodec {
             parse(sponsoredRoot.toString()).items.firstOrNull()?.takeIf { it.type == CreativeType.IMAGE }
         }
         val reasons = root.optJSONArray("deliveryReasons")?.let { values -> buildList { for (index in 0 until values.length()) add(values.optString(index)) } }.orEmpty()
-        val trustedServerTime = root.optString("authenticatedServerTime").takeIf { it.isNotBlank() && it != "null" }?.let(Instant::parse)
-        return DeviceManifest(root.optLong("version"), root.optString("screenId"), root.optString("timezone", BuildConfig.DEFAULT_TIMEZONE), items, root.optString("validUntil").takeIf { it.isNotBlank() && it != "null" }?.let(Instant::parse), layout, config, NewsConfig(newsJson.optInt("scrollSpeed", 42), announcements), layoutJson?.optInt("contractVersion", 1)?.coerceAtLeast(1) ?: 1, sponsored, root.optJSONObject("layoutStudioContract")?.toString(), root.optString("generatedAt").takeIf { it.isNotBlank() && it != "null" }?.let(Instant::parse), reasons, trustedServerTime)
+        val rawTrustedServerTime = root.optString("authenticatedServerTime").takeIf { it.isNotBlank() && it != "null" }
+        val trustedServerTime = rawTrustedServerTime?.let { raw -> runCatching { Instant.parse(raw) }.getOrNull() }
+        return DeviceManifest(root.optLong("version"), root.optString("screenId"), root.optString("timezone", BuildConfig.DEFAULT_TIMEZONE), items, root.optString("validUntil").takeIf { it.isNotBlank() && it != "null" }?.let(Instant::parse), layout, config, NewsConfig(newsJson.optInt("scrollSpeed", 42), announcements), layoutJson?.optInt("contractVersion", 1)?.coerceAtLeast(1) ?: 1, sponsored, root.optJSONObject("layoutStudioContract")?.toString(), root.optString("generatedAt").takeIf { it.isNotBlank() && it != "null" }?.let(Instant::parse), reasons, trustedServerTime, rawAuthenticatedServerTime = rawTrustedServerTime)
     }
     fun encode(manifest: DeviceManifest): String = JSONObject().put("version", manifest.version).put("screenId", manifest.screenId).put("timezone", manifest.timezone).put("generatedAt", manifest.generatedAt?.toString()).put("authenticatedServerTime", manifest.authenticatedServerTime?.toString()).put("deliveryReasons", org.json.JSONArray(manifest.deliveryReasons)).put("layout", JSONObject().put("type", manifest.layout.name).put("contractVersion", manifest.layoutContractVersion).put("primaryWidthPercent", manifest.layoutConfig.primaryWidthPercent).put("adHeightPercent", manifest.layoutConfig.adHeightPercent).put("qrHeightPercent", manifest.layoutConfig.qrHeightPercent).put("newsScrollSpeed", manifest.layoutConfig.newsScrollSpeed)).put("news", JSONObject().put("scrollSpeed", manifest.news.scrollSpeed).put("announcements", org.json.JSONArray(manifest.news.announcements.map { JSONObject().put("id", it.id).put("text", it.text).put("priority", it.priority) }))).put("validUntil", manifest.validUntil?.toString()).put("items", org.json.JSONArray(manifest.items.map(::itemJson))).put("sponsoredItem", manifest.sponsoredItem?.let(::itemJson)).put("layoutStudioContract", manifest.layoutStudioContract?.let { runCatching { JSONObject(it) }.getOrNull() }).toString()
 
