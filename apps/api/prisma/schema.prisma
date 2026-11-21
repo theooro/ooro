@@ -631,6 +631,34 @@ model Creative {
   @@index([campaignId, status])
 }
 
+model CreativeSubmission {
+  id              String       @id @default(uuid()) @db.Uuid
+  organizationId  String       @db.Uuid
+  submitterUserId String       @db.Uuid
+  submitterEmail  String
+  fileName        String
+  type            String
+  status          String       @default("PENDING_REVIEW")
+  storageKey      String
+  url             String
+  checksum        String
+  mimeType        String
+  sizeBytes       BigInt
+  width           Int?
+  height          Int?
+  durationSeconds Int?
+  reviewerId      String?
+  reviewerRole    String?
+  reviewNotes     String?
+  reviewedAt      DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status, createdAt])
+  @@index([submitterUserId, createdAt])
+}
+
 model CampaignTrackingLink {
   id             String    @id @default(uuid()) @db.Uuid
   token          String    @unique
@@ -1619,6 +1647,7 @@ model Organization {
   agencyClients        AgencyClient[]                @relation("AgencyOrganization")
 
   @@index([type, verificationStatus, updatedAt])
+  creativeSubmissions CreativeSubmission[]
 }
 
 model OrganizationMember {
