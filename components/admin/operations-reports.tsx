@@ -13,7 +13,7 @@ export function OperationsOverview({canViewFleet=true,canViewCampaigns=true,canS
  const load=useCallback(async()=>{setError('');setLoading(true);try{const overviewRequest=fetch('/api/admin/overview',{cache:'no-store'});const fleetRequest=canViewFleet?screenRepository.listScreens():Promise.resolve([]);const [r,fleet]=await Promise.all([overviewRequest,fleetRequest]);const p=await r.json();if(!r.ok)throw new Error(`${p.error?.message} ${p.requestId??''}`);setData(p.data);setScreens(fleet);}catch(e){setError(e instanceof Error?e.message:'Unable to load the operations overview.');}finally{setLoading(false);}},[canViewFleet]);
  useEffect(()=>{void load();const refresh=window.setInterval(()=>void load(),60000);return()=>window.clearInterval(refresh);},[load]);
  useEffect(()=>{const timer=window.setInterval(()=>setClock(Date.now()),30000);return()=>window.clearInterval(timer);},[]);
- const verified=(screen?:Screen)=>Boolean(screen?.connectivity==='ONLINE'&&screen.currentCreativeTrust==='VERIFIED_RECENT_PROOF'&&screen.lastHeartbeatAt&&clock-new Date(screen.lastHeartbeatAt).getTime()<=120000);
+ const verified=(screen?:Screen)=>{const age=screen?.lastHeartbeatAt?clock-new Date(screen.lastHeartbeatAt).getTime():Number.POSITIVE_INFINITY;return Boolean(screen?.connectivity==='ONLINE'&&screen.currentCreativeTrust==='VERIFIED_RECENT_PROOF'&&age>=-30000&&age<=120000);};
  const pairedScreens=screens.filter(screen=>screen.pairingStatus==='PAIRED');
  const liveScreens=pairedScreens.filter(screen=>screen.playbackState==='PLAYING'&&verified(screen));
  const featured=liveScreens[0]??pairedScreens.find(screen=>screen.connectivity==='ONLINE'&&verified(screen))??pairedScreens[0];
@@ -25,7 +25,8 @@ export function OperationsOverview({canViewFleet=true,canViewCampaigns=true,canS
  const attention=fleetOffline+fleetErrors+(data?.manifestFailures??0)+(data?.pendingCreatives??0);
  const metrics=[
   {label:'Fleet online',value:data?`${fleetOnline}/${fleetTotal}`:'—',detail:fleetTotal?`${Math.round((fleetOnline/fleetTotal)*100)}% reachable · ${fleetOffline} offline or stale`:'No paired screens in the active fleet'},
-  {label:'Playing now',value:data?fleetPlaying:'—',detail:`${data?.activeCampaigns??0} active campaigns · proof verified`},
+  {label:'Currently playing · proof verified',value:data?fleetPlaying:'—',detail:'Fresh online device report and matching acknowledged proof required.'},
+  {label:'Campaigns in ACTIVE state',value:data?.activeCampaigns??'—',detail:`${data?.legacyScheduledCampaigns??0} legacy SCHEDULED · campaign state does not confirm playback`},
   {label:'Verified plays today',value:data?.playsToday??'—',detail:'Device-reported · IST'},
   {label:'Needs attention',value:attention,detail:attention?'Review exceptions below':'Network looks clear'},
  ];

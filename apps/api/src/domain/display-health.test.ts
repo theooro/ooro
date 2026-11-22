@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { getDisplayConnectivity } from "./display-health.js"
+import { getDisplayConnectivity, isVerifiedCurrentPlayback } from "./display-health.js"
 
 const now = Date.parse("2026-09-09T12:00:00.000Z")
 
@@ -19,4 +19,25 @@ test("fleet connectivity threshold boundaries are explicit and deterministic", (
   assert.equal(getDisplayConnectivity(new Date(now - 300_000), reference), "STALE")
   assert.equal(getDisplayConnectivity(new Date(now - 300_001), reference), "OFFLINE")
   assert.equal(getDisplayConnectivity(new Date("invalid"), reference), "NEVER_CONNECTED")
+})
+
+test("current playback requires a fresh device report and an acknowledged proof for that exact creative session", () => {
+  const startedAt = new Date(now - 20_000)
+  const base = {
+    lastHeartbeatAt: new Date(now - 5_000),
+    currentPlaybackState: "PLAYING",
+    currentCampaignId: "campaign-current",
+    currentCreativeId: "creative-current",
+    currentPlaybackStartedAt: startedAt,
+    proof: { campaignId: "campaign-current", creativeId: "creative-current", playbackStartedAt: startedAt, playbackCompleted: true, status: "VALID" },
+  }
+
+  assert.equal(isVerifiedCurrentPlayback(base, new Date(now)), true)
+  assert.equal(isVerifiedCurrentPlayback({ ...base, proof: null }, new Date(now)), false)
+  assert.equal(isVerifiedCurrentPlayback({ ...base, proof: { ...base.proof!, status: "PENDING" } }, new Date(now)), false)
+  assert.equal(isVerifiedCurrentPlayback({ ...base, proof: { ...base.proof!, creativeId: "creative-older" } }, new Date(now)), false)
+  assert.equal(isVerifiedCurrentPlayback({ ...base, proof: { ...base.proof!, campaignId: "campaign-older" } }, new Date(now)), false)
+  assert.equal(isVerifiedCurrentPlayback({ ...base, proof: { ...base.proof!, playbackStartedAt: new Date(now - 90_000) } }, new Date(now)), false)
+  assert.equal(isVerifiedCurrentPlayback({ ...base, lastHeartbeatAt: new Date(now - 90_001) }, new Date(now)), false)
+  assert.equal(isVerifiedCurrentPlayback({ ...base, lastHeartbeatAt: new Date(now + 30_001) }, new Date(now)), false)
 })
