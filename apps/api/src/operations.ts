@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from './prisma.js'
 import { requirePermission, response } from './http.js'
+import { config } from './config.js'
+import { getDisplayConnectivity, isVerifiedCurrentPlayback } from './domain/display-health.js'
 
 const safe = (data: unknown) => JSON.parse(JSON.stringify(data,(_,v)=>typeof v==='bigint'?v.toString():v))
 export function registerOperations(app: FastifyInstance) {
@@ -31,10 +33,11 @@ export function registerOperations(app: FastifyInstance) {
   await requirePermission(request,'admin:read')
   const now=new Date(); const india=new Date(now.getTime()+330*60000); const today=new Date(india.toISOString().slice(0,10)+'T00:00:00+05:30')
   const [screens,active,legacyScheduled,pending,creatives,plays,failedCommands]=await Promise.all([
-   prisma.display.findMany({where:{state:{notIn:['DELETED','DISABLED']}},select:{lastHeartbeatAt:true,currentPlaybackState:true}}),prisma.campaign.count({where:{status:'ACTIVE'}}),prisma.campaign.count({where:{status:'SCHEDULED'}}),prisma.campaign.count({where:{status:{in:['PENDING_REVIEW','CAMPAIGN_PENDING_REVIEW']}}}),prisma.creative.count({where:{status:'PENDING_REVIEW'}}),prisma.proofOfPlay.count({where:{playbackStartedAt:{gte:today},playbackCompleted:true}}),prisma.displayCommand.count({where:{commandType:{in:['SYNC_MANIFEST','REFRESH_MANIFEST']},status:'FAILED'}})
+   prisma.display.findMany({where:{state:{notIn:['DELETED','DISABLED']}},select:{lastHeartbeatAt:true,currentPlaybackState:true,currentCampaignId:true,currentCreativeId:true,currentPlaybackStartedAt:true,proofs:{where:{status:'VALID',playbackCompleted:true},orderBy:{playbackStartedAt:'desc'},take:1,select:{campaignId:true,creativeId:true,playbackStartedAt:true,playbackCompleted:true,status:true}}}}),prisma.campaign.count({where:{status:'ACTIVE'}}),prisma.campaign.count({where:{status:'SCHEDULED'}}),prisma.campaign.count({where:{status:{in:['PENDING_REVIEW','CAMPAIGN_PENDING_REVIEW']}}}),prisma.creative.count({where:{status:'PENDING_REVIEW'}}),prisma.proofOfPlay.count({where:{playbackStartedAt:{gte:today},playbackCompleted:true}}),prisma.displayCommand.count({where:{commandType:{in:['SYNC_MANIFEST','REFRESH_MANIFEST']},status:'FAILED'}})
   ])
-  const online=screens.filter(s=>s.lastHeartbeatAt && now.getTime()-s.lastHeartbeatAt.getTime()<=90000)
-  return reply.send(response(request,{total:screens.length,online:online.length,offline:screens.length-online.length,playing:online.filter(s=>s.currentPlaybackState==='PLAYING').length,idle:online.filter(s=>['IDLE','READY'].includes(s.currentPlaybackState??'')).length,errors:screens.filter(s=>['ERROR','FAILED'].includes(s.currentPlaybackState??'')).length,activeCampaigns:active,legacyScheduledCampaigns:legacyScheduled,pendingCampaigns:pending,pendingCreatives:creatives,playsToday:plays,manifestFailures:failedCommands}))
+  const online=screens.filter(s=>getDisplayConnectivity(s.lastHeartbeatAt??undefined,now,config.heartbeatOnlineSeconds,config.heartbeatDegradedSeconds)==='ONLINE')
+  const playing=online.filter(s=>isVerifiedCurrentPlayback({lastHeartbeatAt:s.lastHeartbeatAt,currentCampaignId:s.currentCampaignId,currentCreativeId:s.currentCreativeId,currentPlaybackStartedAt:s.currentPlaybackStartedAt,currentPlaybackState:s.currentPlaybackState,proof:s.proofs[0]},now,config.heartbeatOnlineSeconds*1000)).length
+  return reply.send(response(request,{total:screens.length,online:online.length,offline:screens.length-online.length,playing,idle:online.filter(s=>['IDLE','READY'].includes(s.currentPlaybackState??'')).length,errors:screens.filter(s=>['ERROR','FAILED'].includes(s.currentPlaybackState??'')).length,activeCampaigns:active,legacyScheduledCampaigns:legacyScheduled,pendingCampaigns:pending,pendingCreatives:creatives,playsToday:plays,manifestFailures:failedCommands}))
  })
  app.get('/api/admin/audit-log',async(request,reply)=>{
   await requirePermission(request,'operations:write');const q=z.object({skip:z.coerce.number().int().min(0).max(100000).default(0),entityId:z.string().optional()}).parse(request.query)

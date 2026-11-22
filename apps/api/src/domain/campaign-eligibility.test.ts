@@ -88,6 +88,7 @@ test('manifest diagnostics distinguish assignment, state, funding, quota, approv
   const reasons = (campaigns: Array<{ status: string; fundingStatus: string; quotaAuthorized: boolean; approvedCreativeCount: number; checksumVerifiedAssetCount: number }>, assignmentCount = campaigns.length, eligibleItemCount = 0) => manifestDeliveryReasons({ displayEnabled: true, supportsDeliveryQuota: true, assignmentCount, campaigns, eligibleItemCount })
   assert.deepEqual(reasons([], 0), ['NO_ASSIGNMENT'])
   assert.deepEqual(reasons([{ status: 'APPROVED', fundingStatus: 'PAID', quotaAuthorized: true, approvedCreativeCount: 1, checksumVerifiedAssetCount: 1 }]), ['CAMPAIGN_INACTIVE'])
+  assert.deepEqual(reasons([{ status: 'SCHEDULED', fundingStatus: 'PAID', quotaAuthorized: true, approvedCreativeCount: 1, checksumVerifiedAssetCount: 1 }]), ['CAMPAIGN_INACTIVE'])
   assert.deepEqual(reasons([{ status: 'PAUSED', fundingStatus: 'PAID', quotaAuthorized: true, approvedCreativeCount: 1, checksumVerifiedAssetCount: 1 }]), ['CAMPAIGN_INACTIVE'])
   assert.deepEqual(reasons([{ status: 'REJECTED', fundingStatus: 'PAID', quotaAuthorized: true, approvedCreativeCount: 1, checksumVerifiedAssetCount: 1 }]), ['CAMPAIGN_INACTIVE'])
   assert.deepEqual(reasons([{ status: 'DRAFT', fundingStatus: 'PAID', quotaAuthorized: false, approvedCreativeCount: 0, checksumVerifiedAssetCount: 0 }]), ['APPROVAL_REQUIRED'])

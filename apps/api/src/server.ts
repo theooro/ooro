@@ -26,7 +26,7 @@ import { connectMongo } from './lib/mongodb.js'
 import { sendOrderConfirmation } from './domain/transactional-email.js'
 import { receiptPdf } from './domain/receipt.js'
 import { boundedLocationLimit, shouldRecordDisplayLocation, validDisplayLocation } from './domain/display-location.js'
-import { getDisplayConnectivity } from './domain/display-health.js'
+import { getDisplayConnectivity, isVerifiedCurrentPlayback } from './domain/display-health.js'
 import { assertCommandCanBeAcknowledged, commandBelongsToDevice, commandExpiresAt, commandStatusFromDeviceAck, DISPLAY_COMMAND_DELIVERY_LEASE_MS, isCommandExpired, safeCommandError, sameIdempotentCommand } from './domain/display-command.js'
 import { canonicalProofId, canonicalProofStatus, proofIdentityBelongsToDisplay } from './domain/proof-policy.js'
 import { adminRoles, deviceOsDeploymentRoles, deviceOsReleaseRoles, deviceOsWriteRoles } from './domain/admin-auth.js'
@@ -1737,18 +1737,23 @@ app.get('/api/admin/displays', async (request, reply) => {
       layoutAssignments: { where: { revokedAt: null }, orderBy: { assignedAt: 'desc' }, take: 1, select: { id: true, state: true, template: { select: { name: true } }, revision: { select: { revision: true } } } },
       deviceOsDevice: { select: { enrollmentStatus: true, lastSeenAt: true, capabilities: true, inventory: { where: { packageName: 'com.ooro.screenplayer' }, take: 1, select: { versionName: true, versionCode: true, lastSeenAt: true } } } },
       createdAt: true, updatedAt: true,
-      heartbeats: { select: { occurredAt: true, receivedAt: true, networkType: true, networkConnected: true, storageFree: true, storageTotal: true, appVersion: true, manifestVersion: true, activeLayout: true, layoutContractVersion: true, playbackState: true, currentCreativeId: true }, orderBy: { receivedAt: 'desc' }, take: 1 },
-      proofs: { where: { status: 'VALID', playbackCompleted: true }, select: { creativeId: true, campaignId: true, playbackStartedAt: true, slot: true, status: true }, orderBy: { playbackStartedAt: 'desc' }, take: 1 },
+      heartbeats: { select: { occurredAt: true, receivedAt: true, networkType: true, networkConnected: true, storageFree: true, storageTotal: true, appVersion: true, manifestVersion: true, activeLayout: true, layoutContractVersion: true, playbackState: true, currentCampaignId: true, currentCreativeId: true, playbackStartedAt: true }, orderBy: { receivedAt: 'desc' }, take: 1 },
+      proofs: { where: { status: 'VALID', playbackCompleted: true }, select: { creativeId: true, campaignId: true, playbackStartedAt: true, playbackCompleted: true, slot: true, status: true }, orderBy: { playbackStartedAt: 'desc' }, take: 1 },
       commands: { select: { id: true, commandType: true, status: true, createdAt: true, deliveredAt: true, acknowledgedAt: true, failedAt: true, expiresAt: true, error: true }, orderBy: { createdAt: 'desc' }, take: 20 },
     },
   })
   const uuid = (value?: string | null) => Boolean(value && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value))
   const now = new Date()
   const recentVerifiedPlayback = (display: typeof rows[number]) => {
-    const proof = display.proofs[0]
     const heartbeat = display.heartbeats[0]
-    const heartbeatAt = heartbeat?.receivedAt ?? display.lastHeartbeatAt
-    return Boolean(proof && heartbeat && proof.creativeId && proof.creativeId === heartbeat.currentCreativeId && heartbeat.playbackState === 'PLAYING' && heartbeatAt && getDisplayConnectivity(heartbeatAt, now, config.heartbeatOnlineSeconds, config.heartbeatDegradedSeconds) === 'ONLINE' && proof.playbackStartedAt.getTime() <= now.getTime() + 30_000 && now.getTime() - proof.playbackStartedAt.getTime() <= 5 * 60_000)
+    return isVerifiedCurrentPlayback({
+      lastHeartbeatAt: heartbeat?.receivedAt ?? display.lastHeartbeatAt,
+      currentPlaybackState: heartbeat?.playbackState ?? display.currentPlaybackState,
+      currentCampaignId: heartbeat?.currentCampaignId ?? display.currentCampaignId,
+      currentCreativeId: heartbeat?.currentCreativeId ?? display.currentCreativeId,
+      currentPlaybackStartedAt: heartbeat?.playbackStartedAt ?? display.currentPlaybackStartedAt,
+      proof: display.proofs[0],
+    }, now, config.heartbeatOnlineSeconds * 1000)
   }
   const trustedCreativeIds = [...new Set(rows.filter(recentVerifiedPlayback).map(display => display.proofs[0]?.creativeId).filter((id): id is string => uuid(id)))]
   const creativeIds = [...new Set([...trustedCreativeIds, ...rows.map((display) => display.currentCreativeId).filter((id): id is string => uuid(id))])]
