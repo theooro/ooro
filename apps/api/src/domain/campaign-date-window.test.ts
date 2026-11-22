@@ -22,5 +22,6 @@ test('timezone conversion does not depend on the server host timezone', () => {
 test('invalid dates, ranges and IANA timezone names fail closed', () => {
   assert.throws(() => campaignDateWindow('2026-02-30', '2026-03-01'), /CAMPAIGN_DATE_INVALID/)
   assert.throws(() => campaignDateWindow('2026-03-02', '2026-03-01'), /CAMPAIGN_DATE_RANGE_INVALID/)
+  assert.throws(() => campaignDateWindow('2026-03-01', '2026-03-02', 'UTC'), /CAMPAIGN_TIMEZONE_UNSUPPORTED/)
   assert.throws(() => startOfCampaignDateUtc('2026-01-01', 'Not/A_Timezone'))
 })

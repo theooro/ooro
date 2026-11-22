@@ -5,8 +5,9 @@ import { webContext, webOwnerEmail } from "@/lib/web-owner";
 import { advertiserCampaignScope } from "@/lib/advertiser-campaign-scope";
 import { hasRemovedCampaignTiming } from "@/lib/campaign-draft-validation";
 import { withoutCampaignDeliveryDates } from "@/lib/campaign-delivery-presentation";
+import { campaignDateInTimezone, campaignDateWindow, DEFAULT_CAMPAIGN_TIMEZONE } from "@/apps/api/src/domain/campaign-date-window";
 
-type CampaignPatch = { name?: string; description?: string; goal?: string; audience?: string; city?: string; area?: string; media?: string; budget?: number; currency?: string; metadata?: Record<string, unknown>; status?: "DRAFT"; campaignCenterLat?: number | null; campaignCenterLng?: number | null; radiusKm?: number | null; forecastSnapshot?: Record<string, unknown>; forecastGeneratedAt?: string; forecastExpiresAt?: string; forecastVersion?: string; deliveryTier?: "STANDARD" | "PREMIUM_PLUS" };
+type CampaignPatch = { name?: string; description?: string; goal?: string; audience?: string; city?: string; area?: string; media?: string; budget?: number; currency?: string; metadata?: Record<string, unknown>; status?: "DRAFT"; campaignCenterLat?: number | null; campaignCenterLng?: number | null; radiusKm?: number | null; forecastSnapshot?: Record<string, unknown>; forecastGeneratedAt?: string; forecastExpiresAt?: string; forecastVersion?: string; deliveryTier?: "STANDARD" | "PREMIUM_PLUS"; startDate?: string; endDate?: string };
 
 async function identity() { return webOwnerEmail(); }
 
@@ -36,8 +37,16 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     const target = input?.metadata?.target;
     const citywide = Boolean(target && typeof target === "object" && (target as Record<string, unknown>).mode === "CITYWIDE");
     const existingMetadata = existing.metadata as Record<string, unknown> | null;
+    const existingStartDate = existing.startsAt ? campaignDateInTimezone(existing.startsAt, DEFAULT_CAMPAIGN_TIMEZONE) : undefined;
+    const existingEndDate = existing.endsAt ? campaignDateInTimezone(new Date(existing.endsAt.getTime() - 1), DEFAULT_CAMPAIGN_TIMEZONE) : undefined;
+    const startDate = input?.startDate ?? existingStartDate;
+    const endDate = input?.endDate ?? existingEndDate;
+    if ((startDate === undefined) !== (endDate === undefined)) return NextResponse.json({ error: { message: "Choose both a start date and an end date." } }, { status: 422 });
+    let dateWindow: ReturnType<typeof campaignDateWindow> | undefined;
+    if (startDate && endDate) { try { dateWindow = campaignDateWindow(startDate, endDate, DEFAULT_CAMPAIGN_TIMEZONE); } catch { return NextResponse.json({ error: { message: "Choose valid inclusive campaign dates in Asia/Kolkata." } }, { status: 422 }); } }
     const campaign = await webPrisma.campaign.update({ where: { id }, data: {
       name: input?.name?.trim() || undefined, description: typeof input?.description === "string" ? input.description : undefined,
+      startsAt: dateWindow?.startsAt, endsAt: dateWindow?.endsAt, timezone: dateWindow?.timezone,
       status: input?.status,
       layout: typeof input?.media === "string" ? input.media : undefined,
       campaignCenterLat: citywide ? null : input?.campaignCenterLat, campaignCenterLng: citywide ? null : input?.campaignCenterLng, radiusKm: citywide ? null : input?.radiusKm,

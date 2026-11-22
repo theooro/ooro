@@ -36,7 +36,7 @@ export interface DeviceHeartbeat {
 export interface HealthIssue { code: string; label: string; severity: HealthSeverity; detail: string }
 export interface DeviceHealth extends DeviceHeartbeat { connectivity: ConnectivityStatus; issues: HealthIssue[]; storageHealth: "NORMAL" | "LOW" | "CRITICAL" | "UNKNOWN" }
 export interface DeviceActivity { id: string; screenId: string; type: string; timestamp: string; detail?: string }
-export interface PairingCode { code: string; screenId: string; status: "ACTIVE" | "USED" | "EXPIRED" | "REVOKED"; expiresAt: string; createdAt: string }
+export interface PairingCode { code: string | null; screenId: string; status: "ACTIVE" | "USED" | "EXPIRED" | "REVOKED"; expiresAt: string | null; createdAt: string }
 export interface CreateScreenInput { screenName: string; screenType: ScreenType; city: string; area: string; vehicleId?: string; inventoryId?: string; notes?: string }
 export interface DeviceCommand { id: string; screenId: string; type: "SYNC_NOW" | "SYNC_MANIFEST" | "REFRESH_MANIFEST" | "HEALTH_CHECK" | "RESTART_PLAYER" | "REBOOT_DEVICE" | "UNPAIR"; status: "QUEUED" | "DELIVERED" | "RECEIVED" | "PROCESSING" | "ACKNOWLEDGED" | "SUCCESS" | "SUCCEEDED" | "FAILED" | "EXPIRED" | "CANCELLED"; createdAt: string; deliveredAt?: string | null; acknowledgedAt?: string | null; failedAt?: string | null; cancelledAt?: string | null; expiresAt?: string | null; error?: string | null }
 export interface ScreenFilters { search?: string; status?: ConnectivityStatus; pairing?: PairingStatus; screenType?: ScreenType; city?: string; area?: string; appVersion?: string; manifestVersion?: string; issuesOnly?: boolean; sort?: "heartbeat" | "name" | "app" | "storage" | "created" | "status" }

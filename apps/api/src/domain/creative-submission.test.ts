@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { creativeSubmissionPermission, pendingCreativeSubmissionState } from './creative-submission.js'
+import { creativeSubmissionSchedulingPermission } from './creative-submission-scheduling.js'
 
 test('verified Brand accounts may submit creative files for review', () => {
   assert.equal(creativeSubmissionPermission({ accountType: 'BRAND', organizationType: 'BRAND', verificationStatus: 'VERIFIED' }).allowed, true)
@@ -21,4 +22,12 @@ test('unverified Brands, mismatched organizations, and unrelated account types c
 
 test('a submitted creative remains pending and has no scheduling or playback authorization', () => {
   assert.deepEqual(pendingCreativeSubmissionState(), { status: 'PENDING_REVIEW', scheduled: false, playbackEligible: false })
+})
+
+test('only an approved, unlinked submission is eligible for explicit admin scheduling', () => {
+  assert.equal(creativeSubmissionSchedulingPermission('APPROVED', null).allowed, true)
+  assert.equal(creativeSubmissionSchedulingPermission('PENDING_REVIEW', null).code, 'CREATIVE_SUBMISSION_NOT_APPROVED')
+  assert.equal(creativeSubmissionSchedulingPermission('REJECTED', null).allowed, false)
+  assert.equal(creativeSubmissionSchedulingPermission('ARCHIVED', null).code, 'CREATIVE_SUBMISSION_ARCHIVED')
+  assert.equal(creativeSubmissionSchedulingPermission('APPROVED', 'creative-id').code, 'CREATIVE_SUBMISSION_ALREADY_SCHEDULED')
 })

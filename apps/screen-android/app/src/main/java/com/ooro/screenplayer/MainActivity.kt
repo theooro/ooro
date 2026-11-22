@@ -261,7 +261,7 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
                 Text("Connect this player to the screen already registered in your OORO workspace.", color = Muted, fontSize = 16.sp, lineHeight = 23.sp, modifier = Modifier.padding(top = 9.dp))
                 Spacer(Modifier.height(25.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SetupStep("01", "One-time code")
+                    SetupStep("01", "Screen recovery code")
                     SetupStep("02", "Secure pairing")
                     SetupStep("03", "Content sync")
                 }
@@ -271,9 +271,9 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
             }
             TechnicianCard(Modifier.weight(1f).padding(end = 24.dp), containerColor = Panel) {
                 Text("PAIR A DISPLAY", color = Yellow, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
-                Text("Use an authorized one-time code", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 5.dp))
-                Text("Request a code from your OORO administrator. This screen keeps its registered identity after pairing.", color = Muted, fontSize = 13.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 4.dp, bottom = 16.dp))
-                OutlinedTextField(code, { code = it.uppercase().filter { ch -> ch.isLetterOrDigit() || ch == '-' }.take(32) }, label = { Text("One-time pairing code") }, singleLine = true, modifier = Modifier.fillMaxWidth().heightIn(min = 58.dp).semantics { contentDescription = "One-time pairing code" }, enabled = !pairing)
+                Text("Use the screen's recovery code", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 5.dp))
+                Text("Use this screen's code from Admin > Screens. The same code reconnects this display after reinstall.", color = Muted, fontSize = 13.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 4.dp, bottom = 16.dp))
+                OutlinedTextField(code, { code = it.uppercase().filter { ch -> ch.isLetterOrDigit() || ch == '-' }.take(32) }, label = { Text("Screen recovery code") }, singleLine = true, modifier = Modifier.fillMaxWidth().heightIn(min = 58.dp).semantics { contentDescription = "Screen recovery code" }, enabled = !pairing)
                 message?.let { SetupMessage(it) }
                 Button({ vm.pair(code) }, enabled = !pairing && code.isNotBlank(), modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).padding(top = 12.dp)) { Text(if (pairing) "CONNECTING…" else if (repair) "CONTINUE REPAIR" else "CONNECT DISPLAY") }
                 Text("Pairing does not grant optional location access.", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(top = 12.dp))
@@ -281,9 +281,9 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
         } else Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.Center) {
             Text("OORO", color = Yellow, fontSize = 42.sp, fontWeight = FontWeight.Bold)
             Text(if (repair) "Repair this screen" else "Connect your display", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
-            Text("Location is optional. Pairing and advertising playback work without it.", color = Color(0xFFB6C0CA), fontSize = 13.sp, modifier = Modifier.padding(vertical = 12.dp))
+            Text("Use this screen's persistent recovery code from Admin > Screens. If offline, keep the same code and retry when internet is restored. Location is optional.", color = Color(0xFFB6C0CA), fontSize = 13.sp, modifier = Modifier.padding(vertical = 12.dp))
             TechnicianCard {
-                OutlinedTextField(code, { code = it.uppercase().take(32) }, label = { Text("Pairing code") }, singleLine = true, modifier = Modifier.fillMaxWidth(), enabled = !pairing)
+                OutlinedTextField(code, { code = it.uppercase().take(32) }, label = { Text("Screen recovery code") }, singleLine = true, modifier = Modifier.fillMaxWidth(), enabled = !pairing)
                 message?.let { Text(it, color = Color(0xFFFFC46B), fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp)) }
                 Button({ vm.pair(code) }, enabled = !pairing && code.isNotBlank(), modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text(if (pairing) "CONNECTING…" else "CONNECT") }
             }

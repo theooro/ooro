@@ -24,6 +24,19 @@ class SchedulingTest {
         assertEquals("active", ScheduleEngine().next(DeviceManifest(1, "screen", "UTC", listOf(active), null), Instant.parse("2026-11-19T12:00:00Z"))?.id)
     }
 
+    @Test fun inclusiveAsiaKolkataCalendarDatesUseHalfOpenUtcBounds() {
+        val start = Instant.parse("2026-11-21T18:30:00Z") // midnight at the start of 22 Nov in Asia/Kolkata
+        val end = Instant.parse("2026-11-22T18:30:00Z") // midnight after the inclusive 22 Nov end date
+        val campaign = item("inclusive-date").copy(startAt = start, endAt = end)
+        val engine = ScheduleEngine()
+        val manifest = DeviceManifest(1, "screen", "Asia/Kolkata", listOf(campaign), null)
+
+        assertNull(engine.next(manifest, start.minusNanos(1)))
+        assertEquals(campaign.id, engine.next(manifest, start)?.id)
+        assertEquals(campaign.id, engine.next(manifest, end.minusNanos(1))?.id)
+        assertNull(engine.next(manifest, end))
+    }
+
     @Test fun missingFutureAndExpiredDateWindowsFailClosed() {
         val now = Instant.parse("2026-11-19T12:00:00Z")
         val variants = listOf(

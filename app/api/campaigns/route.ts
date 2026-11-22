@@ -6,6 +6,7 @@ import { MIN_SELF_SERVE_BUDGET_RUPEES } from "@/lib/campaign-policy";
 import { webContext } from "@/lib/web-owner";
 import { hasRemovedCampaignTiming, validateAdvertiserCampaignDraft, type AdvertiserCampaignDraft } from "@/lib/campaign-draft-validation";
 import { withoutCampaignDeliveryDates } from "@/lib/campaign-delivery-presentation";
+import { campaignDateWindow, DEFAULT_CAMPAIGN_TIMEZONE } from "@/apps/api/src/domain/campaign-date-window";
 
 type CampaignInput = AdvertiserCampaignDraft;
 
@@ -38,6 +39,7 @@ export async function POST(request: Request) {
   if (input?.status && input.status !== "DRAFT") return NextResponse.json({ error: { code: "CAMPAIGN_APPROVAL_REQUIRED", message: "Campaigns can only be submitted as drafts. OORO must approve and authorize delivery." } }, { status: 422 });
   const error = validateAdvertiserCampaignDraft(input, input?.status === "DRAFT");
   if (error) return NextResponse.json({ error: { message: error } }, { status: 422 });
+  const dateWindow = input?.startDate && input.endDate ? campaignDateWindow(input.startDate, input.endDate, DEFAULT_CAMPAIGN_TIMEZONE) : null;
   try {
     const context = await webContext();
     // Match read permissions: a network/explorer account or unapproved
@@ -60,6 +62,7 @@ export async function POST(request: Request) {
     const metadata = { goal: input!.goal, audience: input!.audience, city: input!.city, area: input!.area, media: input!.media, budget: input!.budget, currency: input!.currency, ...input!.metadata };
     const campaign = await webPrisma.campaign.create({ data: {
       ownerEmail: email, userId: context?.account.id, name: input!.name!.trim(), description: input!.description?.trim(), status: "DRAFT",
+      startsAt: dateWindow?.startsAt, endsAt: dateWindow?.endsAt, timezone: dateWindow?.timezone,
       layout: String(input!.media ?? "OORO Auto Screens"),
       campaignCenterLat: input!.campaignCenterLat, campaignCenterLng: input!.campaignCenterLng, radiusKm: input!.radiusKm,
       forecastSnapshot: input!.forecastSnapshot ? JSON.parse(JSON.stringify(input!.forecastSnapshot)) : undefined, forecastGeneratedAt: input!.forecastGeneratedAt ? new Date(input!.forecastGeneratedAt) : undefined, forecastExpiresAt: input!.forecastExpiresAt ? new Date(input!.forecastExpiresAt) : undefined, forecastVersion: input!.forecastVersion,
