@@ -47,6 +47,16 @@ test('campaign mutations deny finance, support and non-admin roles', () => {
   }
 })
 
+test('Admin and Super Admin share creative review and campaign scheduling access', () => {
+  for (const role of ['ADMIN', 'SUPER_ADMIN']) {
+    assert.equal(canAdmin(role, 'creative:write'), true, `${role} must be able to review submissions`)
+    assert.equal(canAdmin(role, 'campaign:schedule'), true, `${role} must be able to assign approved submissions`)
+  }
+  for (const role of ['OPERATIONS', 'FINANCE', 'SUPPORT', 'BRAND', 'AGENCY', undefined]) {
+    assert.equal(canAdmin(role, 'creative:write'), false, `${String(role)} must not review or expose submissions`)
+  }
+})
+
 test('fleet write controls require the device write permission', () => {
   for (const role of ['SUPER_ADMIN', 'ADMIN', 'OPERATIONS']) assert.equal(canAdmin(role, 'device:write'), true)
   for (const role of ['FINANCE', 'SUPPORT', 'DRIVER', undefined]) assert.equal(canAdmin(role, 'device:write'), false)

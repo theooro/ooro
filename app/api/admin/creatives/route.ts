@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireAdminPermission, getAuthenticatedAdmin, AdminAuthError } from "@/lib/auth/backend-session";
+import { requireAdminPermission, AdminAuthError } from "@/lib/auth/backend-session";
 import { webPrisma } from "@/lib/web-prisma";
 import { safeDestination } from "@/apps/api/src/domain/qr-destination";
 
@@ -7,7 +7,9 @@ const safe = (value: unknown) => JSON.parse(JSON.stringify(value, (_key, item) =
 
 export async function GET() {
   try {
-    await getAuthenticatedAdmin();
+    // One shared review queue for ADMIN and SUPER_ADMIN. Other staff roles do
+    // not need access to submitted files or submitter contact details.
+    await requireAdminPermission("creative:write");
     const [creatives, submissions] = await Promise.all([
       webPrisma.creative.findMany({ where: { status: { not: "ARCHIVED" }, campaign: { status: { not: "ARCHIVED" } } }, include: { asset: true, campaign: { select: { id: true, name: true, status: true } } }, orderBy: { displayOrder: "asc" } }),
       webPrisma.creativeSubmission.findMany({ where: { status: { not: "ARCHIVED" } }, include: { organization: { select: { id: true, name: true, type: true } }, scheduledCreative: { include: { campaign: { select: { id: true, name: true, status: true } } } } }, orderBy: { createdAt: "desc" } }),
@@ -20,9 +22,9 @@ export async function GET() {
       createdAt: item.createdAt, reviewedAt: item.reviewedAt,
       asset: { url: item.url, mimeType: item.mimeType, width: item.width, height: item.height, durationSeconds: item.durationSeconds, checksum: item.checksum, sizeBytes: item.sizeBytes },
     }));
-    return NextResponse.json({ data: safe([...standalone, ...creatives.map(item => ({ ...item, kind: "CAMPAIGN_CREATIVE" }))]) });
+    return NextResponse.json({ data: safe([...standalone, ...creatives.map(item => ({ ...item, kind: "CAMPAIGN_CREATIVE" }))]) }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
-    return NextResponse.json({ error: { message: error instanceof AdminAuthError ? "Admin access required" : "Creative library unavailable" } }, { status: error instanceof AdminAuthError ? error.status : 503 });
+    return NextResponse.json({ error: { message: error instanceof AdminAuthError ? "Creative review access required" : "Creative library unavailable" } }, { status: error instanceof AdminAuthError ? error.status : 503, headers: { "cache-control": "no-store" } });
   }
 }
 
