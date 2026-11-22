@@ -11,7 +11,7 @@ import { campaignDateInTimezone, campaignDateWindow, DEFAULT_CAMPAIGN_TIMEZONE }
 
 export const dynamic = "force-dynamic";
 const offerSchema = z.object({ brandName: z.string().trim().max(120).optional(), offerTitle: z.string().trim().max(160).optional(), offerSubtitle: z.string().trim().max(240).optional(), offerValue: z.string().trim().max(120).optional(), ctaType: z.string().trim().max(40).optional(), ctaLabel: z.string().trim().max(80).optional(), ctaUrl: z.string().trim().max(2048).optional() }).strict();
-const updateSchema = z.object({ status: z.enum(["DRAFT", "APPROVED", "REJECTED", "ACTIVE", "PAUSED", "STOPPED", "COMPLETED"]).optional(), deliverySlot: z.enum(["MAIN", "SPONSORED"]).optional(), screenIds: z.array(z.string().uuid()).max(1000).optional(), offlinePlaysPerDisplay: z.number().int().positive().max(1000000).optional(), unlimitedOfflineDelivery: z.boolean().optional(), startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), timezone: z.string().min(1).max(64).optional(), centerLat: z.number().finite().min(-90).max(90).optional(), centerLng: z.number().finite().min(-180).max(180).optional(), radiusKm: z.number().finite().positive().max(500).optional(), autoSelectRadius: z.boolean().optional(), offer: offerSchema.optional() }).strict();
+const updateSchema = z.object({ status: z.enum(["DRAFT", "APPROVED", "REJECTED", "ACTIVE", "PAUSED", "STOPPED", "COMPLETED"]).optional(), deliverySlot: z.enum(["MAIN", "SPONSORED"]).optional(), screenIds: z.array(z.string().uuid()).max(1000).optional(), offlinePlaysPerDisplay: z.number().int().positive().max(1000000).optional(), unlimitedOfflineDelivery: z.boolean().optional(), startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), timezone: z.literal(DEFAULT_CAMPAIGN_TIMEZONE).optional(), centerLat: z.number().finite().min(-90).max(90).optional(), centerLng: z.number().finite().min(-180).max(180).optional(), radiusKm: z.number().finite().positive().max(500).optional(), autoSelectRadius: z.boolean().optional(), offer: offerSchema.optional() }).strict();
 const safe = (value: unknown) => JSON.parse(JSON.stringify(value, (_key, item) => typeof item === "bigint" ? Number(item) : item));
 function errorResponse(error: unknown) { const status = error instanceof AdminAuthError ? error.status : 500; return NextResponse.json({ error: { message: status === 500 ? "Admin campaign service unavailable" : "Admin access required" } }, { status }); }
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -45,7 +45,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     ]);
     const assignments = campaign.assignments.map(assignment => ({ ...assignment, display: { ...assignment.display, connectivity: getDisplayConnectivity(assignment.display.lastHeartbeatAt ?? undefined) } }));
     const campaignPublic = withoutCampaignDeliveryDates(campaign);
-    const timezone = campaign.timezone || DEFAULT_CAMPAIGN_TIMEZONE;
+    const timezone = DEFAULT_CAMPAIGN_TIMEZONE;
     return NextResponse.json({ data: safe({ ...campaignPublic, startDate: campaignDateInTimezone(campaign.startsAt, timezone), endDate: campaign.endsAt ? campaignDateInTimezone(new Date(campaign.endsAt.getTime() - 1), timezone) : null, timezone, assignments, analytics: { completedPlays, qrScans, scanRate: completedPlays === 0 ? null : (qrScans / completedPlays) * 100 } }) });
   } catch (error) { return errorResponse(error); }
 }
@@ -58,7 +58,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (input.deliverySlot) await requireAdminPermission("campaign:schedule");
     const campaign = await webPrisma.campaign.findUnique({ where: { id }, include: { creatives: { where: { status: "APPROVED" }, select: { type: true, asset: { select: { active: true, url: true, checksum: true } } } } } }); if (!campaign) return NextResponse.json({ error: { message: "Campaign not found" } }, { status: 404 }); if (campaign.status === "ARCHIVED") return NextResponse.json({ error: { code: "CAMPAIGN_ARCHIVED", message: "Archived campaigns are read-only." } }, { status: 409 });
     const deliverySlot = input.deliverySlot ?? campaign.deliverySlot;
-    const timezone = input.timezone ?? campaign.timezone ?? DEFAULT_CAMPAIGN_TIMEZONE;
+    const timezone = DEFAULT_CAMPAIGN_TIMEZONE;
     const startDate = input.startDate ?? campaignDateInTimezone(campaign.startsAt, timezone);
     const endDate = input.endDate ?? (campaign.endsAt ? campaignDateInTimezone(new Date(campaign.endsAt.getTime() - 1), timezone) : null);
     let dateWindow: ReturnType<typeof campaignDateWindow> | null = null;

@@ -10,12 +10,13 @@ export async function GET() {
     await getAuthenticatedAdmin();
     const [creatives, submissions] = await Promise.all([
       webPrisma.creative.findMany({ where: { status: { not: "ARCHIVED" }, campaign: { status: { not: "ARCHIVED" } } }, include: { asset: true, campaign: { select: { id: true, name: true, status: true } } }, orderBy: { displayOrder: "asc" } }),
-      webPrisma.creativeSubmission.findMany({ where: { status: { not: "ARCHIVED" } }, include: { organization: { select: { id: true, name: true, type: true } } }, orderBy: { createdAt: "desc" } }),
+      webPrisma.creativeSubmission.findMany({ where: { status: { not: "ARCHIVED" } }, include: { organization: { select: { id: true, name: true, type: true } }, scheduledCreative: { include: { campaign: { select: { id: true, name: true, status: true } } } } }, orderBy: { createdAt: "desc" } }),
     ]);
     const standalone = submissions.map(item => ({
       id: item.id, kind: "SUBMISSION", name: item.fileName, type: item.type, status: item.status,
       brandName: null, promotionalText: null, qrEnabled: false, qrTargetUrl: null, qrLabel: null, qrVersion: 0,
-      campaign: null, submissionOrganization: item.organization, submittedByEmail: item.submitterEmail,
+      campaign: item.scheduledCreative?.campaign ?? null, submissionOrganization: item.organization, submittedByEmail: item.submitterEmail,
+      scheduledCreativeId: item.scheduledCreativeId,
       createdAt: item.createdAt, reviewedAt: item.reviewedAt,
       asset: { url: item.url, mimeType: item.mimeType, width: item.width, height: item.height, durationSeconds: item.durationSeconds, checksum: item.checksum, sizeBytes: item.sizeBytes },
     }));
@@ -60,9 +61,12 @@ export async function PATCH(request: Request) {
       if (!body.status || !["APPROVED", "REJECTED", "PENDING_REVIEW"].includes(body.status)) return NextResponse.json({ error: { message: "Choose a valid submission review status." } }, { status: 422 });
       const previous = await webPrisma.creativeSubmission.findUnique({ where: { id: body.submissionId } });
       if (!previous || previous.status === "ARCHIVED") return NextResponse.json({ error: { message: "Creative submission not found." } }, { status: 404 });
+      if (previous.scheduledCreativeId) return NextResponse.json({ error: { code: "CREATIVE_SUBMISSION_ALREADY_SCHEDULED", message: "This approved submission is already attached to a campaign. Manage its campaign creative to change delivery." } }, { status: 409 });
       const reviewedAt = body.status === "PENDING_REVIEW" ? null : new Date();
       const submission = await webPrisma.$transaction(async tx => {
-        const updated = await tx.creativeSubmission.update({ where: { id: previous.id }, data: { status: body.status!, reviewerId: admin.userId, reviewerRole: admin.role, reviewedAt } });
+        const changed = await tx.creativeSubmission.updateMany({ where: { id: previous.id, status: previous.status, scheduledCreativeId: null }, data: { status: body.status!, reviewerId: admin.userId, reviewerRole: admin.role, reviewedAt } });
+        if (changed.count !== 1) throw new Error("Submission changed while it was being reviewed.");
+        const updated = await tx.creativeSubmission.findUniqueOrThrow({ where: { id: previous.id } });
         await tx.auditLog.create({ data: { actorId: admin.userId, actorRole: admin.role, action: "CREATIVE_SUBMISSION_REVIEWED", entityType: "CreativeSubmission", entityId: previous.id, before: { status: previous.status }, after: { status: body.status } } });
         return updated;
       });

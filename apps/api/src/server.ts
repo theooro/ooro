@@ -14,6 +14,7 @@ import { config } from './config.js'
 import { prisma } from './prisma.js'
 import { ApiError, forbidden, notFound, unauthorized } from './errors.js'
 import { authenticateDeviceOs, authenticateDisplay, hashSecret, issueTokens, randomSecret, requireAuth, requirePermission, requireRoles, response } from './http.js'
+import { createDisplayRecoveryCode, decryptDisplayRecoveryCode, encryptDisplayRecoveryCode } from './domain/display-recovery-code.js'
 import { assertRideTransition, stateForEvent } from './domain/ride-state.js'
 import { verifyRide } from './domain/verification.js'
 import { calculateEarnings } from './domain/earnings.js'
@@ -143,6 +144,43 @@ const driverFrom = async (auth: { driverId?: string }) => {
 const hashOtp = (phone: string, code: string) => createHash('sha256').update(`${phone}:${code}`).digest('hex')
 const driverAuthResponse = (user: { id: string; phone: string | null; email: string | null; name: string | null }, driver: { id: string; onboardingStatus: string }, tokens: { accessToken: string; refreshToken: string }) => ({ ...tokens, user: { id: user.id, phone: user.phone, email: user.email, name: user.name, role: 'DRIVER' }, driver: { id: driver.id, onboardingStatus: driver.onboardingStatus } })
 const generatePairingCode = () => { const alphabet = '23456789ABCDEFGHJKMNPQRSTUVWXYZ'; const bytes = randomBytes(6); return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join('') }
+
+async function getOrCreateDisplayRecoveryCode(displayId: string, rotate = false) {
+  const existing = await prisma.displayRecoveryCode.findUnique({ where: { displayId } })
+  if (existing && !rotate && !existing.revokedAt) return { code: decryptDisplayRecoveryCode(existing.encryptedCode, config.documentStorageKey), row: existing, created: false }
+  if (existing?.revokedAt && !rotate) throw new ApiError('RECOVERY_CODE_REVOKED', 'Recovery code was revoked. An authorized admin must explicitly rotate it.', 409)
+  const code = createDisplayRecoveryCode()
+  const data = { codeHash: hashSecret(code), encryptedCode: encryptDisplayRecoveryCode(code, config.documentStorageKey), codeLast4: code.slice(-4), revokedAt: null, rotatedAt: new Date() }
+  if (!existing) {
+    try {
+      const row = await prisma.displayRecoveryCode.create({ data: { displayId, ...data } })
+      return { code, row, created: true }
+    } catch (error) {
+      const raced = await prisma.displayRecoveryCode.findUnique({ where: { displayId } })
+      if (!raced) throw error
+      return { code: decryptDisplayRecoveryCode(raced.encryptedCode, config.documentStorageKey), row: raced, created: false }
+    }
+  }
+  const row = await prisma.displayRecoveryCode.update({ where: { displayId }, data })
+  return { code, row, created: true }
+}
+
+async function checkPairingRateLimit(ip: string) {
+  const key = hashSecret(`screen-pair:${ip || 'unknown'}`)
+  const now = new Date()
+  const bucket = await prisma.pairingAttemptBucket.findUnique({ where: { key } })
+  if (bucket?.blockedUntil && bucket.blockedUntil > now) throw new ApiError('PAIRING_RATE_LIMITED', 'Too many pairing attempts. Wait before trying again.', 429)
+}
+
+async function recordPairingFailure(ip: string) {
+  const key = hashSecret(`screen-pair:${ip || 'unknown'}`)
+  const now = new Date()
+  const bucket = await prisma.pairingAttemptBucket.findUnique({ where: { key } })
+  const reset = !bucket || now.getTime() - bucket.windowStart.getTime() >= 15 * 60_000
+  await prisma.pairingAttemptBucket.upsert({ where: { key }, create: { key, attempts: 1, windowStart: now }, update: reset ? { attempts: 1, windowStart: now, blockedUntil: null } : { attempts: { increment: 1 } } })
+  const updated = await prisma.pairingAttemptBucket.findUniqueOrThrow({ where: { key } })
+  if (updated.attempts >= 10 && !updated.blockedUntil) await prisma.pairingAttemptBucket.update({ where: { key }, data: { blockedUntil: new Date(now.getTime() + 30 * 60_000) } })
+}
 const authStoreError = (error: unknown) => {
   if (error instanceof ApiError) return error
   if (error instanceof Prisma.PrismaClientInitializationError) return new ApiError('AUTH_STORE_UNAVAILABLE', 'Authentication is temporarily unavailable', 503)
@@ -729,12 +767,29 @@ app.get('/api/vehicles/:vehicleId', async (request, reply) => { const auth = awa
 app.patch('/api/vehicles/:vehicleId', async (request, reply) => { const auth = await requireAuth(request); const d = await driverFrom(auth); const { vehicleId } = request.params as { vehicleId: string }; const v = await prisma.vehicle.findFirst({ where: { id: vehicleId, driverId: d.id } }); if (!v) throw notFound('Vehicle not found'); return ok(request, await prisma.vehicle.update({ where: { id: vehicleId }, data: bodyOf(request, vehicleSchema.partial()) }), reply) })
 
 app.post('/api/displays/pairing-code', async (request, reply) => {
-  await requireAuth(request); const input = bodyOf(request, z.object({ displayId: z.string().uuid().optional(), deviceId: z.string().min(1).optional(), name: z.string().default('OORO Display'), ownershipType: z.string().optional() }))
-  const display = input.displayId ? await prisma.display.findFirst({ where: { id: input.displayId } }) : await prisma.display.create({ data: { deviceId: input.deviceId ?? `pending-${randomSecret(8)}`, name: input.name, ownershipType: input.ownershipType } })
+  const auth = await requirePermission(request, 'device:write'); const input = bodyOf(request, z.object({ displayId: z.string().uuid() }))
+  const display = await prisma.display.findFirst({ where: { id: input.displayId } })
   if (!display) throw notFound('Display not found')
-  const code = generatePairingCode(); const expiresAt = new Date(Date.now() + 10 * 60 * 1000)
-  await prisma.displayPairingCode.create({ data: { displayId: display.id, codeHash: hashSecret(code), codeLast4: code.slice(-4), expiresAt, purpose: 'SCREEN_PLAYER' } })
-  return ok(request, { displayId: display.id, pairingCode: code, expiresAt }, reply)
+  const storedRecovery = await prisma.displayRecoveryCode.findUnique({ where: { displayId: display.id } })
+  if (storedRecovery?.revokedAt) return ok(request, { displayId: display.id, pairingCode: null, codeLast4: storedRecovery.codeLast4, status: 'REVOKED', createdAt: storedRecovery.createdAt, expiresAt: null }, reply)
+  const recovery = await getOrCreateDisplayRecoveryCode(display.id)
+  if (recovery.created) await prisma.auditLog.create({ data: { actorId: auth.userId, actorRole: auth.role, action: 'SCREEN_RECOVERY_CODE_ISSUED', entityType: 'Display', entityId: display.id, after: { codeLast4: recovery.row.codeLast4 }, requestId: request.id } })
+  await prisma.auditLog.create({ data: { actorId: auth.userId, actorRole: auth.role, action: 'SCREEN_RECOVERY_CODE_REVEALED', entityType: 'Display', entityId: display.id, after: { codeLast4: recovery.row.codeLast4 }, requestId: request.id } })
+  return ok(request, { displayId: display.id, pairingCode: recovery.code, codeLast4: recovery.row.codeLast4, status: 'ACTIVE', createdAt: recovery.row.createdAt, expiresAt: null }, reply)
+})
+app.post('/api/displays/:displayId/recovery-code/rotate', async (request, reply) => {
+  const auth = await requirePermission(request, 'device:write'); const { displayId } = request.params as { displayId: string }
+  const display = await prisma.display.findUnique({ where: { id: displayId }, select: { id: true } }); if (!display) throw notFound('Display not found')
+  const previous = await prisma.displayRecoveryCode.findUnique({ where: { displayId } }); const recovery = await getOrCreateDisplayRecoveryCode(displayId, true)
+  await prisma.auditLog.create({ data: { actorId: auth.userId, actorRole: auth.role, action: 'SCREEN_RECOVERY_CODE_ROTATED', entityType: 'Display', entityId: displayId, before: previous ? { codeLast4: previous.codeLast4 } : undefined, after: { codeLast4: recovery.row.codeLast4 }, requestId: request.id } })
+  return ok(request, { displayId, pairingCode: recovery.code, codeLast4: recovery.row.codeLast4, status: 'ACTIVE', createdAt: recovery.row.createdAt, expiresAt: null }, reply)
+})
+app.post('/api/displays/:displayId/recovery-code/revoke', async (request, reply) => {
+  const auth = await requirePermission(request, 'device:write'); const { displayId } = request.params as { displayId: string }
+  const row = await prisma.displayRecoveryCode.findUnique({ where: { displayId } }); if (!row || row.revokedAt) throw notFound('Active recovery code not found')
+  const now = new Date(); await prisma.displayRecoveryCode.update({ where: { displayId }, data: { revokedAt: now } })
+  await prisma.auditLog.create({ data: { actorId: auth.userId, actorRole: auth.role, action: 'SCREEN_RECOVERY_CODE_REVOKED', entityType: 'Display', entityId: displayId, before: { codeLast4: row.codeLast4 }, after: { revoked: true }, requestId: request.id } })
+  return ok(request, { displayId, status: 'REVOKED', revokedAt: now }, reply)
 })
 app.post('/api/displays/pair', async (request, reply) => {
   const auth = await requireAuth(request); const d = await driverFrom(auth)
@@ -748,7 +803,26 @@ app.post('/api/displays/pair', async (request, reply) => {
 })
 app.get('/api/displays/:displayId/status', async (request, reply) => { const auth = await requireAuth(request); const { displayId } = request.params as { displayId: string }; const display = await prisma.display.findUnique({ where: { id: displayId }, include: { vehicle: true, heartbeats: { orderBy: { receivedAt: 'desc' }, take: 1 } } }); if (!display) throw notFound('Display not found'); if (display.vehicle && auth.driverId !== display.vehicle.driverId && !['ADMIN','SUPER_ADMIN','OPERATIONS'].includes(auth.role)) throw forbidden(); const hb = display.heartbeats[0]; const state = getDisplayConnectivity(hb?.receivedAt, new Date(), config.heartbeatOnlineSeconds, config.heartbeatDegradedSeconds); const connectivity = state === 'STALE' ? 'DEGRADED' : state; const { deviceTokenHash: _tokenHash, lastLatitude: _latitude, lastLongitude: _longitude, lastLocationAccuracy: _accuracy, lastLocationAt: _locationAt, ...safeDisplay } = display; const safeHeartbeat = hb ? { ...hb, ...(adminRoles.includes(auth.role) ? {} : { latitude: undefined, longitude: undefined, accuracyMeters: undefined, speedMps: undefined, headingDegrees: undefined, locationOccurredAt: undefined }) } : null; return ok(request, { ...asJson({ ...safeDisplay, ...(adminRoles.includes(auth.role) ? { lastLatitude: display.lastLatitude, lastLongitude: display.lastLongitude, lastLocationAccuracy: display.lastLocationAccuracy, lastLocationAt: display.lastLocationAt } : {}) }), connectivity, lastHeartbeat: safeHeartbeat ? asJson(safeHeartbeat) : null }, reply) })
 
-app.post('/api/device/pair', async (request, reply) => { const input = bodyOf(request, z.object({ pairingCode: z.string().min(6), deviceId: z.string().min(1), deviceName: z.string().optional(), manufacturer: z.string().optional(), model: z.string().optional(), androidVersion: z.string().optional(), appVersion: z.string().optional() })); const p = await prisma.displayPairingCode.findFirst({ where: { codeHash: hashSecret(input.pairingCode.toUpperCase()), purpose: 'SCREEN_PLAYER', consumedAt: null, revokedAt: null, expiresAt: { gt: new Date() } } }); if (!p) throw new ApiError('INVALID_PAIRING_CODE', 'Pairing code is invalid or expired', 400); const token = randomSecret(); const display = await prisma.$transaction(async (tx) => { await tx.displayPairingCode.update({ where: { id: p.id }, data: { consumedAt: new Date() } }); return tx.display.update({ where: { id: p.displayId }, data: { deviceId: input.deviceId, name: input.deviceName ?? 'OORO Screen', deviceTokenHash: hashSecret(token), state: 'READY', appVersion: input.appVersion } }) }); return ok(request, { success: true, deviceToken: token, screenId: display.id, displayId: display.id, workspaceId: 'default', deviceName: display.name }, reply) })
+app.post('/api/device/pair', async (request, reply) => {
+  const input = bodyOf(request, z.object({ pairingCode: z.string().trim().min(6).max(32), deviceId: z.string().min(1).max(200), deviceName: z.string().optional(), manufacturer: z.string().optional(), model: z.string().optional(), androidVersion: z.string().optional(), appVersion: z.string().optional() }))
+  await checkPairingRateLimit(request.ip)
+  const submittedCodeHash = hashSecret(input.pairingCode.toUpperCase())
+  const recovery = await prisma.displayRecoveryCode.findFirst({ where: { codeHash: submittedCodeHash, revokedAt: null }, select: { displayId: true } })
+  const legacy = recovery ? null : await prisma.displayPairingCode.findFirst({ where: { codeHash: submittedCodeHash, purpose: 'SCREEN_PLAYER', consumedAt: null, revokedAt: null, expiresAt: { gt: new Date() } }, select: { id: true, displayId: true } })
+  const displayId = recovery?.displayId ?? legacy?.displayId
+  if (!displayId) { await recordPairingFailure(request.ip); throw new ApiError('INVALID_PAIRING_CODE', 'Pairing code is invalid or revoked', 400) }
+  const token = randomSecret()
+  const display = await prisma.$transaction(async tx => {
+    if (recovery) { const stillActive = await tx.displayRecoveryCode.findFirst({ where: { displayId, codeHash: submittedCodeHash, revokedAt: null }, select: { id: true } }); if (!stillActive) throw new ApiError('INVALID_PAIRING_CODE', 'Pairing code is invalid or revoked', 400) }
+    const owner = await tx.display.findUnique({ where: { deviceId: input.deviceId }, select: { id: true } })
+    if (owner && owner.id !== displayId) throw new ApiError('DEVICE_ALREADY_PAIRED', 'This device is already registered to another screen', 409)
+    if (legacy) { const consumed = await tx.displayPairingCode.updateMany({ where: { id: legacy.id, consumedAt: null, revokedAt: null, expiresAt: { gt: new Date() } }, data: { consumedAt: new Date() } }); if (consumed.count !== 1) throw new ApiError('INVALID_PAIRING_CODE', 'Pairing code is invalid or revoked', 400) }
+    const updated = await tx.display.update({ where: { id: displayId }, data: { deviceId: input.deviceId, deviceTokenHash: hashSecret(token), state: 'READY', appVersion: input.appVersion, manufacturer: input.manufacturer, model: input.model, androidVersion: input.androidVersion } })
+    await tx.auditLog.create({ data: { actorRole: 'SCREEN_PLAYER', action: 'SCREEN_PLAYER_RECOVERED', entityType: 'Display', entityId: updated.id, after: { appVersion: input.appVersion }, requestId: request.id } })
+    return updated
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
+  return ok(request, { success: true, deviceToken: token, screenId: display.id, displayId: display.id, workspaceId: 'default', deviceName: display.name }, reply)
+})
 
 app.post('/api/deviceos/enroll', async (request, reply) => {
   const input = bodyOf(request, z.object({
@@ -1480,10 +1554,10 @@ app.post('/api/admin/displays', async (request, reply) => {
   }))
   const vehicle = input.vehicleId ? await prisma.vehicle.findFirst({ where: { OR: [...(/^[0-9a-f-]{36}$/i.test(input.vehicleId) ? [{ id: input.vehicleId }] : []), { registrationNumber: input.vehicleId }] } }) : null
   const display = await prisma.display.create({ data: { deviceId: `pending-${randomSecret(8)}`, name: input.screenName, ownershipType: input.screenType, vehicleId: vehicle?.id, inventoryConfig: {create:{city:input.city,coverage:{area:input.area??""}}} } })
-  const code = generatePairingCode(); const expiresAt = new Date(Date.now() + 10 * 60 * 1000)
-  await prisma.displayPairingCode.create({ data: { displayId: display.id, codeHash: hashSecret(code), codeLast4: code.slice(-4), expiresAt } })
+  const recovery = await getOrCreateDisplayRecoveryCode(display.id)
   await prisma.auditLog.create({ data: { actorId: auth.userId, actorRole: auth.role, action: 'DISPLAY_CREATED', entityType: 'Display', entityId: display.id, after: { city: input.city, area: input.area, notes: input.notes } as any, requestId: request.id } })
-  return ok(request, { displayId: display.id, pairingCode: code, expiresAt, display }, reply)
+  await prisma.auditLog.create({ data: { actorId: auth.userId, actorRole: auth.role, action: 'SCREEN_RECOVERY_CODE_ISSUED', entityType: 'Display', entityId: display.id, after: { codeLast4: recovery.row.codeLast4 }, requestId: request.id } })
+  return ok(request, { displayId: display.id, pairingCode: recovery.code, codeLast4: recovery.row.codeLast4, status: 'ACTIVE', expiresAt: null, display }, reply)
 })
 app.patch('/api/admin/displays/:displayId/assignment', async (request, reply) => {
   const auth = await requirePermission(request, 'device:write')

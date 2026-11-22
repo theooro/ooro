@@ -433,6 +433,7 @@ model Display {
   createdAt                 DateTime                    @default(now())
   updatedAt                 DateTime                    @updatedAt
   pairingCodes              DisplayPairingCode[]
+  recoveryCode              DisplayRecoveryCode?
   heartbeats                DisplayHeartbeat[]
   locationEvents            DisplayLocationEvent[]
   commands                  DisplayCommand[]
@@ -627,6 +628,7 @@ model Creative {
   campaign        Campaign               @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   asset           Asset?
   trackingLinks   CampaignTrackingLink[]
+  sourceSubmission CreativeSubmission?
 
   @@index([campaignId, status])
 }
@@ -654,6 +656,8 @@ model CreativeSubmission {
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
   organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  scheduledCreativeId String?   @unique @db.Uuid
+  scheduledCreative Creative? @relation(fields: [scheduledCreativeId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, status, createdAt])
   @@index([submitterUserId, createdAt])
@@ -855,6 +859,27 @@ model DisplayPairingCode {
 
   @@index([displayId, expiresAt])
   @@index([displayId, purpose, expiresAt])
+}
+
+model DisplayRecoveryCode {
+  id             String   @id @default(uuid()) @db.Uuid
+  displayId      String   @unique @db.Uuid
+  codeHash       String   @unique
+  encryptedCode  String
+  codeLast4      String
+  rotatedAt      DateTime @default(now())
+  revokedAt      DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  display        Display  @relation(fields: [displayId], references: [id], onDelete: Cascade)
+}
+
+model PairingAttemptBucket {
+  key          String   @id
+  attempts     Int      @default(0)
+  windowStart  DateTime
+  blockedUntil DateTime?
+  updatedAt    DateTime @updatedAt
 }
 
 model DisplayHeartbeat {

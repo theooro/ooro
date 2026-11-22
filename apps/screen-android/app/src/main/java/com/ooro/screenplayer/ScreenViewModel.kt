@@ -248,7 +248,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             ManifestRefreshBus.events.collect { sync() }
         }
     }
-    fun pair(rawCode: String) { if (_pairing.value) return; val code = rawCode.trim().uppercase(); if (code.isBlank()) { _state.value = ScreenState.Setup("Enter a pairing code", true); return }; _pairing.value = true; viewModelScope.launch { try { runCatching { api.health(); val result = api.pair(PairRequest(code,deviceId,android.os.Build.MANUFACTURER,android.os.Build.MODEL,android.os.Build.VERSION.RELEASE,BuildConfig.VERSION_NAME)); store.save(result.credentials); _pairedScreenId.value = result.credentials.screenId; repairMode = false; Log.i("OoroScreen", "pairing succeeded displayId=${result.credentials.screenId} tokenPresent=${result.credentials.token.isNotBlank()} paired=true"); sync() }.onFailure { error -> Log.e("OoroScreen", "pairing failed displayId=$deviceId", error); val message = if (error is DeviceApiException) recoveryMessage(error.kind) else "Pairing failed. Check the code and network connection."; _state.value = ScreenState.Setup(message, true) } } finally { _pairing.value = false } } }
+    fun pair(rawCode: String) { if (_pairing.value) return; val code = rawCode.trim().uppercase(); if (code.isBlank()) { _state.value = ScreenState.Setup("Enter a pairing code", true); return }; _pairing.value = true; viewModelScope.launch { try { runCatching { api.health(); val result = api.pair(PairRequest(code,deviceId,android.os.Build.MANUFACTURER,android.os.Build.MODEL,android.os.Build.VERSION.RELEASE,BuildConfig.VERSION_NAME)); store.save(result.credentials); _pairedScreenId.value = result.credentials.screenId; repairMode = false; Log.i("OoroScreen", "pairing succeeded displayId=${result.credentials.screenId} tokenPresent=${result.credentials.token.isNotBlank()} paired=true"); sync() }.onFailure { error -> Log.e("OoroScreen", "pairing failed displayId=$deviceId", error); val message = if (error is DeviceApiException) pairingFailureMessage(error.kind) else "Waiting for internet access. Keep this screen recovery code and retry when the screen is online."; _state.value = ScreenState.Setup(message, true) } } finally { _pairing.value = false } } }
     fun reconnect() { if (_reconnecting.value) return; _reconnecting.value = true; val current = (_state.value as? ScreenState.AuthRecovery); if (current != null) _state.value = current.copy(reconnecting = true); viewModelScope.launch { try { sync() } finally { _reconnecting.value = false } } }
     fun beginRepair() { repairMode = true; _state.value = ScreenState.Setup("Enter a new pairing code. This keeps the existing screen identity and history.", true) }
     fun onActivityResumed(commandId: String?) {
@@ -639,3 +639,11 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
 }
 
 private fun DeviceFailureKind.requiresRepair() = this in setOf(DeviceFailureKind.AUTH_EXPIRED, DeviceFailureKind.AUTH_INVALID, DeviceFailureKind.AUTH_REVOKED, DeviceFailureKind.DEVICE_NOT_FOUND, DeviceFailureKind.PAIRING_REQUIRED)
+
+internal fun pairingFailureMessage(kind: DeviceFailureKind): String = when (kind) {
+    DeviceFailureKind.DNS_ERROR, DeviceFailureKind.CONNECTION_REFUSED, DeviceFailureKind.TIMEOUT, DeviceFailureKind.NETWORK_UNAVAILABLE -> "Waiting for internet access. Keep this screen recovery code and retry when the screen is online."
+    DeviceFailureKind.TLS_ERROR -> "Secure connection to OORO failed. Keep this screen recovery code and retry after the network is restored."
+    DeviceFailureKind.SERVER_UNAVAILABLE -> "OORO is temporarily unavailable. Keep this screen recovery code and retry shortly."
+    DeviceFailureKind.AUTH_INVALID, DeviceFailureKind.AUTH_REVOKED, DeviceFailureKind.PAIRING_REQUIRED -> "This recovery code was rejected. Check the current code in Admin > Screens."
+    else -> "Screen pairing did not complete. Keep this screen recovery code and retry."
+}

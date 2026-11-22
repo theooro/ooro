@@ -26,6 +26,7 @@ export function startOfCampaignDateUtc(date: string, timezone: string): Date {
 }
 
 export function campaignDateWindow(startDate: string, endDate: string, timezone = DEFAULT_CAMPAIGN_TIMEZONE) {
+  if (timezone !== DEFAULT_CAMPAIGN_TIMEZONE) throw new Error('CAMPAIGN_TIMEZONE_UNSUPPORTED')
   const [sy, sm, sd] = dateParts(startDate)
   const [ey, em, ed] = dateParts(endDate)
   const startOrdinal = Date.UTC(sy, sm - 1, sd)
