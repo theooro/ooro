@@ -231,7 +231,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
                         if (startup.block == CachedStartupBlock.NONE && leaseRemaining > 0L) {
                             _diagnostic.value = "Playing authorized cached delivery · refreshing manifest when connected"
                             scheduleManifestRefresh(cached)
-                        } else if (leaseRemaining <= 0L) _diagnostic.value = "Trusted time unavailable — device reboot detected, reconnect to establish secure schedule time."
+                        } else if (leaseRemaining <= 0L) _diagnostic.value = trustedTimeUnavailableDiagnostic()
                         else if (startup.block == CachedStartupBlock.NO_ELIGIBLE_VERIFIED_ASSET) _diagnostic.value = offlineEmptyMessage(cached, Instant.now(), _verifiedAssetIds.value)
                     }
                 }
@@ -420,10 +420,16 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
     private fun keepCachedPlayback(credentials: DeviceCredentials? = store.credentials()) {
         val authorized = credentials != null && active != null && currentOfflineAuthorizationRemainingMillis() > 0L
         _authorizationValid.value = authorized
-        _diagnostic.value = if (authorized) "Authorized cached playback active · reconnecting" else trustedTimeFailureMessage ?: "Trusted time unavailable — device reboot detected, reconnect to establish secure schedule time."
+        _diagnostic.value = if (authorized) "Authorized cached playback active · reconnecting" else trustedTimeFailureMessage ?: trustedTimeUnavailableDiagnostic()
         _cachedPlaybackAllowed.value = authorized
         if (_state.value !is ScreenState.AuthRecovery && credentials != null) _state.value = ScreenState.Player(active ?: fallback(credentials))
     }
+    private fun trustedTimeUnavailableDiagnostic(): String = trustedTimeUnavailableMessage(
+        activeAuthorization,
+        store.credentials()?.screenId,
+        SystemClock.elapsedRealtime(),
+        currentBootCount(),
+    )
     private fun scheduleManifestRefresh(manifest: DeviceManifest) {
         manifestRefreshJob?.cancel()
         val remaining = currentOfflineAuthorizationRemainingMillis()

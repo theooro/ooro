@@ -118,6 +118,19 @@ class OfflinePlaybackRulesTest {
         assertEquals(now.plusSeconds(2), trustedScheduleTime(renewed, "screen-test", 1_000L, 9))
     }
 
+    @Test fun trustedTimeDiagnosticSeparatesExpiredLeaseFromRebootInvalidation() {
+        val lease = OfflineAuthorization("screen-test", 10_000L, 8, 895_000L, now.toEpochMilli())
+        assertEquals(
+            "Trusted time unavailable: the authenticated schedule-time lease expired. Reconnect to renew it before playback.",
+            trustedTimeUnavailableMessage(lease, "screen-test", 905_001L, 8),
+        )
+        assertEquals(
+            "Trusted time unavailable: device reboot invalidated the authenticated time anchor. Reconnect to renew it before playback.",
+            trustedTimeUnavailableMessage(lease, "screen-test", 500L, 9),
+        )
+        assertTrue(trustedTimeUnavailableMessage(null, "screen-test", 500L, 9).contains("no authenticated schedule-time anchor"))
+    }
+
     @Test fun campaignDatesAreInclusiveByCalendarDayAndExclusiveAtNextMidnight() {
         val creative = item("date-window").copy(
             startAt = Instant.parse("2026-11-05T00:00:00Z"),
