@@ -332,6 +332,22 @@ class OfflinePlaybackRulesTest {
         assertFalse(message.contains("sync an approved campaign"))
     }
 
+    @Test fun unvalidatedInternetIsRecordedAsARequestGateWithoutFabricatingHttpResult() {
+        val failure = manifestSyncFailureMessage(null, networkValidated = false)
+        val attempt = LastManifestAttemptDiagnostic(
+            attemptedAtMillis = 1_795_328_149_822L,
+            clientRequestId = "client-req-1",
+            failureClass = "NETWORK_NOT_VALIDATED",
+            failureStage = "NETWORK_GATE",
+        )
+        assertTrue(failure.contains("Internet connectivity is not validated"))
+        assertEquals("NETWORK_NOT_VALIDATED", attempt.failureClass)
+        assertEquals("NETWORK_GATE", attempt.failureStage)
+        assertEquals(null, attempt.httpStatus)
+        assertEquals(null, attempt.requestId)
+        assertEquals("NOT_CHECKED", attempt.trustedTimeResult)
+    }
+
     @Test fun dnsTlsAndAuthenticationFailuresHaveDistinctMessages() {
         assertTrue(manifestSyncFailureMessage(DeviceApiException(DeviceFailureKind.DNS_ERROR, endpoint = "/api/device/manifest"), true).contains("DNS lookup failed"))
         assertTrue(manifestSyncFailureMessage(DeviceApiException(DeviceFailureKind.TLS_ERROR, endpoint = "/api/device/manifest"), true).contains("HTTPS connection"))
@@ -355,7 +371,7 @@ class OfflinePlaybackRulesTest {
         val response = manifest(listOf(item("server-approved")))
         val api = object : DeviceApi by com.ooro.screenplayer.api.MockDeviceApi() {
             override suspend fun health() { healthCalls++; error("health probe timeout") }
-            override suspend fun manifest(credentials: DeviceCredentials): DeviceManifest { manifestCalls++; return response }
+            override suspend fun manifest(credentials: DeviceCredentials, correlationId: String?): DeviceManifest { manifestCalls++; return response }
         }
         assertEquals(response, fetchAuthenticatedManifest(api, DeviceCredentials("device", "screen-test", "workspace", "redacted-test-only", "Screen")))
         assertEquals("health probe must not gate auth", 0, healthCalls)

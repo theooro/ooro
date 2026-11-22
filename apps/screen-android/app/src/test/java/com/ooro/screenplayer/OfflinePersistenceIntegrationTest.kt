@@ -273,7 +273,7 @@ class OfflinePersistenceIntegrationTest {
         var manifestFailure: Throwable? = null
         override suspend fun health() = Unit
         override suspend fun pair(request: PairRequest) = error("unused")
-        override suspend fun manifest(credentials: DeviceCredentials): DeviceManifest {
+        override suspend fun manifest(credentials: DeviceCredentials, correlationId: String?): DeviceManifest {
             manifestFailure?.let { throw it }
             val response = manifestResponse ?: error("no fake manifest configured")
             return if (response.generatedAt != null && response.authenticatedServerTime != null && response.validUntil != null) response else authorizedResponse(response)

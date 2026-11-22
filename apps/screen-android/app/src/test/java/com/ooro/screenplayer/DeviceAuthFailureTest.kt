@@ -1,8 +1,11 @@
 package com.ooro.screenplayer
 
 import com.ooro.screenplayer.api.DeviceFailureKind
+import com.ooro.screenplayer.api.DeviceApiException
 import com.ooro.screenplayer.api.classifyDeviceFailure
 import com.ooro.screenplayer.api.classifyNetworkFailure
+import com.ooro.screenplayer.api.safeContentType
+import com.ooro.screenplayer.api.safeDiagnosticId
 import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
@@ -30,5 +33,27 @@ class DeviceAuthFailureTest {
         assertEquals(DeviceFailureKind.TIMEOUT, classifyNetworkFailure(SocketTimeoutException("timed out")))
         assertEquals(DeviceFailureKind.AUTH_INVALID, classifyDeviceFailure(401, "INVALID_DEVICE_CREDENTIALS"))
         assertEquals(DeviceFailureKind.SERVER_UNAVAILABLE, classifyDeviceFailure(503, "UPSTREAM_UNAVAILABLE"))
+    }
+
+    @Test fun edgeRejectionIsDistinctFromDeviceAuthenticationFailure() {
+        assertEquals(DeviceFailureKind.EDGE_REJECTED, classifyDeviceFailure(403, null, edgeRejected = true))
+        assertEquals(DeviceFailureKind.REQUEST_FAILED, classifyDeviceFailure(403, null, edgeRejected = false))
+        assertEquals(DeviceFailureKind.AUTH_INVALID, classifyDeviceFailure(401, "INVALID_DEVICE_CREDENTIALS"))
+    }
+
+    @Test fun manifestDiagnosticIdentifiersAndContentTypeAreBoundedAndSanitized() {
+        assertEquals("req-abc.123", safeDiagnosticId("req-abc.123"))
+        assertEquals(null, safeDiagnosticId("Bearer top-secret-token"))
+        assertEquals("application/json; charset=utf-8", safeContentType("application/json; charset=utf-8"))
+        assertEquals(null, safeContentType("application/json\nAuthorization: Bearer secret"))
+    }
+
+    @Test fun syncFailureClassificationDistinguishesNetworkAuthEdgeTimeAndSchemaFailures() {
+        assertEquals("API_TIMEOUT", manifestAttemptFailureClass(DeviceApiException(DeviceFailureKind.TIMEOUT, endpoint = "/api/device/manifest"), "NOT_RECEIVED"))
+        assertEquals("DEVICE_AUTH_REJECTED", manifestAttemptFailureClass(DeviceApiException(DeviceFailureKind.AUTH_INVALID, status = 401, endpoint = "/api/device/manifest"), "NOT_RECEIVED"))
+        assertEquals("CLOUDFLARE_WAF_REJECTED", manifestAttemptFailureClass(DeviceApiException(DeviceFailureKind.EDGE_REJECTED, status = 403, endpoint = "/api/device/manifest"), "NOT_RECEIVED"))
+        assertEquals("RESPONSE_SCHEMA_FAILURE", manifestAttemptFailureClass(DeviceApiException(DeviceFailureKind.MANIFEST_PARSE_FAILED, status = 200, endpoint = "/api/device/manifest"), "NOT_RECEIVED"))
+        assertEquals("TRUSTED_TIME_ROLLBACK", manifestAttemptFailureClass(IllegalStateException("authenticated time regressed"), "ROLLBACK"))
+        assertEquals("TRUSTED_TIME_MALFORMED", manifestAttemptFailureClass(IllegalStateException("bad time"), "MALFORMED"))
     }
 }

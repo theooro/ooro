@@ -20,11 +20,21 @@ import java.time.Instant
 data class DeviceCommand(val id: String, val type: String, val payload: JSONObject?, val expiresAt: Instant?)
 data class CommandResult(val commandId: String, val deviceId: String, val status: String, val receivedAt: Instant, val startedAt: Instant?, val completedAt: Instant?, val errorCode: String? = null, val errorMessage: String? = null)
 data class ProofUploadResult(val accepted: Int, val acceptedEventIds: Set<String> = emptySet())
-enum class DeviceFailureKind { DNS_ERROR, CONNECTION_REFUSED, TIMEOUT, TLS_ERROR, NETWORK_UNAVAILABLE, AUTH_EXPIRED, AUTH_INVALID, AUTH_REVOKED, DEVICE_NOT_FOUND, PAIRING_REQUIRED, SERVER_UNAVAILABLE, REQUEST_FAILED }
+enum class DeviceFailureKind { DNS_ERROR, CONNECTION_REFUSED, TIMEOUT, TLS_ERROR, NETWORK_UNAVAILABLE, AUTH_EXPIRED, AUTH_INVALID, AUTH_REVOKED, DEVICE_NOT_FOUND, PAIRING_REQUIRED, EDGE_REJECTED, SERVER_UNAVAILABLE, MANIFEST_PARSE_FAILED, REQUEST_FAILED }
 
-class DeviceApiException(val kind: DeviceFailureKind, val status: Int? = null, val endpoint: String, cause: Throwable? = null) : IOException(kind.name, cause)
+class DeviceApiException(
+    val kind: DeviceFailureKind,
+    val status: Int? = null,
+    val endpoint: String,
+    cause: Throwable? = null,
+    val clientRequestId: String? = null,
+    val requestId: String? = null,
+    val contentType: String? = null,
+    val serverInstanceId: String? = null,
+) : IOException(kind.name, cause)
 
-internal fun classifyDeviceFailure(status: Int, code: String?): DeviceFailureKind = when {
+internal fun classifyDeviceFailure(status: Int, code: String?, edgeRejected: Boolean = false): DeviceFailureKind = when {
+    edgeRejected || (status == 403 && code == "CLOUDFLARE_1010") -> DeviceFailureKind.EDGE_REJECTED
     status >= 500 -> DeviceFailureKind.SERVER_UNAVAILABLE
     status == 401 && code in setOf("DEVICE_AUTH_EXPIRED", "TOKEN_EXPIRED", "AUTH_EXPIRED") -> DeviceFailureKind.AUTH_EXPIRED
     status == 401 && code in setOf("DEVICE_REVOKED", "AUTH_REVOKED") -> DeviceFailureKind.AUTH_REVOKED
@@ -44,12 +54,12 @@ internal fun classifyNetworkFailure(error: Throwable): DeviceFailureKind {
     }
 }
 
-interface DeviceApi { suspend fun health(); suspend fun pair(request: PairRequest): PairResponse; suspend fun manifest(credentials: DeviceCredentials): DeviceManifest; suspend fun heartbeat(credentials: DeviceCredentials, status: PlayerStatus, manifestVersion: Long, telemetry: HeartbeatTelemetry = HeartbeatTelemetry()); suspend fun uploadProof(credentials: DeviceCredentials, events: List<ProofOfPlay>): ProofUploadResult; suspend fun pendingCommands(credentials: DeviceCredentials): List<DeviceCommand> = emptyList(); suspend fun acknowledgeCommand(credentials: DeviceCredentials, result: CommandResult) {}; suspend fun unpair(credentials: DeviceCredentials) }
+interface DeviceApi { suspend fun health(); suspend fun pair(request: PairRequest): PairResponse; suspend fun manifest(credentials: DeviceCredentials, correlationId: String? = null): DeviceManifest; suspend fun heartbeat(credentials: DeviceCredentials, status: PlayerStatus, manifestVersion: Long, telemetry: HeartbeatTelemetry = HeartbeatTelemetry()); suspend fun uploadProof(credentials: DeviceCredentials, events: List<ProofOfPlay>): ProofUploadResult; suspend fun pendingCommands(credentials: DeviceCredentials): List<DeviceCommand> = emptyList(); suspend fun acknowledgeCommand(credentials: DeviceCredentials, result: CommandResult) {}; suspend fun unpair(credentials: DeviceCredentials) }
 
 class MockDeviceApi : DeviceApi {
     override suspend fun health() = Unit
     override suspend fun pair(request: PairRequest) = PairResponse(DeviceCredentials(request.deviceId, "demo-screen", "demo-workspace", "demo-token-${request.deviceId}", "Demo Screen"))
-    override suspend fun manifest(credentials: DeviceCredentials): DeviceManifest {
+    override suspend fun manifest(credentials: DeviceCredentials, correlationId: String?): DeviceManifest {
         val now = Instant.now()
         return DeviceManifest(1, credentials.screenId, BuildConfig.DEFAULT_TIMEZONE, listOf(ManifestItem("demo-image", "demo-campaign", "demo-creative", CreativeType.IMAGE, "", null, 8, 1, null, null, emptySet(), null, null, "demo-asset", deliveryQuota = DeliveryQuota("demo-grant", 1, 100, false))), now.plusSeconds(900), generatedAt = now, authenticatedServerTime = now)
     }
@@ -60,38 +70,59 @@ class MockDeviceApi : DeviceApi {
 
 class HttpDeviceApi(private val baseUrl: String) : DeviceApi {
     init { require(BuildConfig.DEBUG || baseUrl.startsWith("https://")) { "Release screen builds require HTTPS" } }
-    private suspend fun request(path: String, method: String, token: String?, body: String? = null, onSuccess: ((Int, HttpURLConnection) -> Unit)? = null): String = withContext(Dispatchers.IO) {
-        val connection = try { (URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection).apply { requestMethod = method; useCaches = false; connectTimeout = 10_000; readTimeout = 15_000; setRequestProperty("Accept", "application/json"); if (path == "/api/device/manifest") setRequestProperty("Cache-Control", "no-cache"); token?.let { setRequestProperty("Authorization", "Bearer $it") }; if (body != null) { doOutput = true; setRequestProperty("Content-Type", "application/json"); outputStream.use { it.write(body.toByteArray()) } } } } catch (error: IOException) { throw DeviceApiException(classifyNetworkFailure(error), endpoint = path, cause = error) }
-        val status = try { connection.responseCode } catch (error: IOException) { throw DeviceApiException(classifyNetworkFailure(error), endpoint = path, cause = error) }
+    private suspend fun request(path: String, method: String, token: String?, body: String? = null, correlationId: String? = null, onSuccess: ((Int, HttpURLConnection) -> Unit)? = null): String = withContext(Dispatchers.IO) {
+        val connection = try { (URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection).apply { requestMethod = method; useCaches = false; connectTimeout = 10_000; readTimeout = 15_000; setRequestProperty("Accept", "application/json"); if (path == "/api/device/manifest") { setRequestProperty("Cache-Control", "no-cache"); correlationId?.let { setRequestProperty("X-Client-Request-ID", it) } }; token?.let { setRequestProperty("Authorization", "Bearer $it") }; if (body != null) { doOutput = true; setRequestProperty("Content-Type", "application/json"); outputStream.use { it.write(body.toByteArray()) } } } } catch (error: IOException) { throw DeviceApiException(classifyNetworkFailure(error), endpoint = path, cause = error, clientRequestId = correlationId) }
+        val status = try { connection.responseCode } catch (error: IOException) { throw DeviceApiException(classifyNetworkFailure(error), endpoint = path, cause = error, clientRequestId = correlationId) }
         if (status !in 200..299) {
-            val errorBody = runCatching { (connection.errorStream ?: connection.inputStream).bufferedReader().use { it.readText() } }.getOrDefault("")
+            val errorBody = runCatching { (connection.errorStream ?: connection.inputStream).use { it.readBoundedUtf8(16_384) } }.getOrDefault("")
             val detail = runCatching { JSONObject(errorBody).optJSONObject("error")?.optString("code") }.getOrNull().orEmpty()
+                .takeIf { it.matches(Regex("[A-Za-z0-9_.-]{1,80}")) }.orEmpty()
+            val requestId = responseRequestId(connection, errorBody)
+            val contentType = safeContentType(connection.contentType)
+            val instanceId = safeResponseInstanceId(connection)
+            val edgeRejected = status == 403 && (
+                !connection.getHeaderField("cf-ray").isNullOrBlank() ||
+                    connection.getHeaderField("server")?.contains("cloudflare", ignoreCase = true) == true ||
+                    errorBody.contains("error 1010", ignoreCase = true)
+                )
             if (path == "/api/device/manifest") {
-                val requestId = runCatching { JSONObject(errorBody).optString("requestId") }.getOrNull()?.takeIf { it.isNotBlank() && it != "null" }
-                Log.w("OoroTrustedTime", "manifest response httpStatus=$status requestId=${requestId ?: "unavailable"} serverInstanceId=${connection.getHeaderField("x-server-instance-id") ?: "unavailable"} rawServerTime=unavailable deviceElapsedMs=${android.os.SystemClock.elapsedRealtime()}")
+                Log.w("OoroManifestSync", "manifest response failed clientRequestId=${correlationId ?: "unavailable"} requestId=${requestId ?: "unavailable"} status=$status contentType=${contentType ?: "unavailable"} failureClass=${classifyDeviceFailure(status, detail, edgeRejected)} serverInstanceId=${instanceId ?: "unavailable"}")
             }
-            throw DeviceApiException(classifyDeviceFailure(status, detail.takeIf { it.isNotBlank() }), status, path)
+            throw DeviceApiException(classifyDeviceFailure(status, detail.takeIf { it.isNotBlank() }, edgeRejected), status, path,
+                clientRequestId = correlationId, requestId = requestId, contentType = contentType, serverInstanceId = instanceId)
         }
         onSuccess?.invoke(status, connection)
         return@withContext connection.inputStream.bufferedReader().use { it.readText() }
     }
     override suspend fun health() { request("/api/health", "GET", null) }
     override suspend fun pair(request: PairRequest): PairResponse { val json = request.toJson(); val body = request("/api/device/pair", "POST", null, json); val envelope = JSONObject(body); val obj = envelope.optJSONObject("data") ?: envelope; return PairResponse(DeviceCredentials(request.deviceId, obj.getString("screenId"), obj.optString("workspaceId"), obj.getString("deviceToken"), obj.optString("deviceName", "OORO Screen"))) }
-    override suspend fun manifest(credentials: DeviceCredentials): DeviceManifest {
+    override suspend fun manifest(credentials: DeviceCredentials, correlationId: String?): DeviceManifest {
         com.ooro.screenplayer.RuntimeDiagnostics.increment(com.ooro.screenplayer.RuntimeDiagnostics.Counter.MANIFEST_REQUEST)
+        val clientRequestId = correlationId ?: java.util.UUID.randomUUID().toString()
         var responseStatus: Int? = null
         var responseInstanceId: String? = null
-        val response = request("/api/device/manifest", "GET", credentials.token, onSuccess = { status, connection ->
+        var responseHeaderRequestId: String? = null
+        var responseContentType: String? = null
+        val response = request("/api/device/manifest", "GET", credentials.token, correlationId = clientRequestId, onSuccess = { status, connection ->
             responseStatus = status
-            responseInstanceId = connection.getHeaderField("x-server-instance-id")
+            responseInstanceId = safeResponseInstanceId(connection)
+            responseHeaderRequestId = safeHeaderRequestId(connection)
+            responseContentType = safeContentType(connection.contentType)
         })
-        val envelope = JSONObject(response)
+        val envelope = try { JSONObject(response) } catch (error: Exception) {
+            throw DeviceApiException(DeviceFailureKind.MANIFEST_PARSE_FAILED, responseStatus, "/api/device/manifest", error,
+                clientRequestId, requestId = responseHeaderRequestId, contentType = responseContentType, serverInstanceId = responseInstanceId)
+        }
         val data = envelope.optJSONObject("data") ?: envelope
         val rawServerTime = data.optString("authenticatedServerTime").takeIf { it.isNotBlank() && it != "null" }
-        val requestId = envelope.optString("requestId").takeIf { it.isNotBlank() && it != "null" }
+        val requestId = safeDiagnosticId(envelope.optString("requestId"))
         val instanceId = data.optString("serverInstanceId").takeIf { it.isNotBlank() && it != "null" } ?: responseInstanceId
-        Log.i("OoroTrustedTime", "manifest response httpStatus=${responseStatus ?: "unknown"} requestId=${requestId ?: "unavailable"} serverInstanceId=${instanceId ?: "unavailable"} rawServerTime=${rawServerTime ?: "missing"} deviceElapsedMs=${android.os.SystemClock.elapsedRealtime()}")
-        return ManifestCodec.parse(data.toString()).copy(rawAuthenticatedServerTime = rawServerTime, requestId = requestId, serverInstanceId = instanceId, manifestHttpStatus = responseStatus)
+        val manifest = try { ManifestCodec.parse(data.toString()) } catch (error: Exception) {
+            throw DeviceApiException(DeviceFailureKind.MANIFEST_PARSE_FAILED, responseStatus, "/api/device/manifest", error,
+                clientRequestId, requestId, responseContentType, safeDiagnosticId(instanceId))
+        }
+        Log.i("OoroManifestSync", "manifest response clientRequestId=$clientRequestId requestId=${requestId ?: "unavailable"} status=${responseStatus ?: "unknown"} contentType=${responseContentType ?: "unavailable"} serverInstanceId=${safeDiagnosticId(instanceId) ?: "unavailable"} version=${manifest.version} itemCount=${manifest.items.size}")
+        return manifest.copy(rawAuthenticatedServerTime = rawServerTime, requestId = requestId, serverInstanceId = safeDiagnosticId(instanceId), manifestHttpStatus = responseStatus, clientRequestId = clientRequestId, manifestContentType = responseContentType)
     }
     override suspend fun heartbeat(credentials: DeviceCredentials, status: PlayerStatus, manifestVersion: Long, telemetry: HeartbeatTelemetry) { com.ooro.screenplayer.RuntimeDiagnostics.increment(com.ooro.screenplayer.RuntimeDiagnostics.Counter.HEARTBEAT_REQUEST); val location = telemetry.location; request("/api/device/heartbeat", "POST", credentials.token, JSONObject().put("screenId", credentials.screenId).put("deviceId", credentials.deviceId).put("status", status.name).put("screenState", status.name).put("playbackState", telemetry.playbackState).put("manifestVersion", manifestVersion).put("appVersion", BuildConfig.VERSION_NAME).put("androidVersion", android.os.Build.VERSION.RELEASE).put("manufacturer", android.os.Build.MANUFACTURER).put("model", android.os.Build.MODEL).put("networkType", telemetry.networkType).put("networkConnected", telemetry.networkConnected).put("storageFree", telemetry.storageFree).put("storageTotal", telemetry.storageTotal).put("currentCampaignId", telemetry.campaignId).put("currentCreativeId", telemetry.creativeId).put("currentAssetId", telemetry.assetId).put("playbackStartedAt", telemetry.playbackStartedAt?.toString()).put("playbackPositionMs", telemetry.playbackPositionMs).put("expectedDurationMs", telemetry.expectedDurationMs).put("supportsDeliveryQuota", true).put("latitude", location?.latitude).put("longitude", location?.longitude).put("accuracyMeters", location?.accuracyMeters).put("speedMps", location?.speedMps).put("headingDegrees", location?.headingDegrees).put("locationOccurredAt", location?.occurredAt?.let { Instant.ofEpochMilli(it).toString() }).put("timestamp", Instant.now().toString()).toString()) }
     override suspend fun uploadProof(credentials: DeviceCredentials, events: List<ProofOfPlay>): ProofUploadResult {
@@ -113,6 +144,37 @@ class HttpDeviceApi(private val baseUrl: String) : DeviceApi {
     override suspend fun acknowledgeCommand(credentials: DeviceCredentials, result: CommandResult) { request("/api/device/commands/${result.commandId}/ack", "POST", credentials.token, JSONObject().put("status", result.status).put("receivedAt", result.receivedAt.toString()).put("startedAt", result.startedAt?.toString()).put("completedAt", result.completedAt?.toString()).put("errorCode", result.errorCode).put("errorMessage", result.errorMessage).toString()) }
     override suspend fun unpair(credentials: DeviceCredentials) { request("/api/device/unpair", "POST", credentials.token) }
     private fun PairRequest.toJson() = JSONObject().put("pairingCode", pairingCode).put("deviceId", deviceId).put("manufacturer", manufacturer).put("model", model).put("androidVersion", androidVersion).put("appVersion", BuildConfig.VERSION_NAME).toString()
+}
+
+private fun responseRequestId(connection: HttpURLConnection, errorBody: String): String? =
+    safeHeaderRequestId(connection)
+        ?: runCatching { safeDiagnosticId(JSONObject(errorBody).optString("requestId")) }.getOrNull()
+
+private fun safeHeaderRequestId(connection: HttpURLConnection): String? =
+    safeDiagnosticId(connection.getHeaderField("x-request-id") ?: connection.getHeaderField("x-correlation-id") ?: connection.getHeaderField("cf-ray"))
+
+private fun safeResponseInstanceId(connection: HttpURLConnection): String? =
+    safeDiagnosticId(connection.getHeaderField("x-server-instance-id"))
+
+internal fun safeContentType(value: String?): String? = value?.take(120)?.takeIf {
+    it.matches(Regex("[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+(?:\\s*;\\s*[A-Za-z0-9!#$&^_.+-]+=[A-Za-z0-9!#$&^_.+\\-]+)?"))
+}
+
+internal fun safeDiagnosticId(value: String?): String? = value?.takeIf {
+    it.length in 1..96 && it.matches(Regex("[A-Za-z0-9._:-]+"))
+}
+
+private fun java.io.InputStream.readBoundedUtf8(maxBytes: Int): String {
+    val output = java.io.ByteArrayOutputStream()
+    val buffer = ByteArray(1024)
+    var remaining = maxBytes
+    while (remaining > 0) {
+        val count = read(buffer, 0, minOf(buffer.size, remaining))
+        if (count <= 0) break
+        output.write(buffer, 0, count)
+        remaining -= count
+    }
+    return output.toString(Charsets.UTF_8.name())
 }
 
 object ManifestCodec {

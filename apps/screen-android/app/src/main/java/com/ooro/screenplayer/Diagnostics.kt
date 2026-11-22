@@ -7,6 +7,10 @@ import android.net.wifi.WifiManager
 import android.location.LocationManager
 import com.ooro.screenplayer.model.DeviceManifest
 import com.ooro.screenplayer.model.ManifestItem
+import com.ooro.screenplayer.api.safeContentType
+import com.ooro.screenplayer.api.safeDiagnosticId
+import com.ooro.screenplayer.api.DeviceApiException
+import com.ooro.screenplayer.api.DeviceFailureKind
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -50,9 +54,117 @@ data class DiagnosticsState(
     val missingAssets: Int = 0,
     val proofQueued: Int = 0,
     val recentErrors: List<String> = emptyList(),
+    val lastManifestAttempt: LastManifestAttemptDiagnostic? = null,
     val lastDiagnosis: String? = null,
     val message: String? = null
 )
+
+data class LastManifestAttemptDiagnostic(
+    val attemptedAtMillis: Long,
+    val clientRequestId: String,
+    val requestId: String? = null,
+    val httpStatus: Int? = null,
+    val contentType: String? = null,
+    val failureClass: String = "IN_PROGRESS",
+    val failureStage: String = "STARTING",
+    val exceptionClass: String? = null,
+    val serverInstanceId: String? = null,
+    val trustedTimeResult: String = "NOT_CHECKED",
+    val authenticatedServerTimeUtc: String? = null,
+    val expectedServerTimeUtc: String? = null,
+    val rollbackDeltaMillis: Long? = null,
+    val manifestVersion: Long? = null,
+    val manifestItemCount: Int? = null,
+)
+
+private const val LAST_MANIFEST_ATTEMPT_KEY = "last_manifest_attempt_diagnostic_v1"
+
+internal fun recordLastManifestAttempt(context: Context, value: LastManifestAttemptDiagnostic) {
+    val clean = value.copy(
+        clientRequestId = safeDiagnosticId(value.clientRequestId) ?: "unavailable",
+        requestId = safeDiagnosticId(value.requestId),
+        contentType = safeContentType(value.contentType),
+        failureClass = value.failureClass.takeIf { it.matches(Regex("[A-Z0-9_]{1,48}")) } ?: "REQUEST_FAILED",
+        failureStage = value.failureStage.takeIf { it.matches(Regex("[A-Z0-9_]{1,48}")) } ?: "UNKNOWN",
+        exceptionClass = value.exceptionClass?.takeIf { it.matches(Regex("[A-Za-z0-9_$]{1,80}")) },
+        serverInstanceId = safeDiagnosticId(value.serverInstanceId),
+        trustedTimeResult = value.trustedTimeResult.takeIf { it.matches(Regex("[A-Z0-9_]{1,48}")) } ?: "NOT_CHECKED",
+        authenticatedServerTimeUtc = safeUtcInstant(value.authenticatedServerTimeUtc),
+        expectedServerTimeUtc = safeUtcInstant(value.expectedServerTimeUtc),
+        rollbackDeltaMillis = value.rollbackDeltaMillis?.coerceIn(-86_400_000L, 86_400_000L),
+        manifestVersion = value.manifestVersion?.takeIf { it >= 0L },
+        manifestItemCount = value.manifestItemCount?.takeIf { it in 0..10_000 },
+    )
+    val json = org.json.JSONObject()
+        .put("attemptedAtMillis", clean.attemptedAtMillis)
+        .put("clientRequestId", clean.clientRequestId)
+        .put("requestId", clean.requestId)
+        .put("httpStatus", clean.httpStatus)
+        .put("contentType", clean.contentType)
+        .put("failureClass", clean.failureClass)
+        .put("failureStage", clean.failureStage)
+        .put("exceptionClass", clean.exceptionClass)
+        .put("serverInstanceId", clean.serverInstanceId)
+        .put("trustedTimeResult", clean.trustedTimeResult)
+        .put("authenticatedServerTimeUtc", clean.authenticatedServerTimeUtc)
+        .put("expectedServerTimeUtc", clean.expectedServerTimeUtc)
+        .put("rollbackDeltaMillis", clean.rollbackDeltaMillis)
+        .put("manifestVersion", clean.manifestVersion)
+        .put("manifestItemCount", clean.manifestItemCount)
+    context.getSharedPreferences("ooro_local_health", Context.MODE_PRIVATE)
+        .edit().putString(LAST_MANIFEST_ATTEMPT_KEY, json.toString()).commit()
+}
+
+internal fun loadLastManifestAttempt(context: Context): LastManifestAttemptDiagnostic? = runCatching {
+    val raw = context.getSharedPreferences("ooro_local_health", Context.MODE_PRIVATE)
+        .getString(LAST_MANIFEST_ATTEMPT_KEY, null) ?: return null
+    val json = org.json.JSONObject(raw)
+    LastManifestAttemptDiagnostic(
+        attemptedAtMillis = json.optLong("attemptedAtMillis").takeIf { it > 0L } ?: return null,
+        clientRequestId = safeDiagnosticId(json.optString("clientRequestId")) ?: return null,
+        requestId = safeDiagnosticId(json.optString("requestId")),
+        httpStatus = json.optInt("httpStatus").takeIf { it in 100..599 },
+        contentType = safeContentType(json.optString("contentType")),
+        failureClass = json.optString("failureClass").takeIf { it.matches(Regex("[A-Z0-9_]{1,48}")) } ?: "REQUEST_FAILED",
+        failureStage = json.optString("failureStage").takeIf { it.matches(Regex("[A-Z0-9_]{1,48}")) } ?: "UNKNOWN",
+        exceptionClass = json.optString("exceptionClass").takeIf { it.matches(Regex("[A-Za-z0-9_$]{1,80}")) },
+        serverInstanceId = safeDiagnosticId(json.optString("serverInstanceId")),
+        trustedTimeResult = json.optString("trustedTimeResult").takeIf { it.matches(Regex("[A-Z0-9_]{1,48}")) } ?: "NOT_CHECKED",
+        authenticatedServerTimeUtc = safeUtcInstant(json.optString("authenticatedServerTimeUtc")),
+        expectedServerTimeUtc = safeUtcInstant(json.optString("expectedServerTimeUtc")),
+        rollbackDeltaMillis = if (json.isNull("rollbackDeltaMillis")) null else json.optLong("rollbackDeltaMillis").coerceIn(-86_400_000L, 86_400_000L),
+        manifestVersion = if (json.isNull("manifestVersion")) null else json.optLong("manifestVersion").takeIf { it >= 0L },
+        manifestItemCount = if (json.isNull("manifestItemCount")) null else json.optInt("manifestItemCount").takeIf { it in 0..10_000 },
+    )
+}.getOrNull()
+
+private fun safeUtcInstant(value: String?): String? = value?.takeIf { runCatching { java.time.Instant.parse(it) }.isSuccess }
+
+internal fun manifestAttemptFailureClass(error: Throwable, trustedTimeResult: String): String {
+    val apiError = error as? DeviceApiException
+    return when (apiError?.kind) {
+        DeviceFailureKind.DNS_ERROR -> "DNS_ERROR"
+        DeviceFailureKind.CONNECTION_REFUSED -> "CONNECTION_REFUSED"
+        DeviceFailureKind.TIMEOUT -> "API_TIMEOUT"
+        DeviceFailureKind.TLS_ERROR -> "TLS_FAILURE"
+        DeviceFailureKind.NETWORK_UNAVAILABLE -> "NETWORK_UNAVAILABLE"
+        DeviceFailureKind.AUTH_EXPIRED -> "DEVICE_AUTH_EXPIRED"
+        DeviceFailureKind.AUTH_INVALID, DeviceFailureKind.AUTH_REVOKED, DeviceFailureKind.DEVICE_NOT_FOUND, DeviceFailureKind.PAIRING_REQUIRED -> "DEVICE_AUTH_REJECTED"
+        DeviceFailureKind.EDGE_REJECTED -> "CLOUDFLARE_WAF_REJECTED"
+        DeviceFailureKind.SERVER_UNAVAILABLE -> "API_SERVER_ERROR"
+        DeviceFailureKind.MANIFEST_PARSE_FAILED -> "RESPONSE_SCHEMA_FAILURE"
+        DeviceFailureKind.REQUEST_FAILED -> "HTTP_REQUEST_FAILURE"
+        null -> when {
+            trustedTimeResult == "ROLLBACK" -> "TRUSTED_TIME_ROLLBACK"
+            trustedTimeResult == "MALFORMED" -> "TRUSTED_TIME_MALFORMED"
+            trustedTimeResult == "MISSING" -> "TRUSTED_TIME_MISSING"
+            error.message.orEmpty().contains("authenticated offline authorization", ignoreCase = true) -> "TRUSTED_TIME_AUTHORIZATION_INVALID"
+            error.message.orEmpty().contains("different screen", ignoreCase = true) -> "MANIFEST_SCREEN_MISMATCH"
+            error.message.orEmpty().contains("asset", ignoreCase = true) || error.message.orEmpty().contains("checksum", ignoreCase = true) -> "ASSET_VERIFICATION_FAILURE"
+            else -> "MANIFEST_PROCESSING_FAILURE"
+        }
+    }
+}
 
 internal fun recordManifestSync(context: Context, atMillis: Long = System.currentTimeMillis()) {
     context.getSharedPreferences("ooro_local_health", Context.MODE_PRIVATE).edit()

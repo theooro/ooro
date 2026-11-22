@@ -135,8 +135,8 @@ internal fun canCommitDownloadedManifest(requiredCount: Int, verifiedCount: Int)
     requiredCount >= 0 && requiredCount == verifiedCount
 
 /** The authenticated manifest request is authoritative; /api/health is diagnostic only. */
-internal suspend fun fetchAuthenticatedManifest(api: DeviceApi, credentials: DeviceCredentials): DeviceManifest =
-    api.manifest(credentials)
+internal suspend fun fetchAuthenticatedManifest(api: DeviceApi, credentials: DeviceCredentials, correlationId: String? = null): DeviceManifest =
+    api.manifest(credentials, correlationId)
 
 internal fun canCommitManifestResponse(
     manifest: DeviceManifest,
@@ -233,7 +233,9 @@ internal fun manifestSyncFailureMessage(error: Throwable?, networkValidated: Boo
         DeviceFailureKind.CONNECTION_REFUSED, DeviceFailureKind.NETWORK_UNAVAILABLE -> "OORO API is unreachable\nThe screen is paired, but manifest sync did not complete."
         DeviceFailureKind.AUTH_EXPIRED, DeviceFailureKind.AUTH_INVALID, DeviceFailureKind.AUTH_REVOKED,
         DeviceFailureKind.DEVICE_NOT_FOUND, DeviceFailureKind.PAIRING_REQUIRED -> "OORO rejected this screen's authentication\nAn administrator must restore this screen's pairing."
+        DeviceFailureKind.EDGE_REJECTED -> "Staging edge protection rejected the manifest request\nAn administrator must inspect the matching request at the edge."
         DeviceFailureKind.SERVER_UNAVAILABLE -> "OORO returned a server error\nThe screen will retry manifest sync."
+        DeviceFailureKind.MANIFEST_PARSE_FAILED -> "OORO returned a manifest the player could not parse\nThe response was not activated; the screen will retry."
         else -> when {
             error?.message?.contains("authenticated server time", ignoreCase = true) == true ||
                 error?.message?.contains("authorization lease", ignoreCase = true) == true ->

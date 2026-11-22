@@ -1244,6 +1244,25 @@ internal fun technicianStateSubscriptions(section: TechnicianSection): Technicia
                     TechnicianMetric("OFFLINE MEDIA", if (offlineAuthorized && diagnostics.verifiedAssets > 0) "Authorized" else "Unavailable", "${diagnostics.verifiedAssets} verified · ${diagnostics.missingAssets} missing", offlineAuthorized && diagnostics.verifiedAssets > 0, Modifier.weight(1f))
                     TechnicianMetric("LAST SYNC", relativeTime(diagnostics.manifestLastSyncAt), "Heartbeat ${relativeTime(diagnostics.heartbeatLastSuccessAt)}", diagnostics.heartbeatLastSuccessAt != null, Modifier.weight(1f))
                 }
+                diagnostics.lastManifestAttempt?.let { attempt ->
+                    TechnicianCard {
+                        Text("LAST MANIFEST ATTEMPT", color = Yellow, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        TechnicianLine("Attempt", "${relativeTime(attempt.attemptedAtMillis)} · ${attempt.failureClass}")
+                        TechnicianLine("Failure stage", attempt.failureStage)
+                        if (attempt.exceptionClass != null) TechnicianLine("Exception class", attempt.exceptionClass)
+                        TechnicianLine("HTTP response", attempt.httpStatus?.toString() ?: "No response")
+                        TechnicianLine("Content type", attempt.contentType ?: "Unavailable")
+                        TechnicianLine("Client request ID", attempt.clientRequestId)
+                        TechnicianLine("Server request ID", attempt.requestId ?: "Unavailable")
+                        TechnicianLine("Server instance", attempt.serverInstanceId ?: "Unavailable")
+                        TechnicianLine("Trusted time", attempt.trustedTimeResult)
+                        if (attempt.authenticatedServerTimeUtc != null) TechnicianLine("Server UTC", attempt.authenticatedServerTimeUtc)
+                        if (attempt.expectedServerTimeUtc != null) TechnicianLine("Expected UTC", attempt.expectedServerTimeUtc)
+                        if (attempt.rollbackDeltaMillis != null) TechnicianLine("Time delta (ms)", attempt.rollbackDeltaMillis.toString())
+                        TechnicianLine("Manifest", attempt.manifestVersion?.toString() ?: "Not parsed")
+                        TechnicianLine("Items", attempt.manifestItemCount?.toString() ?: "Not parsed")
+                    }
+                }
                 if (diagnostics.probe != null && !apiOk) TechnicianNotice("Offline mode", "The player keeps using locally verified content while its authorization remains valid. Network recovery does not erase pairing or cached media.", Color(0xFFFFC46B))
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     TextButton(onClick = { vm.runDiagnostics() }, enabled = !diagnostics.running, modifier = Modifier.heightIn(min = 48.dp)) { Text("Refresh device status", color = Yellow) }
