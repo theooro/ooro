@@ -6,6 +6,7 @@ import { campaignDeliveryStateLabel, campaignQuotaLabel } from "./campaign-deliv
 test("advertiser campaign setup succeeds with inclusive calendar dates and no daily windows", () => {
   assert.equal(validateAdvertiserCampaignDraft({ name: "Draft", goal: "Awareness", audience: "Local", city: "Bengaluru", area: "Indiranagar", budget: 500 }), null)
   assert.equal(validateAdvertiserCampaignDraft({ name: "Date only", goal: "Awareness", audience: "Local", city: "Bengaluru", area: "Indiranagar", startDate: "2026-11-22", endDate: "2026-11-22" }), null)
+  assert.equal(validateAdvertiserCampaignDraft({ name: "Citywide brief", goal: "Reach", audience: "Local customers", city: "Bengaluru", area: "Bengaluru", startDate: "2026-11-22", endDate: "2026-11-27", metadata: { target: { mode: "CITYWIDE" } } }), null)
   assert.equal(validateAdvertiserCampaignDraft({ name: "Partial dates", goal: "Awareness", audience: "Local", city: "Bengaluru", area: "Indiranagar", startDate: "2026-11-22" }), "Choose both a start date and an end date")
   assert.equal(validateAdvertiserCampaignDraft({ name: "Invalid date", goal: "Awareness", audience: "Local", city: "Bengaluru", area: "Indiranagar", startDate: "2026-02-30", endDate: "2026-03-01" }), "Choose valid inclusive campaign dates in Asia/Kolkata")
 })
