@@ -339,6 +339,8 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     val cachedPlaybackAllowed by cachedPlaybackFlow.collectAsState(initial = false)
     val authorizationFlow = vm?.authorizationValid ?: remember { flowOf(preview != null) }
     val authorizationValid by authorizationFlow.collectAsState(initial = preview != null)
+    val diagnosticFlow = vm?.diagnostic ?: remember { flowOf("") }
+    val playerDiagnostic by diagnosticFlow.collectAsState(initial = "")
     val pairedScreenIdFlow = vm?.pairedScreenId ?: remember(preview, manifest.screenId) { flowOf(manifest.screenId.takeIf { preview != null }) }
     val pairedScreenId by pairedScreenIdFlow.collectAsState(initial = manifest.screenId.takeIf { preview != null })
     val scheduleClockFlow = vm?.scheduleClock ?: remember { flowOf(Instant.EPOCH) }
@@ -356,7 +358,8 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
         manifest.items.firstOrNull { it.id == state.itemId }
     } ?: scheduledItem
     val emptyPlaybackMessage = if (manifestExpired) {
-        "Trusted time unavailable — device reboot detected, reconnect to establish secure schedule time."
+        playerDiagnostic.takeIf { it.startsWith("Trusted time unavailable:") }
+            ?: "Trusted time unavailable: reconnect to establish authenticated schedule time before playback."
     } else {
         offlineEmptyMessage(manifest, scheduleClock, verifiedAssetIds, allowExpiredCachedManifest = cachedPlaybackAllowed)
     }
@@ -381,7 +384,7 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     } else Modifier.fillMaxSize().background(Color.Black).clipToBounds()
     Box(rootModifier) {
         if (customLayout != null) {
-            CustomLayoutPlayer(vm, manifest, customLayout, item, playbackOffset, verifiedAssetIds, pairedScreenId, preview, manifestExpired, cachedPlaybackAllowed, scheduleClock)
+            CustomLayoutPlayer(vm, manifest, customLayout, item, playbackOffset, verifiedAssetIds, pairedScreenId, preview, manifestExpired, cachedPlaybackAllowed, scheduleClock, emptyPlaybackMessage)
         } else if (manifest.layout == DisplayLayout.FOUR_ZONE || manifest.layout == DisplayLayout.AD_NAV_OFFER) Row(Modifier.fillMaxSize().clipToBounds()) {
             val adWidth = if (usesSidebar80(manifest.layout, geometryVersion)) 80 else manifest.layoutConfig.safePrimaryWidth
             val sidebarSplit = if (usesSidebar80(manifest.layout, geometryVersion)) 50 else manifest.layoutConfig.safeQrHeight
@@ -420,12 +423,13 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     manifestExpired: Boolean,
     cachedPlaybackAllowed: Boolean,
     scheduleClock: Instant,
+    emptyPlaybackMessage: String,
 ) {
     LayoutStudioRenderer(contract, Modifier.fillMaxSize().background(Color.Black).clipToBounds()) { zone ->
         val resolved = remember(zone, manifest.version, manifest.validUntil, manifestExpired, pairedScreenId, verifiedAssetIds, currentMainItem?.id, scheduleClock) {
             resolveCustomWidgetContent(zone, manifest, pairedScreenId, verifiedAssetIds, currentMainItem, scheduleClock, authorizationExpired = manifestExpired, allowCachedOffline = cachedPlaybackAllowed)
         }
-        val emptyMessage = if (manifestExpired) "Trusted time unavailable — device reboot detected, reconnect to establish secure schedule time." else offlineEmptyMessage(manifest, scheduleClock, verifiedAssetIds, allowExpiredCachedManifest = cachedPlaybackAllowed)
+        val emptyMessage = if (manifestExpired) emptyPlaybackMessage else offlineEmptyMessage(manifest, scheduleClock, verifiedAssetIds, allowExpiredCachedManifest = cachedPlaybackAllowed)
         CustomLayoutZoneContent(vm, zone, resolved, playbackKey, preview, emptyMessage)
     }
 }
