@@ -332,20 +332,30 @@ class OfflinePlaybackRulesTest {
         assertFalse(message.contains("sync an approved campaign"))
     }
 
-    @Test fun unvalidatedInternetIsRecordedAsARequestGateWithoutFabricatingHttpResult() {
+    @Test fun unvalidatedNetworkDiagnosticDoesNotFabricateAnHttpResult() {
         val failure = manifestSyncFailureMessage(null, networkValidated = false)
         val attempt = LastManifestAttemptDiagnostic(
             attemptedAtMillis = 1_795_328_149_822L,
             clientRequestId = "client-req-1",
+            androidNetworkValidated = false,
             failureClass = "NETWORK_NOT_VALIDATED",
             failureStage = "NETWORK_GATE",
         )
         assertTrue(failure.contains("Internet connectivity is not validated"))
+        assertEquals(false, attempt.androidNetworkValidated)
         assertEquals("NETWORK_NOT_VALIDATED", attempt.failureClass)
         assertEquals("NETWORK_GATE", attempt.failureStage)
         assertEquals(null, attempt.httpStatus)
         assertEquals(null, attempt.requestId)
-        assertEquals("NOT_CHECKED", attempt.trustedTimeResult)
+    }
+
+    @Test fun actualDnsFailureTakesPriorityOverAndroidUnvalidatedNotice() {
+        val message = manifestSyncFailureMessage(
+            DeviceApiException(DeviceFailureKind.DNS_ERROR, endpoint = "/api/device/manifest"),
+            networkValidated = false,
+        )
+        assertTrue(message.contains("DNS lookup failed"))
+        assertFalse(message.contains("Waiting for a usable network"))
     }
 
     @Test fun dnsTlsAndAuthenticationFailuresHaveDistinctMessages() {

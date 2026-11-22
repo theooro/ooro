@@ -224,7 +224,7 @@ internal fun offlineEmptyMessage(
 }
 
 internal fun manifestSyncFailureMessage(error: Throwable?, networkValidated: Boolean): String {
-    if (!networkValidated) return "Internet connectivity is not validated\nWaiting for a usable network before syncing this screen."
+    if (error == null && !networkValidated) return "Internet connectivity is not validated\nWaiting for a usable network before syncing this screen."
     val failure = error as? DeviceApiException
     return when (failure?.kind) {
         DeviceFailureKind.DNS_ERROR -> "OORO API DNS lookup failed\nCheck the screen network's DNS path."

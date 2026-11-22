@@ -186,7 +186,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
         }
         // Keep playback local and uninterrupted. Check the server for a newer
         // approved manifest every three minutes only while Android reports
-        // validated internet; connectivity recovery still triggers an immediate sync.
+        // validated internet; connectivity recovery triggers an immediate sync.
         viewModelScope.launch {
             cachedStartupReady.await()
             var lastManifestUpdateCheck = SystemClock.elapsedRealtime()
@@ -305,14 +305,17 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
         if (active == null) _state.value = ScreenState.Preparing
 
         val clientRequestId = java.util.UUID.randomUUID().toString()
+        val androidNetworkValidated = hasValidatedInternet()
         var attempt = LastManifestAttemptDiagnostic(
             attemptedAtMillis = System.currentTimeMillis(),
             clientRequestId = clientRequestId,
+            androidNetworkValidated = androidNetworkValidated,
+            failureClass = "IN_PROGRESS",
             failureStage = "LOAD_LOCAL_ANCHOR",
         )
         updateLastManifestAttempt(attempt)
 
-        if (!hasValidatedInternet()) {
+        if (!androidNetworkValidated) {
             attempt = attempt.copy(failureClass = "NETWORK_NOT_VALIDATED", failureStage = "NETWORK_GATE")
             updateLastManifestAttempt(attempt)
             _manifestSyncFailure.value = manifestSyncFailureMessage(null, networkValidated = false)
@@ -321,6 +324,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             scheduleReconnect()
             return
         }
+
         _diagnostics.value = _diagnostics.value.copy(manifestLastAttemptAt = attempt.attemptedAtMillis)
 
         // Manifest authorization is an authenticated endpoint. Do not gate it on
@@ -340,11 +344,17 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
         var incomingManifest: DeviceManifest? = null
         var failureStage = "LOAD_LOCAL_ANCHOR"
         val manifestResult = runCatching {
+            failureStage = "READ_LOCAL_MANIFEST"
+            attempt = attempt.copy(failureStage = failureStage)
+            updateLastManifestAttempt(attempt)
             val previousAuthorizationEntity = db.manifestDao().active()
             timeRequestStartElapsedMillis = SystemClock.elapsedRealtime()
             previousTrustedServerTimeMillis = previousAuthorizationEntity?.authorizationServerTimeUtcMillis
             previousTrustedReceivedElapsedMillis = previousAuthorizationEntity?.authorizationReceivedElapsedMillis
             previousTrustedBootCount = previousAuthorizationEntity?.authorizationBootCount
+            failureStage = "COMPARE_TRUSTED_ANCHOR"
+            attempt = attempt.copy(failureStage = failureStage)
+            updateLastManifestAttempt(attempt)
             expectedTrustedServerTimeMillis = expectedAuthenticatedServerTimeUtcMillis(
                 previousTrustedServerTimeMillis,
                 previousTrustedReceivedElapsedMillis,
@@ -447,6 +457,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
                 failureClass = manifestAttemptFailureClass(error, trustedTimeResult),
                 failureStage = failureStage,
                 exceptionClass = error.javaClass.simpleName,
+                failureDetail = manifestAttemptFailureDetail(error),
                 trustedTimeResult = trustedTimeResult,
                 authenticatedServerTimeUtc = parsed?.authenticatedServerTime?.toString(),
                 expectedServerTimeUtc = expectedTrustedServerTimeMillis?.let { Instant.ofEpochMilli(it).toString() },
@@ -533,7 +544,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
     }
     private fun showRecovery(error: DeviceApiException) { _cachedPlaybackAllowed.value = false; _diagnostic.value = recoveryMessage(error.kind); _state.value = ScreenState.AuthRecovery(error.kind, recoveryMessage(error.kind), cachedManifest = active) }
     private fun trustedTimeFailure(error: Throwable?): String {
-        if (!hasValidatedInternet()) return "Trusted time unavailable: connectivity is not validated for internet access."
+        if (error == null && !hasValidatedInternet()) return "Trusted time unavailable: Android has not validated this network; checking the authenticated OORO connection."
         val kind = (error as? DeviceApiException)?.kind
         return when (kind) {
             DeviceFailureKind.DNS_ERROR -> "Trusted time unavailable: OORO API DNS lookup failed."
@@ -719,7 +730,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
     fun diagnosticReport(): String { val d = _diagnostics.value; val n = networkInfo(context); val l = locationDiagnostics(context); val c = store.credentials(); val stat = android.os.StatFs(context.filesDir.absolutePath); val policy = context.getSystemService(android.app.admin.DevicePolicyManager::class.java); val owner = policy.isDeviceOwnerApp(context.packageName); val activity = context.getSystemService(android.app.ActivityManager::class.java); val lockTask = activity.lockTaskModeState != android.app.ActivityManager.LOCK_TASK_MODE_NONE; val home = runCatching { android.content.Intent(android.content.Intent.ACTION_MAIN).addCategory(android.content.Intent.CATEGORY_HOME).let { intent -> context.packageManager.resolveActivity(intent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName } }.getOrNull(); return buildString {
         appendLine("OORO DIAGNOSTIC"); appendLine("Screen ID       ${c?.screenId ?: "UNPAIRED"}"); appendLine("Device ID       $deviceId"); appendLine("App version     ${BuildConfig.VERSION_NAME}"); appendLine("Android         ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})"); appendLine("Build identity  ${android.os.Build.FINGERPRINT}"); appendLine("Device model    ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}"); appendLine("API host        ${BuildConfig.API_BASE_URL}"); appendLine("Environment     ${backendEnvironment()}"); appendLine("Mock backend    ${if (BuildConfig.USE_MOCK_BACKEND) "ON" else "OFF"}"); appendLine("Network         ${n.type} · validated internet=${n.internet}"); appendLine("Device IP       ${n.ip ?: "unavailable"}"); appendLine("API             ${if (d.probe?.connected == true) "CONNECTED" else "UNREACHABLE"}"); appendLine("Pairing         ${if (c != null) "PAIRED" else "UNPAIRED"}"); appendLine("Manifest        ${active?.let { "v${it.version} · ${it.layout.name} · contract ${it.layoutContractVersion}" } ?: "UNKNOWN"}"); appendLine("Manifest sync   ${_manifestSyncFailure.value ?: "no recorded failure"}"); appendLine("Last sync       ${relativeTime(lastManifestSyncAt(context))}"); appendLine("Assets          ${d.verifiedAssets} verified, ${d.missingAssets} missing"); appendLine("Storage         ${stat.availableBytes} free / ${stat.blockCountLong * stat.blockSizeLong} bytes"); appendLine("Playback        ${_currentCreative.value?.creativeId ?: "Unknown"}"); appendLine("Proof queue     ${d.proofQueued} waiting"); appendLine("Home app        ${home ?: "Unknown"} · OORO=${home == context.packageName}"); appendLine("Device Owner    ${if (owner) "PRESENT" else "ABSENT"}"); appendLine("Lock Task       ${if (lockTask) "ACTIVE" else "INACTIVE"}"); appendLine("GPS             ${if (l.permission && (l.gps || l.network)) "AVAILABLE" else "UNAVAILABLE"}"); appendLine("Primary issue   ${d.lastDiagnosis ?: "Not run"}"); d.recentErrors.take(5).forEachIndexed { index, error -> appendLine("Recent error ${index + 1}  $error") }
         d.lastManifestAttempt?.let { attempt ->
-            appendLine("Manifest attempt ${java.time.Instant.ofEpochMilli(attempt.attemptedAtMillis)} clientRequestId=${attempt.clientRequestId} requestId=${attempt.requestId ?: "unavailable"} http=${attempt.httpStatus ?: "unavailable"} contentType=${attempt.contentType ?: "unavailable"} failure=${attempt.failureClass} serverInstance=${attempt.serverInstanceId ?: "unavailable"} time=${attempt.trustedTimeResult} serverUtc=${attempt.authenticatedServerTimeUtc ?: "unavailable"} expectedUtc=${attempt.expectedServerTimeUtc ?: "unavailable"} rollbackDeltaMs=${attempt.rollbackDeltaMillis ?: "unavailable"} manifest=${attempt.manifestVersion ?: "unavailable"} items=${attempt.manifestItemCount ?: "unavailable"}")
+            appendLine("Manifest attempt ${java.time.Instant.ofEpochMilli(attempt.attemptedAtMillis)} androidValidated=${attempt.androidNetworkValidated ?: "unknown"} clientRequestId=${attempt.clientRequestId} requestId=${attempt.requestId ?: "unavailable"} http=${attempt.httpStatus ?: "unavailable"} contentType=${attempt.contentType ?: "unavailable"} failure=${attempt.failureClass} detail=${attempt.failureDetail ?: "unavailable"} serverInstance=${attempt.serverInstanceId ?: "unavailable"} time=${attempt.trustedTimeResult} serverUtc=${attempt.authenticatedServerTimeUtc ?: "unavailable"} expectedUtc=${attempt.expectedServerTimeUtc ?: "unavailable"} rollbackDeltaMs=${attempt.rollbackDeltaMillis ?: "unavailable"} manifest=${attempt.manifestVersion ?: "unavailable"} items=${attempt.manifestItemCount ?: "unavailable"}")
         }
     } }
     private suspend fun persistDiagnosticError(error: Throwable) {

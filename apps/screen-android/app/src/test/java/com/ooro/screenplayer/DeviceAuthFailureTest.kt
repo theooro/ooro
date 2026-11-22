@@ -6,6 +6,7 @@ import com.ooro.screenplayer.api.classifyDeviceFailure
 import com.ooro.screenplayer.api.classifyNetworkFailure
 import com.ooro.screenplayer.api.safeContentType
 import com.ooro.screenplayer.api.safeDiagnosticId
+import java.io.IOException
 import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
@@ -55,5 +56,11 @@ class DeviceAuthFailureTest {
         assertEquals("RESPONSE_SCHEMA_FAILURE", manifestAttemptFailureClass(DeviceApiException(DeviceFailureKind.MANIFEST_PARSE_FAILED, status = 200, endpoint = "/api/device/manifest"), "NOT_RECEIVED"))
         assertEquals("TRUSTED_TIME_ROLLBACK", manifestAttemptFailureClass(IllegalStateException("authenticated time regressed"), "ROLLBACK"))
         assertEquals("TRUSTED_TIME_MALFORMED", manifestAttemptFailureClass(IllegalStateException("bad time"), "MALFORMED"))
+    }
+
+    @Test fun manifestFailureDetailUsesBoundedCategoriesInsteadOfRawExceptionText() {
+        assertEquals("ROOM_MIGRATION_ERROR", manifestAttemptFailureDetail(IllegalStateException("Migration failed with sensitive detail")))
+        assertEquals("UNCLASSIFIED_FAILURE", manifestAttemptFailureDetail(IllegalStateException("Bearer secret-token")))
+        assertEquals("DNS_RESOLUTION_FAILED", manifestAttemptFailureDetail(IOException("DNS request failed", UnknownHostException("api-staging.theooro.com"))))
     }
 }
