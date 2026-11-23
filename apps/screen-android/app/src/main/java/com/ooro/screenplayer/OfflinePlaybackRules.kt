@@ -82,6 +82,21 @@ internal fun offlineAuthorizationRemainingMillis(
     return (authorization.durationMillis - (currentElapsedMillis - authorization.receivedElapsedMillis)).coerceAtLeast(0L)
 }
 
+internal fun trustedTimeUnavailableMessage(
+    authorization: OfflineAuthorization?,
+    pairedScreenId: String?,
+    currentElapsedMillis: Long,
+    currentBootCount: Int?,
+): String = when {
+    authorization == null -> "Trusted time unavailable: no authenticated schedule-time anchor is stored. Reconnect to renew it before playback."
+    pairedScreenId.isNullOrBlank() || authorization.screenId != pairedScreenId -> "Trusted time unavailable: the authenticated anchor does not match this screen. Reconnect to renew it before playback."
+    currentBootCount == null -> "Trusted time unavailable: the current boot identity cannot be verified. Reconnect to renew it before playback."
+    currentBootCount != authorization.bootCount -> "Trusted time unavailable: device reboot invalidated the authenticated time anchor. Reconnect to renew it before playback."
+    currentElapsedMillis < authorization.receivedElapsedMillis -> "Trusted time unavailable: the monotonic time anchor is invalid. Reconnect to renew it before playback."
+    offlineAuthorizationRemainingMillis(authorization, pairedScreenId, currentElapsedMillis, currentBootCount) <= 0L -> "Trusted time unavailable: the authenticated schedule-time lease expired. Reconnect to renew it before playback."
+    else -> "Trusted time unavailable: authenticated schedule time is not available. Reconnect to renew it before playback."
+}
+
 /** Secure schedule time advances from the HTTPS server Date using monotonic elapsed time only. */
 internal fun trustedScheduleTime(
     authorization: OfflineAuthorization?,

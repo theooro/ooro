@@ -29,9 +29,9 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
             display: {
               select: {
                 id: true, name: true, state: true, manifestVersion: true, lastHeartbeatAt: true,
-                currentCampaignId: true, currentCreativeId: true, currentPlaybackState: true,
+                currentCampaignId: true, currentCreativeId: true, currentPlaybackState: true, currentPlaybackStartedAt: true,
                 commands: { where: { commandType: { in: ["SYNC_MANIFEST", "REFRESH_MANIFEST"] }, payload: { path: ["campaignId"], equals: id } }, orderBy: { createdAt: "desc" }, take: 1, select: { status: true, createdAt: true, deliveredAt: true, acknowledgedAt: true, error: true } },
-                proofs: { where: { campaignId: id }, orderBy: { playbackStartedAt: "desc" }, take: 1, select: { playbackStartedAt: true, playbackEndedAt: true, actualDuration: true, status: true } },
+                proofs: { where: { campaignId: id }, orderBy: { playbackStartedAt: "desc" }, take: 1, select: { creativeId: true, playbackStartedAt: true, playbackEndedAt: true, actualDuration: true, playbackCompleted: true, status: true } },
               },
             },
           },

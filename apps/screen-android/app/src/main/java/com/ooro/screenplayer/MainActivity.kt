@@ -339,6 +339,8 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     val cachedPlaybackAllowed by cachedPlaybackFlow.collectAsState(initial = false)
     val authorizationFlow = vm?.authorizationValid ?: remember { flowOf(preview != null) }
     val authorizationValid by authorizationFlow.collectAsState(initial = preview != null)
+    val diagnosticFlow = vm?.diagnostic ?: remember { flowOf("") }
+    val playerDiagnostic by diagnosticFlow.collectAsState(initial = "")
     val pairedScreenIdFlow = vm?.pairedScreenId ?: remember(preview, manifest.screenId) { flowOf(manifest.screenId.takeIf { preview != null }) }
     val pairedScreenId by pairedScreenIdFlow.collectAsState(initial = manifest.screenId.takeIf { preview != null })
     val scheduleClockFlow = vm?.scheduleClock ?: remember { flowOf(Instant.EPOCH) }
@@ -359,7 +361,7 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     val item = preview?.let { state ->
         manifest.items.firstOrNull { it.id == state.itemId }
     } ?: scheduledItem
-    val emptyPlaybackMessage = offlineEmptyMessage(
+    val fallbackPlaybackMessage = offlineEmptyMessage(
         manifest = manifest,
         now = scheduleClock,
         verifiedItemIds = verifiedAssetIds,
@@ -369,6 +371,10 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
         paired = pairedScreenId != null,
         trustedTimeAvailable = authorizationValid || preview != null,
     )
+    val emptyPlaybackMessage = if (manifestExpired) {
+        playerDiagnostic.takeIf { it.startsWith("Trusted time unavailable:") }
+            ?: fallbackPlaybackMessage
+    } else fallbackPlaybackMessage
     val displayedOffer = if (preview != null) item else if (manifestExpired) null else presentationItem ?: item
     val customLayoutParseResult = remember(manifest.layoutStudioContract) {
         manifest.layoutStudioContract?.let { LayoutStudioInterpreter.parse(it) }
@@ -429,13 +435,13 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     manifestExpired: Boolean,
     cachedPlaybackAllowed: Boolean,
     scheduleClock: Instant,
-    emptyMessage: String,
+    emptyPlaybackMessage: String,
 ) {
     LayoutStudioRenderer(contract, Modifier.fillMaxSize().background(Color.Black).clipToBounds()) { zone ->
         val resolved = remember(zone, manifest.version, manifest.validUntil, manifestExpired, pairedScreenId, verifiedAssetIds, currentMainItem?.id, scheduleClock) {
             resolveCustomWidgetContent(zone, manifest, pairedScreenId, verifiedAssetIds, currentMainItem, scheduleClock, authorizationExpired = manifestExpired, allowCachedOffline = cachedPlaybackAllowed)
         }
-        CustomLayoutZoneContent(vm, zone, resolved, playbackKey, preview, emptyMessage)
+        CustomLayoutZoneContent(vm, zone, resolved, playbackKey, preview, emptyPlaybackMessage)
     }
 }
 
