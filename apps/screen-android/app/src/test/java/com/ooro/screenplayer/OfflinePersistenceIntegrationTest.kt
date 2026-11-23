@@ -2,6 +2,7 @@ package com.ooro.screenplayer
 
 import android.content.Context
 import android.content.ContextWrapper
+import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.testing.TestListenableWorkerBuilder
@@ -39,6 +40,29 @@ class OfflinePersistenceIntegrationTest {
         return manifest.copy(generatedAt = serverNow.minusSeconds(1), validUntil = serverNow.plusSeconds(900), authenticatedServerTime = serverNow)
     }
     @After fun clean() { SyncWorkerDependencies.reset(); db?.close(); context.deleteDatabase(name) }
+
+    @Test fun versionTwoDatabaseMissingQuotaTablesMigratesWithoutLosingManifestOrProofs() = runBlocking {
+        val databaseFile = context.getDatabasePath(name).also { it.parentFile?.mkdirs() }
+        val legacy = SQLiteDatabase.openOrCreateDatabase(databaseFile, null)
+        legacy.execSQL("CREATE TABLE campaign_manifest (id TEXT NOT NULL PRIMARY KEY, version INTEGER NOT NULL, timezone TEXT NOT NULL, validUntil TEXT, json TEXT NOT NULL)")
+        legacy.execSQL("CREATE TABLE proof_of_play (eventId TEXT NOT NULL PRIMARY KEY, payload TEXT NOT NULL, synced INTEGER NOT NULL, createdAt INTEGER NOT NULL)")
+        legacy.execSQL("CREATE TABLE app_error (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, message TEXT NOT NULL, createdAt INTEGER NOT NULL)")
+        legacy.execSQL("INSERT INTO campaign_manifest (id, version, timezone, validUntil, json) VALUES ('active', 17, 'Asia/Kolkata', NULL, '{}')")
+        legacy.execSQL("INSERT INTO proof_of_play (eventId, payload, synced, createdAt) VALUES ('proof-preserved', '{}', 0, 1)")
+        legacy.version = 2
+        legacy.close()
+
+        val migrated = Room.databaseBuilder(context, OoroDatabase::class.java, name)
+            .addMigrations(OoroDatabase.MIGRATION_1_2, OoroDatabase.MIGRATION_2_3, OoroDatabase.MIGRATION_3_4)
+            .allowMainThreadQueries().build()
+        db = migrated
+        migrated.openHelper.writableDatabase
+
+        assertEquals(4, migrated.openHelper.readableDatabase.version)
+        assertEquals(17L, migrated.manifestDao().active()?.version)
+        assertEquals(1, migrated.proofDao().pendingCount())
+        assertTrue(migrated.deliveryQuotaDao().all().isEmpty())
+    }
 
     @Test fun checksumNamedLegacyAssetsAreVerifiedAndReusedWithoutNetworkOrCopy() = runBlocking {
         val isolatedFilesDir = File(context.cacheDir, "legacy-reuse-${System.nanoTime()}").also { it.mkdirs() }
@@ -273,7 +297,7 @@ class OfflinePersistenceIntegrationTest {
         var manifestFailure: Throwable? = null
         override suspend fun health() = Unit
         override suspend fun pair(request: PairRequest) = error("unused")
-        override suspend fun manifest(credentials: DeviceCredentials): DeviceManifest {
+        override suspend fun manifest(credentials: DeviceCredentials, correlationId: String?): DeviceManifest {
             manifestFailure?.let { throw it }
             val response = manifestResponse ?: error("no fake manifest configured")
             return if (response.generatedAt != null && response.authenticatedServerTime != null && response.validUntil != null) response else authorizedResponse(response)

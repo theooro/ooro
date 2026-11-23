@@ -2,6 +2,10 @@ package com.ooro.screenplayer
 
 import com.ooro.screenplayer.model.DeviceManifest
 import com.ooro.screenplayer.model.ManifestItem
+import com.ooro.screenplayer.api.DeviceApiException
+import com.ooro.screenplayer.api.DeviceApi
+import com.ooro.screenplayer.api.DeviceFailureKind
+import com.ooro.screenplayer.model.DeviceCredentials
 import com.ooro.screenplayer.player.ScheduleEngine
 import com.ooro.screenplayer.model.CreativeType
 import com.ooro.screenplayer.model.DisplayLayout
@@ -145,6 +149,10 @@ internal fun manifestRefreshDelayMillis(
 internal fun canCommitDownloadedManifest(requiredCount: Int, verifiedCount: Int): Boolean =
     requiredCount >= 0 && requiredCount == verifiedCount
 
+/** The authenticated manifest request is authoritative; /api/health is diagnostic only. */
+internal suspend fun fetchAuthenticatedManifest(api: DeviceApi, credentials: DeviceCredentials, correlationId: String? = null): DeviceManifest =
+    api.manifest(credentials, correlationId)
+
 internal fun canCommitManifestResponse(
     manifest: DeviceManifest,
     requiredCount: Int,
@@ -211,14 +219,50 @@ internal fun offlineEmptyMessage(
     now: Instant,
     verifiedItemIds: Set<String>,
     allowExpiredCachedManifest: Boolean = false,
+    networkValidated: Boolean? = null,
+    syncFailure: String? = null,
+    paired: Boolean = true,
+    trustedTimeAvailable: Boolean = true,
 ): String = when {
-    manifest.version <= 0L -> "No cached ads are available\nConnect this screen and sync an approved campaign."
+    manifest.version <= 0L && !paired -> "This screen is not paired\nPair it before syncing approved content."
+    manifest.version <= 0L && syncFailure != null -> "$syncFailure\nNo verified ads are cached on this screen.${if (!trustedTimeAvailable) " Trusted schedule time must be re-established before playback." else ""}"
+    manifest.version <= 0L && networkValidated == false -> "No verified ads are cached on this screen\nInternet is not available to sync approved content."
+    manifest.version <= 0L && !trustedTimeAvailable -> "Trusted time is not established\nReconnect to OORO to authorize a manifest before playback."
+    manifest.version <= 0L -> "No manifest has been synchronized yet\nWaiting for a successful OORO sync before playback."
+    !trustedTimeAvailable && !allowExpiredCachedManifest -> "Trusted time is unavailable\nReconnect to establish authenticated schedule time before playback."
     manifest.deliveryReasons.isNotEmpty() -> manifest.deliveryReasons.distinct().joinToString("\n") { deliveryReasonMessage(it) }
     manifest.items.isEmpty() -> "No delivery is authorized for this screen\nCheck campaign state, funding, approval, assignment, and device quota in the admin console."
     manifest.items.none { it.id in verifiedItemIds } -> "No verified ads are cached\nReconnect to download approved content."
     manifest.items.any { it.id in verifiedItemIds && it.deliveryQuota == null } -> "The manifest has no per-screen delivery quota\nThe server must issue an explicit bounded quota or approved unlimited grant."
     manifest.items.none { it.hasAuthorizedDeliveryQuota } -> "Authorized delivery quota is exhausted\nReconnect for a new approved grant."
     else -> "No eligible verified creative is available\nCheck local asset integrity and campaign delivery state."
+}
+
+internal fun manifestSyncFailureMessage(error: Throwable?, networkValidated: Boolean): String {
+    if (error == null && !networkValidated) return "Internet connectivity is not validated\nWaiting for a usable network before syncing this screen."
+    val failure = error as? DeviceApiException
+    return when (failure?.kind) {
+        DeviceFailureKind.DNS_ERROR -> "OORO API DNS lookup failed\nCheck the screen network's DNS path."
+        DeviceFailureKind.TLS_ERROR -> "Secure HTTPS connection to OORO failed\nCheck certificate validation and network interception."
+        DeviceFailureKind.TIMEOUT -> "OORO API request timed out\nThe screen is paired, but no manifest response was received."
+        DeviceFailureKind.CONNECTION_REFUSED, DeviceFailureKind.NETWORK_UNAVAILABLE -> "OORO API is unreachable\nThe screen is paired, but manifest sync did not complete."
+        DeviceFailureKind.AUTH_EXPIRED, DeviceFailureKind.AUTH_INVALID, DeviceFailureKind.AUTH_REVOKED,
+        DeviceFailureKind.DEVICE_NOT_FOUND, DeviceFailureKind.PAIRING_REQUIRED -> "OORO rejected this screen's authentication\nAn administrator must restore this screen's pairing."
+        DeviceFailureKind.EDGE_REJECTED -> "Staging edge protection rejected the manifest request\nAn administrator must inspect the matching request at the edge."
+        DeviceFailureKind.SERVER_UNAVAILABLE -> "OORO returned a server error\nThe screen will retry manifest sync."
+        DeviceFailureKind.MANIFEST_PARSE_FAILED -> "OORO returned a manifest the player could not parse\nThe response was not activated; the screen will retry."
+        else -> when {
+            error?.message?.contains("authenticated server time", ignoreCase = true) == true ||
+                error?.message?.contains("authorization lease", ignoreCase = true) == true ->
+                "OORO returned missing or invalid authenticated time\nPlayback remains paused until a valid manifest is authorized."
+            error?.message?.contains("asset", ignoreCase = true) == true ||
+                error?.message?.contains("checksum", ignoreCase = true) == true ->
+                "Manifest asset download or checksum verification failed\nThe last verified manifest remains active."
+            error?.message?.contains("different screen", ignoreCase = true) == true ->
+                "OORO returned a manifest for a different screen\nThe response was rejected and playback remains paused."
+            else -> "OORO manifest sync failed\nThe last verified manifest remains active while the screen retries."
+        }
+    }
 }
 
 internal fun deliveryReasonMessage(reason: String): String = when (reason) {

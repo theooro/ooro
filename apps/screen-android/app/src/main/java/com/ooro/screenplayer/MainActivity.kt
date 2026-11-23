@@ -345,6 +345,10 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     val pairedScreenId by pairedScreenIdFlow.collectAsState(initial = manifest.screenId.takeIf { preview != null })
     val scheduleClockFlow = vm?.scheduleClock ?: remember { flowOf(Instant.EPOCH) }
     val scheduleClock by scheduleClockFlow.collectAsState(initial = Instant.EPOCH)
+    val syncFailureFlow = vm?.manifestSyncFailure ?: remember { flowOf<String?>(null) }
+    val syncFailure by syncFailureFlow.collectAsState(initial = null)
+    val validatedInternetFlow = vm?.validatedInternet ?: remember { flowOf(false) }
+    val validatedInternet by validatedInternetFlow.collectAsState(initial = false)
     val manifestExpired = preview == null && !authorizationValid
     val scheduledItem = remember(manifest, playbackOffset, verifiedAssetIds, cachedPlaybackAllowed, scheduleClock, vm) {
         vm?.currentItem(manifest, playbackOffset, verifiedAssetIds, allowCachedOffline = cachedPlaybackAllowed, now = scheduleClock)
@@ -357,12 +361,20 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     val item = preview?.let { state ->
         manifest.items.firstOrNull { it.id == state.itemId }
     } ?: scheduledItem
+    val fallbackPlaybackMessage = offlineEmptyMessage(
+        manifest = manifest,
+        now = scheduleClock,
+        verifiedItemIds = verifiedAssetIds,
+        allowExpiredCachedManifest = cachedPlaybackAllowed,
+        networkValidated = validatedInternet,
+        syncFailure = syncFailure,
+        paired = pairedScreenId != null,
+        trustedTimeAvailable = authorizationValid || preview != null,
+    )
     val emptyPlaybackMessage = if (manifestExpired) {
         playerDiagnostic.takeIf { it.startsWith("Trusted time unavailable:") }
-            ?: "Trusted time unavailable: reconnect to establish authenticated schedule time before playback."
-    } else {
-        offlineEmptyMessage(manifest, scheduleClock, verifiedAssetIds, allowExpiredCachedManifest = cachedPlaybackAllowed)
-    }
+            ?: fallbackPlaybackMessage
+    } else fallbackPlaybackMessage
     val displayedOffer = if (preview != null) item else if (manifestExpired) null else presentationItem ?: item
     val customLayoutParseResult = remember(manifest.layoutStudioContract) {
         manifest.layoutStudioContract?.let { LayoutStudioInterpreter.parse(it) }
@@ -429,8 +441,7 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
         val resolved = remember(zone, manifest.version, manifest.validUntil, manifestExpired, pairedScreenId, verifiedAssetIds, currentMainItem?.id, scheduleClock) {
             resolveCustomWidgetContent(zone, manifest, pairedScreenId, verifiedAssetIds, currentMainItem, scheduleClock, authorizationExpired = manifestExpired, allowCachedOffline = cachedPlaybackAllowed)
         }
-        val emptyMessage = if (manifestExpired) emptyPlaybackMessage else offlineEmptyMessage(manifest, scheduleClock, verifiedAssetIds, allowExpiredCachedManifest = cachedPlaybackAllowed)
-        CustomLayoutZoneContent(vm, zone, resolved, playbackKey, preview, emptyMessage)
+        CustomLayoutZoneContent(vm, zone, resolved, playbackKey, preview, emptyPlaybackMessage)
     }
 }
 
@@ -1238,6 +1249,27 @@ internal fun technicianStateSubscriptions(section: TechnicianSection): Technicia
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     TechnicianMetric("OFFLINE MEDIA", if (offlineAuthorized && diagnostics.verifiedAssets > 0) "Authorized" else "Unavailable", "${diagnostics.verifiedAssets} verified · ${diagnostics.missingAssets} missing", offlineAuthorized && diagnostics.verifiedAssets > 0, Modifier.weight(1f))
                     TechnicianMetric("LAST SYNC", relativeTime(diagnostics.manifestLastSyncAt), "Heartbeat ${relativeTime(diagnostics.heartbeatLastSuccessAt)}", diagnostics.heartbeatLastSuccessAt != null, Modifier.weight(1f))
+                }
+                diagnostics.lastManifestAttempt?.let { attempt ->
+                    TechnicianCard {
+                        Text("LAST MANIFEST ATTEMPT", color = Yellow, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        TechnicianLine("Attempt", "${relativeTime(attempt.attemptedAtMillis)} · ${attempt.failureClass}")
+                        TechnicianLine("Failure stage", attempt.failureStage)
+                        TechnicianLine("Android validated", attempt.androidNetworkValidated?.toString() ?: "Unknown")
+                        if (attempt.exceptionClass != null) TechnicianLine("Exception class", attempt.exceptionClass)
+                        if (attempt.failureDetail != null) TechnicianLine("Failure detail", attempt.failureDetail)
+                        TechnicianLine("HTTP response", attempt.httpStatus?.toString() ?: "No response")
+                        TechnicianLine("Content type", attempt.contentType ?: "Unavailable")
+                        TechnicianLine("Client request ID", attempt.clientRequestId)
+                        TechnicianLine("Server request ID", attempt.requestId ?: "Unavailable")
+                        TechnicianLine("Server instance", attempt.serverInstanceId ?: "Unavailable")
+                        TechnicianLine("Trusted time", attempt.trustedTimeResult)
+                        if (attempt.authenticatedServerTimeUtc != null) TechnicianLine("Server UTC", attempt.authenticatedServerTimeUtc)
+                        if (attempt.expectedServerTimeUtc != null) TechnicianLine("Expected UTC", attempt.expectedServerTimeUtc)
+                        if (attempt.rollbackDeltaMillis != null) TechnicianLine("Time delta (ms)", attempt.rollbackDeltaMillis.toString())
+                        TechnicianLine("Manifest", attempt.manifestVersion?.toString() ?: "Not parsed")
+                        TechnicianLine("Items", attempt.manifestItemCount?.toString() ?: "Not parsed")
+                    }
                 }
                 if (diagnostics.probe != null && !apiOk) TechnicianNotice("Offline mode", "The player keeps using locally verified content while its authorization remains valid. Network recovery does not erase pairing or cached media.", Color(0xFFFFC46B))
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {

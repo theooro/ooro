@@ -1,7 +1,11 @@
 package com.ooro.screenplayer
 
 import com.ooro.screenplayer.api.ManifestCodec
+import com.ooro.screenplayer.api.DeviceApi
+import com.ooro.screenplayer.api.DeviceApiException
+import com.ooro.screenplayer.api.DeviceFailureKind
 import com.ooro.screenplayer.model.CreativeType
+import com.ooro.screenplayer.model.DeviceCredentials
 import com.ooro.screenplayer.model.DeviceManifest
 import com.ooro.screenplayer.model.DisplayLayout
 import com.ooro.screenplayer.model.FitMode
@@ -21,6 +25,7 @@ import java.time.ZoneId
 import java.io.File
 import java.net.InetAddress
 import java.net.ServerSocket
+import kotlinx.coroutines.runBlocking
 
 class OfflinePlaybackRulesTest {
     private val now = Instant.parse("2026-11-05T10:00:00Z")
@@ -328,6 +333,72 @@ class OfflinePlaybackRulesTest {
         assertTrue(offlineEmptyMessage(manifest(listOf(item("a").copy(deliveryQuota = com.ooro.screenplayer.model.DeliveryQuota("g", 1, 0, false)))), now, setOf("a")).contains("quota is exhausted"))
         assertTrue(offlineEmptyMessage(manifest(listOf(item("a").copy(deliveryQuota = null))), now, setOf("a")).contains("per-screen delivery quota"))
         assertFalse(offlineEmptyMessage(manifest(listOf(item("a")), now), now, emptySet(), allowExpiredCachedManifest = true).contains("campaign schedule"))
+    }
+
+    @Test fun onlineManifestTimeoutIsReportedAsSyncFailureInsteadOfMissingCampaign() {
+        val fallback = DeviceManifest(0, "screen-test", "Asia/Kolkata", emptyList(), null)
+        val failure = manifestSyncFailureMessage(DeviceApiException(DeviceFailureKind.TIMEOUT, endpoint = "/api/device/manifest"), networkValidated = true)
+        val message = offlineEmptyMessage(fallback, now, emptySet(), networkValidated = true, syncFailure = failure, trustedTimeAvailable = false)
+        assertTrue(message.contains("OORO API request timed out"))
+        assertTrue(message.contains("No verified ads are cached"))
+        assertTrue(message.contains("Trusted schedule time must be re-established"))
+        assertFalse(message.contains("sync an approved campaign"))
+    }
+
+    @Test fun unvalidatedNetworkDiagnosticDoesNotFabricateAnHttpResult() {
+        val failure = manifestSyncFailureMessage(null, networkValidated = false)
+        val attempt = LastManifestAttemptDiagnostic(
+            attemptedAtMillis = 1_795_328_149_822L,
+            clientRequestId = "client-req-1",
+            androidNetworkValidated = false,
+            failureClass = "NETWORK_NOT_VALIDATED",
+            failureStage = "NETWORK_GATE",
+        )
+        assertTrue(failure.contains("Internet connectivity is not validated"))
+        assertEquals(false, attempt.androidNetworkValidated)
+        assertEquals("NETWORK_NOT_VALIDATED", attempt.failureClass)
+        assertEquals("NETWORK_GATE", attempt.failureStage)
+        assertEquals(null, attempt.httpStatus)
+        assertEquals(null, attempt.requestId)
+    }
+
+    @Test fun actualDnsFailureTakesPriorityOverAndroidUnvalidatedNotice() {
+        val message = manifestSyncFailureMessage(
+            DeviceApiException(DeviceFailureKind.DNS_ERROR, endpoint = "/api/device/manifest"),
+            networkValidated = false,
+        )
+        assertTrue(message.contains("DNS lookup failed"))
+        assertFalse(message.contains("Waiting for a usable network"))
+    }
+
+    @Test fun dnsTlsAndAuthenticationFailuresHaveDistinctMessages() {
+        assertTrue(manifestSyncFailureMessage(DeviceApiException(DeviceFailureKind.DNS_ERROR, endpoint = "/api/device/manifest"), true).contains("DNS lookup failed"))
+        assertTrue(manifestSyncFailureMessage(DeviceApiException(DeviceFailureKind.TLS_ERROR, endpoint = "/api/device/manifest"), true).contains("HTTPS connection"))
+        assertTrue(manifestSyncFailureMessage(DeviceApiException(DeviceFailureKind.AUTH_INVALID, status = 401, endpoint = "/api/device/manifest"), true).contains("rejected this screen's authentication"))
+    }
+
+    @Test fun emptyManifestReportsDeliveryEligibilityRatherThanNetworkFailure() {
+        val empty = manifest(emptyList()).copy(deliveryReasons = listOf("NO_ASSIGNMENT"))
+        assertEquals("No campaign is assigned to this screen.", offlineEmptyMessage(empty, now, emptySet()))
+    }
+
+    @Test fun corruptOrMissingManifestAssetIsReportedWithoutMarkingItVerified() {
+        val failure = manifestSyncFailureMessage(IllegalStateException("required assets are unavailable"), networkValidated = true)
+        assertTrue(failure.contains("asset download or checksum verification failed"))
+        assertFalse("broken", isVerifiedCachedAsset(File("/not/a/verified/asset"), "a".repeat(64)))
+    }
+
+    @Test fun authenticatedManifestRequestDoesNotWaitForUnauthenticatedHealthProbe() = runBlocking {
+        var healthCalls = 0
+        var manifestCalls = 0
+        val response = manifest(listOf(item("server-approved")))
+        val api = object : DeviceApi by com.ooro.screenplayer.api.MockDeviceApi() {
+            override suspend fun health() { healthCalls++; error("health probe timeout") }
+            override suspend fun manifest(credentials: DeviceCredentials, correlationId: String?): DeviceManifest { manifestCalls++; return response }
+        }
+        assertEquals(response, fetchAuthenticatedManifest(api, DeviceCredentials("device", "screen-test", "workspace", "redacted-test-only", "Screen")))
+        assertEquals("health probe must not gate auth", 0, healthCalls)
+        assertEquals(1, manifestCalls)
     }
 
     @Test fun cachedStartupSelectsVerifiedAuthorizedCreativeForThePairedScreenWithoutNetwork() {

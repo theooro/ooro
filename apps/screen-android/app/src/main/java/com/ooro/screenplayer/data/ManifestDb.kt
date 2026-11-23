@@ -54,7 +54,40 @@ import androidx.room.*
         return true
     }
 }
+
+internal fun ensureDeliveryQuotaTables(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+    db.execSQL("CREATE TABLE IF NOT EXISTS delivery_quota (grantId TEXT NOT NULL PRIMARY KEY, campaignId TEXT NOT NULL, revision INTEGER NOT NULL, remainingPlays INTEGER, unlimited INTEGER NOT NULL)")
+    db.execSQL("CREATE TABLE IF NOT EXISTS quota_consumption (eventId TEXT NOT NULL PRIMARY KEY, grantId TEXT NOT NULL, revision INTEGER NOT NULL, consumedAt INTEGER NOT NULL)")
+    db.execSQL("CREATE INDEX IF NOT EXISTS index_quota_consumption_grantId_revision ON quota_consumption (grantId, revision)")
+}
+
 @Database(entities = [ManifestEntity::class, ProofEntity::class, ErrorEntity::class, DeliveryQuotaEntity::class, QuotaConsumptionEntity::class], version = 4, exportSchema = false)
 abstract class OoroDatabase : RoomDatabase() { abstract fun manifestDao(): ManifestDao; abstract fun proofDao(): ProofDao; abstract fun errorDao(): ErrorDao; abstract fun deliveryQuotaDao(): DeliveryQuotaDao
-    companion object { private val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) { override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) { db.execSQL("CREATE TABLE IF NOT EXISTS delivery_quota (grantId TEXT NOT NULL PRIMARY KEY, campaignId TEXT NOT NULL, revision INTEGER NOT NULL, remainingPlays INTEGER, unlimited INTEGER NOT NULL)"); db.execSQL("CREATE TABLE IF NOT EXISTS quota_consumption (eventId TEXT NOT NULL PRIMARY KEY, grantId TEXT NOT NULL, revision INTEGER NOT NULL, consumedAt INTEGER NOT NULL)"); db.execSQL("CREATE INDEX IF NOT EXISTS index_quota_consumption_grantId_revision ON quota_consumption (grantId, revision)") } }; private val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) { override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) { db.execSQL("ALTER TABLE campaign_manifest ADD COLUMN authorizationReceivedElapsedMillis INTEGER"); db.execSQL("ALTER TABLE campaign_manifest ADD COLUMN authorizationBootCount INTEGER"); db.execSQL("ALTER TABLE campaign_manifest ADD COLUMN authorizationDurationMillis INTEGER"); db.execSQL("ALTER TABLE campaign_manifest ADD COLUMN authorizationScreenId TEXT") } }; private val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) { override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) { db.execSQL("ALTER TABLE campaign_manifest ADD COLUMN authorizationServerTimeUtcMillis INTEGER") } }; @Volatile private var instance: OoroDatabase? = null; fun get(context: Context) = instance ?: synchronized(this) { instance ?: Room.databaseBuilder(context, OoroDatabase::class.java, "ooro.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().also { instance = it } } }
+    companion object {
+        internal val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) = ensureDeliveryQuotaTables(db)
+        }
+        internal val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE campaign_manifest ADD COLUMN authorizationReceivedElapsedMillis INTEGER")
+                db.execSQL("ALTER TABLE campaign_manifest ADD COLUMN authorizationBootCount INTEGER")
+                db.execSQL("ALTER TABLE campaign_manifest ADD COLUMN authorizationDurationMillis INTEGER")
+                db.execSQL("ALTER TABLE campaign_manifest ADD COLUMN authorizationScreenId TEXT")
+                // Some version-2 screen databases were created before quota tables
+                // were materialized. Repair them idempotently without discarding
+                // their manifest, cached assets, pairing, or proof history.
+                ensureDeliveryQuotaTables(db)
+            }
+        }
+        internal val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE campaign_manifest ADD COLUMN authorizationServerTimeUtcMillis INTEGER")
+            }
+        }
+        @Volatile private var instance: OoroDatabase? = null
+        fun get(context: Context) = instance ?: synchronized(this) {
+            instance ?: Room.databaseBuilder(context, OoroDatabase::class.java, "ooro.db")
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().also { instance = it }
+        }
+    }
 }
