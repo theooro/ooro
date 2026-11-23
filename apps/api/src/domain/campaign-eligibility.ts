@@ -21,10 +21,9 @@ export function selectManifestDeliverySlots<T extends { campaignId: string; type
 }
 export function campaignDeliveryQuota(input: { campaignId: string; displayId: string; revision: number; status: string; fundingStatus: string; authorizedPlays: number | null; unlimited: boolean; consumedPlays: number }): DeliveryQuota | null {
   if (input.status !== 'ACTIVE' || !['INTERNAL_TEST', 'PAID', 'FUNDED'].includes(input.fundingStatus)) return null
-  if (input.unlimited) return { id: `${input.campaignId}:${input.displayId}`, revision: input.revision, remainingPlays: null, unlimited: true }
-  if (input.authorizedPlays == null || !Number.isInteger(input.authorizedPlays) || input.authorizedPlays <= 0) return null
-  const remainingPlays = Math.max(0, input.authorizedPlays - input.consumedPlays)
-  return remainingPlays > 0 ? { id: `${input.campaignId}:${input.displayId}`, revision: input.revision, remainingPlays, unlimited: false } : null
+  // Device playback is not stopped by an offline play counter. Eligibility and
+  // the signed manifest lease still bound playback; proofs remain for reporting.
+  return { id: `${input.campaignId}:${input.displayId}`, revision: input.revision, remainingPlays: null, unlimited: true }
 }
 export function hasVerifiedAssetMetadata(asset: { active: boolean; url: string | null; checksum: string | null } | null | undefined): boolean {
   return Boolean(asset?.active && asset.url?.trim() && /^[a-f0-9]{64}$/i.test(asset.checksum ?? ''))
@@ -38,8 +37,7 @@ export function manifestDeliveryReasons(input: { displayEnabled: boolean; suppor
   if (!active.length) reasons.push(input.campaigns.some((campaign) => ['APPROVED', 'SCHEDULED', 'PAUSED', 'STOPPED', 'COMPLETED', 'REJECTED'].includes(campaign.status)) ? 'CAMPAIGN_INACTIVE' : 'APPROVAL_REQUIRED')
   const funded = active.filter((campaign) => ['INTERNAL_TEST', 'PAID', 'FUNDED'].includes(campaign.fundingStatus))
   if (active.length && !funded.length) reasons.push('FUNDING_REQUIRED')
-  const quotaEligible = funded.filter((campaign) => campaign.quotaAuthorized)
-  if (funded.length && !quotaEligible.length) reasons.push('NO_DELIVERY_QUOTA')
+  const quotaEligible = funded
   if (quotaEligible.length && quotaEligible.every((campaign) => campaign.approvedCreativeCount === 0)) reasons.push('NO_APPROVED_CREATIVE')
   if (quotaEligible.some((campaign) => campaign.approvedCreativeCount > campaign.checksumVerifiedAssetCount) && input.eligibleItemCount === 0) reasons.push('ASSET_UNAVAILABLE')
   if (quotaEligible.length && input.eligibleItemCount === 0 && !reasons.includes('NO_APPROVED_CREATIVE') && !reasons.includes('ASSET_UNAVAILABLE')) reasons.push('NO_ELIGIBLE_CREATIVE')
