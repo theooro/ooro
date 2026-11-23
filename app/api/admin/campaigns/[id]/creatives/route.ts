@@ -40,13 +40,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       await tx.auditLog.create({ data: { actorId: admin.userId, actorRole: admin.role, action: "CAMPAIGN_LIBRARY_CREATIVES_ATTACHED", entityType: "Campaign", entityId: campaignId, after: { attached, manifestRefreshQueued: displayIds.length } } });
       return { attached, manifestRefreshQueued: displayIds.length };
     }, { isolationLevel: "Serializable" });
-    if ("error" in result) {
+    if ("error" in result && result.error) {
       const messages: Record<string, [number, string]> = {
         CAMPAIGN_UNAVAILABLE: [404, "Choose an available campaign."],
         APPROVED_VERIFIED_CREATIVE_REQUIRED: [422, "Only approved creatives with verified active assets can be added."],
         CREATIVE_ALREADY_ATTACHED: [409, "One or more selected assets are already in this campaign."],
       };
-      const [status, message] = messages[result.error];
+      const [status, message] = messages[result.error] ?? [409, "The selected library creatives could not be attached."];
       return NextResponse.json({ error: { code: result.error, message } }, { status });
     }
     return NextResponse.json({ data: { ...result, campaignId, campaignDeliveryRulesApply: true } }, { status: 201 });
