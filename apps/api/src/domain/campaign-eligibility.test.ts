@@ -93,7 +93,7 @@ test('manifest diagnostics distinguish assignment, state, funding, approval, and
   assert.deepEqual(reasons([{ status: 'REJECTED', fundingStatus: 'PAID', quotaAuthorized: true, approvedCreativeCount: 1, checksumVerifiedAssetCount: 1 }]), ['CAMPAIGN_INACTIVE'])
   assert.deepEqual(reasons([{ status: 'DRAFT', fundingStatus: 'PAID', quotaAuthorized: false, approvedCreativeCount: 0, checksumVerifiedAssetCount: 0 }]), ['APPROVAL_REQUIRED'])
   assert.deepEqual(reasons([{ status: 'ACTIVE', fundingStatus: 'UNFUNDED', quotaAuthorized: false, approvedCreativeCount: 1, checksumVerifiedAssetCount: 1 }]), ['FUNDING_REQUIRED'])
-  assert.deepEqual(reasons([{ status: 'ACTIVE', fundingStatus: 'PAID', quotaAuthorized: false, approvedCreativeCount: 1, checksumVerifiedAssetCount: 1 }]), [])
+  assert.deepEqual(reasons([{ status: 'ACTIVE', fundingStatus: 'PAID', quotaAuthorized: false, approvedCreativeCount: 1, checksumVerifiedAssetCount: 1 }]), ['NO_ELIGIBLE_CREATIVE'])
   assert.deepEqual(reasons([{ status: 'ACTIVE', fundingStatus: 'PAID', quotaAuthorized: true, approvedCreativeCount: 0, checksumVerifiedAssetCount: 0 }]), ['NO_APPROVED_CREATIVE'])
   assert.deepEqual(reasons([{ status: 'ACTIVE', fundingStatus: 'PAID', quotaAuthorized: true, approvedCreativeCount: 1, checksumVerifiedAssetCount: 0 }]), ['ASSET_UNAVAILABLE'])
   assert.deepEqual(reasons([{ status: 'ACTIVE', fundingStatus: 'PAID', quotaAuthorized: true, approvedCreativeCount: 0, checksumVerifiedAssetCount: 0 }], 0), ['NO_ASSIGNMENT'])
