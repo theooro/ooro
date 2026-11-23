@@ -32,14 +32,14 @@ test('manifest expiry is refresh metadata, not campaign delivery eligibility', (
   assert.ok(until > now)
 })
 
-test('campaign delivery requires active approved funding and an explicit bounded or unlimited grant', () => {
+test('campaign delivery requires active funded state and remains unmetered across offline plays', () => {
   const base = { campaignId: 'campaign', displayId: 'screen', revision: 2, status: 'ACTIVE', fundingStatus: 'PAID', authorizedPlays: 5, unlimited: false, consumedPlays: 2 }
-  assert.deepEqual(campaignDeliveryQuota(base), { id: 'campaign:screen', revision: 2, remainingPlays: 3, unlimited: false })
+  assert.deepEqual(campaignDeliveryQuota(base), { id: 'campaign:screen', revision: 2, remainingPlays: null, unlimited: true })
   assert.equal(campaignDeliveryQuota({ ...base, status: 'PAUSED' }), null)
   assert.equal(campaignDeliveryQuota({ ...base, status: 'APPROVED' }), null)
   assert.equal(campaignDeliveryQuota({ ...base, fundingStatus: 'UNFUNDED' }), null)
-  assert.equal(campaignDeliveryQuota({ ...base, authorizedPlays: null }), null)
-  assert.equal(campaignDeliveryQuota({ ...base, consumedPlays: 5 }), null)
+  assert.deepEqual(campaignDeliveryQuota({ ...base, authorizedPlays: null }), { id: 'campaign:screen', revision: 2, remainingPlays: null, unlimited: true })
+  assert.deepEqual(campaignDeliveryQuota({ ...base, consumedPlays: 500000 }), { id: 'campaign:screen', revision: 2, remainingPlays: null, unlimited: true })
   assert.deepEqual(campaignDeliveryQuota({ ...base, authorizedPlays: null, unlimited: true }), { id: 'campaign:screen', revision: 2, remainingPlays: null, unlimited: true })
 })
 
@@ -55,7 +55,7 @@ test('missing, future, expired, and inactive legacy timing metadata never gates 
 
   for (const legacyTiming of timingVariants) {
     const quota = campaignDeliveryQuota({ ...base, ...legacyTiming })
-    assert.deepEqual(quota, { id: 'campaign:assigned-screen', revision: 4, remainingPlays: 7, unlimited: false })
+    assert.deepEqual(quota, { id: 'campaign:assigned-screen', revision: 4, remainingPlays: null, unlimited: true })
     assert.deepEqual(manifestDeliveryReasons({
       displayEnabled: true,
       supportsDeliveryQuota: true,
@@ -66,11 +66,11 @@ test('missing, future, expired, and inactive legacy timing metadata never gates 
   }
 })
 
-test('state, creative approval, screen assignment, and quota still fail closed', () => {
+test('campaign state, approval, funding, and assignment still fail closed without an offline counter', () => {
   const base = { campaignId: 'campaign', displayId: 'assigned-screen', revision: 4, status: 'ACTIVE', fundingStatus: 'PAID', authorizedPlays: 8, unlimited: false, consumedPlays: 1 }
   assert.equal(campaignDeliveryQuota({ ...base, status: 'PAUSED' }), null)
   assert.equal(campaignDeliveryQuota({ ...base, status: 'REJECTED' }), null)
-  assert.equal(campaignDeliveryQuota({ ...base, authorizedPlays: 1, consumedPlays: 1 }), null)
+  assert.deepEqual(campaignDeliveryQuota({ ...base, authorizedPlays: 1, consumedPlays: 1000000 }), { id: 'campaign:assigned-screen', revision: 4, remainingPlays: null, unlimited: true })
 
   const reasons = (assignmentCount: number, approvedCreativeCount: number, eligibleItemCount: number) => manifestDeliveryReasons({
     displayEnabled: true,
@@ -84,7 +84,7 @@ test('state, creative approval, screen assignment, and quota still fail closed',
   assert.deepEqual(reasons(1, 1, 0), ['NO_ELIGIBLE_CREATIVE'])
 })
 
-test('manifest diagnostics distinguish assignment, state, funding, quota, approval, and asset blockers', () => {
+test('manifest diagnostics distinguish assignment, state, funding, approval, and asset blockers', () => {
   const reasons = (campaigns: Array<{ status: string; fundingStatus: string; quotaAuthorized: boolean; approvedCreativeCount: number; checksumVerifiedAssetCount: number }>, assignmentCount = campaigns.length, eligibleItemCount = 0) => manifestDeliveryReasons({ displayEnabled: true, supportsDeliveryQuota: true, assignmentCount, campaigns, eligibleItemCount })
   assert.deepEqual(reasons([], 0), ['NO_ASSIGNMENT'])
   assert.deepEqual(reasons([{ status: 'APPROVED', fundingStatus: 'PAID', quotaAuthorized: true, approvedCreativeCount: 1, checksumVerifiedAssetCount: 1 }]), ['CAMPAIGN_INACTIVE'])
@@ -93,7 +93,7 @@ test('manifest diagnostics distinguish assignment, state, funding, quota, approv
   assert.deepEqual(reasons([{ status: 'REJECTED', fundingStatus: 'PAID', quotaAuthorized: true, approvedCreativeCount: 1, checksumVerifiedAssetCount: 1 }]), ['CAMPAIGN_INACTIVE'])
   assert.deepEqual(reasons([{ status: 'DRAFT', fundingStatus: 'PAID', quotaAuthorized: false, approvedCreativeCount: 0, checksumVerifiedAssetCount: 0 }]), ['APPROVAL_REQUIRED'])
   assert.deepEqual(reasons([{ status: 'ACTIVE', fundingStatus: 'UNFUNDED', quotaAuthorized: false, approvedCreativeCount: 1, checksumVerifiedAssetCount: 1 }]), ['FUNDING_REQUIRED'])
-  assert.deepEqual(reasons([{ status: 'ACTIVE', fundingStatus: 'PAID', quotaAuthorized: false, approvedCreativeCount: 1, checksumVerifiedAssetCount: 1 }]), ['NO_DELIVERY_QUOTA'])
+  assert.deepEqual(reasons([{ status: 'ACTIVE', fundingStatus: 'PAID', quotaAuthorized: false, approvedCreativeCount: 1, checksumVerifiedAssetCount: 1 }]), [])
   assert.deepEqual(reasons([{ status: 'ACTIVE', fundingStatus: 'PAID', quotaAuthorized: true, approvedCreativeCount: 0, checksumVerifiedAssetCount: 0 }]), ['NO_APPROVED_CREATIVE'])
   assert.deepEqual(reasons([{ status: 'ACTIVE', fundingStatus: 'PAID', quotaAuthorized: true, approvedCreativeCount: 1, checksumVerifiedAssetCount: 0 }]), ['ASSET_UNAVAILABLE'])
   assert.deepEqual(reasons([{ status: 'ACTIVE', fundingStatus: 'PAID', quotaAuthorized: true, approvedCreativeCount: 0, checksumVerifiedAssetCount: 0 }], 0), ['NO_ASSIGNMENT'])
