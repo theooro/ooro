@@ -9,7 +9,7 @@ import { standardV3Draft } from './domain/layout-studio.js'
 
 // Opt in only against a disposable local audit database. No staging/production writes.
 const enabled=process.env.OORO_INTEGRATION_TESTS==='true' && /127\.0\.0\.1:55432\/ooro_audit/.test(process.env.DATABASE_URL??'')
-test('state-based delivery: manifest grants, idempotent proof quota, pause and legacy scheduled safety', {skip:!enabled},async()=>{
+test('state-based delivery: unmetered manifest grant, idempotent proofs, pause and legacy scheduled safety', {skip:!enabled},async()=>{
  const rawToken=`audit-device-${randomUUID()}`
  const screen=await prisma.display.create({data:{deviceId:randomUUID(),name:'State delivery audit screen',state:'READY',deviceTokenHash:hashSecret(rawToken),supportsDeliveryQuota:true}})
  const campaign=await prisma.campaign.create({data:{name:'State delivery audit campaign',status:'ACTIVE',commercialFundingStatus:'PAID',startsAt:new Date(Date.now()-24*60*60*1000),endsAt:new Date(Date.now()+24*60*60*1000),offlinePlaysPerDisplay:2,creatives:{create:{name:'Approved audit image',status:'APPROVED',type:'IMAGE',asset:{create:{fileName:'audit.png',storageKey:`audit/${randomUUID()}.png`,url:'https://example.com/audit.png',checksum:'a'.repeat(64),mimeType:'image/png',active:true}}}}},include:{creatives:true}})
@@ -28,7 +28,7 @@ test('state-based delivery: manifest grants, idempotent proof quota, pause and l
   assert.ok(Date.parse(manifestData.authenticatedServerTime)<Date.parse(manifestData.validUntil))
   const {manifest}=await buildDisplayManifest(screen.id)
   assert.equal(manifest.items.length,1)
-  assert.deepEqual(manifest.items[0].deliveryQuota,{id:`${campaign.id}:${screen.id}`,revision:assignment.offlineQuotaRevision,remainingPlays:2,unlimited:false})
+  assert.deepEqual(manifest.items[0].deliveryQuota,{id:`${campaign.id}:${screen.id}`,revision:assignment.offlineQuotaRevision,remainingPlays:null,unlimited:true})
   assert.equal('startsAt' in manifest.items[0],false)
   assert.equal('endsAt' in manifest.items[0],false)
   assert.deepEqual((manifest.layoutStudioContract?.zones as Array<{rotation?:{items:Array<{referenceId:string;durationSeconds:number}>}}>)?.[0]?.rotation?.items,[{referenceId:campaign.creatives[0]!.id,durationSeconds:10}])
@@ -41,11 +41,12 @@ test('state-based delivery: manifest grants, idempotent proof quota, pause and l
   const first=await sendProof(firstId);assert.equal(first.statusCode,200,first.body)
   assert.deepEqual(first.json().data.acceptedEventIds,[firstId])
   const retry=await sendProof(firstId);assert.equal(retry.statusCode,200,retry.body)
-  assert.equal((await prisma.displayCampaignAssignment.findUniqueOrThrow({where:{id:assignment.id}})).offlinePlaysConsumed,1)
+  assert.equal((await prisma.displayCampaignAssignment.findUniqueOrThrow({where:{id:assignment.id}})).offlinePlaysConsumed,0)
   const second=await sendProof(randomUUID());assert.equal(second.statusCode,200,second.body)
-  assert.equal((await prisma.displayCampaignAssignment.findUniqueOrThrow({where:{id:assignment.id}})).offlinePlaysConsumed,2)
-  const overQuota=await sendProof(randomUUID());assert.equal(overQuota.statusCode,409,overQuota.body)
-  assert.equal((await buildDisplayManifest(screen.id)).manifest.items.some(item=>item.campaignId===campaign.id),false)
+  assert.equal((await prisma.displayCampaignAssignment.findUniqueOrThrow({where:{id:assignment.id}})).offlinePlaysConsumed,0)
+  const beyondLegacyQuota=await sendProof(randomUUID());assert.equal(beyondLegacyQuota.statusCode,200,beyondLegacyQuota.body)
+  assert.equal((await prisma.displayCampaignAssignment.findUniqueOrThrow({where:{id:assignment.id}})).offlinePlaysConsumed,0)
+  assert.equal((await buildDisplayManifest(screen.id)).manifest.items.some(item=>item.campaignId===campaign.id),true)
   await prisma.campaign.update({where:{id:campaign.id},data:{status:'PAUSED'}})
   assert.equal((await buildDisplayManifest(screen.id)).manifest.items.length,0)
  } finally {
