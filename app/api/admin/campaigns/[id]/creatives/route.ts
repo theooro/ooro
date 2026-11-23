@@ -18,10 +18,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       if (!campaign || campaign.status === "ARCHIVED") return { error: "CAMPAIGN_UNAVAILABLE" as const };
       const sources = await tx.creative.findMany({ where: { id: { in: creativeIds }, status: "APPROVED" }, include: { asset: true } });
       if (sources.length !== creativeIds.length || sources.some(item => !item.asset?.active || !item.asset.url || !/^[a-f0-9]{64}$/i.test(item.asset.checksum ?? ""))) return { error: "APPROVED_VERIFIED_CREATIVE_REQUIRED" as const };
-      const current = await tx.creative.findMany({ where: { campaignId, status: { not: "ARCHIVED" } }, include: { asset: true }, select: { name: true, asset: { select: { storageKey: true, checksum: true } } } });
+      const current = await tx.creative.findMany({ where: { campaignId, status: { not: "ARCHIVED" } }, select: { displayOrder: true, asset: { select: { storageKey: true } } } });
       const existingKeys = new Set(current.map(item => item.asset?.storageKey).filter(Boolean));
       if (sources.some(item => existingKeys.has(item.asset!.storageKey))) return { error: "CREATIVE_ALREADY_ATTACHED" as const };
-      let displayOrder = Math.max(-1, ...current.map((_, index) => index));
+      let displayOrder = Math.max(-1, ...current.map(item => item.displayOrder));
       const attached = [];
       for (const source of sources) {
         displayOrder += 1;
