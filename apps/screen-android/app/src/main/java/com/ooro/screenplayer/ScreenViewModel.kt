@@ -208,6 +208,13 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
         }
         viewModelScope.launch {
             try {
+                val revocation = retryAuthorizationRevocation(store) { db.manifestDao().invalidateAuthorization() }
+                if (revocation is AuthorizationRevocationAttempt.Pending) {
+                    activeAuthorization = null; active = null
+                    _authorizationValid.value = false; _cachedPlaybackAllowed.value = false; _verifiedAssetIds.value = emptySet()
+                    _state.value = ScreenState.Setup("Recovery is pending · old screen authorization is blocked while local cleanup retries.", true)
+                    _diagnostic.value = revocation.diagnostic
+                } else {
                 val stored = db.manifestDao().active()
                 val pairedScreenId = store.credentials()?.screenId
                 val parsed = stored?.let { entity -> runCatching { ManifestCodec.parse(entity.json) }.onFailure { error ->
@@ -249,6 +256,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
                     }
                 }
                 if (pairedScreenId == null) _diagnostic.value = "Screen is unpaired · pair this device to sync approved content."
+                }
             } catch (error: Exception) {
                 Log.e("OoroScreen", "cached startup restore failed; playlist unavailable", error)
                 _diagnostic.value = "Cached content could not be verified · reconnect to refresh approved content"
@@ -258,7 +266,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
                 cachedStartupReady.complete(Unit)
             }
             networkRecoveryReady = true
-            if (store.credentials() != null) sync()
+            if (store.credentials() != null && !store.authorizationRevocationPending()) sync()
             ManifestRefreshBus.events.collect {
                 if (store.credentials() == null) clearInMemoryAuthorizationAfterUnpair() else sync()
             }
@@ -282,39 +290,57 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
         }
         _pairing.value = true
         viewModelScope.launch {
-            var stage = PairingFailureStage.NETWORK_VALIDATION
+            var stage = PairingFailureStage.REVOCATION_MARKER
             try {
-                runCatching {
-                    check(hasValidatedInternet()) { "Android has not validated an internet connection" }
-                    stage = PairingFailureStage.API_REQUEST
-                    val result = api.pair(PairRequest(code, deviceId, android.os.Build.MANUFACTURER, android.os.Build.MODEL, android.os.Build.VERSION.RELEASE, BuildConfig.VERSION_NAME))
-                    stage = PairingFailureStage.CREDENTIAL_PERSISTENCE
-                    store.save(result.credentials)
-                    activeAuthorization = null
-                    trustedTimeFailureMessage = null
-                    _authorizationValid.value = false
-                    _cachedPlaybackAllowed.value = false
-                    stage = PairingFailureStage.AUTHORIZATION_RESET
-                    runCatching { db.manifestDao().invalidateAuthorization() }.onFailure {
-                        store.clear()
-                        _pairedScreenId.value = null
-                        active = null
-                        throw it
-                    }
-                    _pairedScreenId.value = result.credentials.screenId
-                    repairMode = false
-                    Log.i("OoroScreen", "pairing succeeded displayId=${result.credentials.screenId} paired=true")
-                    if (hasValidatedInternet()) sync()
-                }.onFailure { error ->
-                    val failureKind = (error as? DeviceApiException)?.kind
-                    val message = pairingAttemptFailureMessage(stage, failureKind)
-                    Log.w("OoroScreen", "pairing failed stage=$stage validatedInternet=${hasValidatedInternet()} failure=${failureKind ?: error.javaClass.simpleName}")
-                    _state.value = ScreenState.Setup(message, true)
+                if (!store.beginAuthorizationRevocation()) {
+                    active = null; activeAuthorization = null
+                    _authorizationValid.value = false; _cachedPlaybackAllowed.value = false; _currentCreative.value = null
+                    val oldAuthorizationCleared = runCatching { db.manifestDao().invalidateAuthorization() }.isSuccess
+                    _diagnostic.value = if (oldAuthorizationCleared) "Recovery marker could not be saved; cached authorization was cleared locally. Retry recovery when storage is healthy." else "Recovery marker and cached authorization cleanup both failed. Playback is paused; storage repair and a fresh authenticated sync are required."
+                    throw IllegalStateException("authorization revocation marker could not be persisted")
                 }
+                authorizationExpiryJob?.cancel(); manifestRefreshJob?.cancel(); reconnectJob?.cancel()
+                active = null; activeAuthorization = null; trustedTimeFailureMessage = null; online = false
+                _authorizationValid.value = false; _cachedPlaybackAllowed.value = false; _verifiedAssetIds.value = emptySet(); _currentCreative.value = null
+                _state.value = ScreenState.Setup("Recovery pending · old screen authorization is blocked while this display reconnects.", true)
+                _diagnostic.value = "Recovery pending · local screen authorization cleanup must complete before playback."
+                stage = PairingFailureStage.NETWORK_VALIDATION
+                check(hasValidatedInternet()) { "Android has not validated an internet connection" }
+                stage = PairingFailureStage.API_REQUEST
+                val result = api.pair(PairRequest(code, deviceId, android.os.Build.MANUFACTURER, android.os.Build.MODEL, android.os.Build.VERSION.RELEASE, BuildConfig.VERSION_NAME))
+                stage = PairingFailureStage.CREDENTIAL_PERSISTENCE
+                store.save(result.credentials)
+                _pairedScreenId.value = result.credentials.screenId
+                stage = PairingFailureStage.AUTHORIZATION_RESET
+                when (val cleanup = retryAuthorizationRevocation(store) { db.manifestDao().invalidateAuthorization() }) {
+                    is AuthorizationRevocationAttempt.Pending -> {
+                        _state.value = ScreenState.Setup("${cleanup.diagnostic} Pairing credentials are retained securely; playback stays blocked while cleanup retries.", true)
+                        _diagnostic.value = cleanup.diagnostic
+                        reportPairingFailure(stage, cleanup.diagnostic)
+                        return@launch
+                    }
+                    AuthorizationRevocationAttempt.Cleared, AuthorizationRevocationAttempt.NotPending -> Unit
+                }
+                repairMode = false
+                Log.i("OoroScreen", "pairing response stored and old authorization cleared screenId=${result.credentials.screenId}; awaiting authenticated manifest sync")
+                if (hasValidatedInternet()) sync()
+            } catch (error: Exception) {
+                val failureKind = (error as? DeviceApiException)?.kind
+                val message = pairingAttemptFailureMessage(stage, failureKind)
+                _state.value = ScreenState.Setup(message, true)
+                Log.w("OoroScreen", "pairing failed stage=$stage validatedInternet=${hasValidatedInternet()} failure=${failureKind ?: error.javaClass.simpleName}")
+                if (stage in setOf(PairingFailureStage.API_REQUEST, PairingFailureStage.CREDENTIAL_PERSISTENCE, PairingFailureStage.AUTHORIZATION_RESET)) reportPairingFailure(stage, store.authorizationRevocationFailure())
             } finally {
                 _pairing.value = false
             }
         }
+    }
+    private suspend fun reportPairingFailure(stage: PairingFailureStage, diagnostic: String?) {
+        val credentials = store.credentials() ?: return
+        if (!hasValidatedInternet()) return
+        val failure = diagnostic?.let(::parseAuthorizationRevocationFailure)
+        runCatching { api.reportPairingFailure(credentials, stage.name, failure?.exceptionClass, failure?.sqliteCode) }
+            .onFailure { error -> Log.w("OoroScreen", "pairing failure report not acknowledged stage=$stage failure=${error.javaClass.simpleName}") }
     }
     fun reconnect() { if (_reconnecting.value) return; _reconnecting.value = true; val current = (_state.value as? ScreenState.AuthRecovery); if (current != null) _state.value = current.copy(reconnecting = true); viewModelScope.launch { try { sync() } finally { _reconnecting.value = false } } }
     fun beginRepair() { repairMode = true; _state.value = ScreenState.Setup("Enter a new pairing code. This keeps the existing screen identity and history.", true) }
@@ -358,6 +384,15 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
     private suspend fun syncInternal() {
         manifestRefreshJob?.cancel()
         manifestRefreshJob = null
+        if (store.authorizationRevocationPending()) {
+            activeAuthorization = null; _authorizationValid.value = false; _cachedPlaybackAllowed.value = false
+            val retry = retryAuthorizationRevocation(store) { db.manifestDao().invalidateAuthorization() }
+            if (retry is AuthorizationRevocationAttempt.Pending) {
+                _state.value = ScreenState.Setup("Recovery is pending · old screen authorization remains blocked until cleanup succeeds.", true)
+                _diagnostic.value = retry.diagnostic; _manifestSyncFailure.value = retry.diagnostic
+                return
+            }
+        }
         val c = store.credentials() ?: run { _pairedScreenId.value = null; _state.value = ScreenState.Setup("Screen is unpaired · enter a pairing code to restore authenticated playback.", true); _diagnostic.value = "Screen is unpaired · pair this device to sync approved content."; _authorizationValid.value = false; _cachedPlaybackAllowed.value = false; Log.w("OoroScreen", "sync skipped paired=false"); return }
         Log.w("OoroScreen", "sync started displayId=${c.screenId} tokenPresent=true paired=true")
         if (active == null) _state.value = ScreenState.Preparing
@@ -549,7 +584,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             .onFailure { error -> Log.w("OoroScreen", "command poll failed displayId=${c.screenId}", error) }
     }
     private fun keepCachedPlayback(credentials: DeviceCredentials? = store.credentials()) {
-        val authorized = credentials != null && active != null && currentOfflineAuthorizationRemainingMillis() > 0L
+        val authorized = !store.authorizationRevocationPending() && credentials != null && active != null && currentOfflineAuthorizationRemainingMillis() > 0L
         _authorizationValid.value = authorized
         _diagnostic.value = if (authorized) "Authorized cached playback active · reconnecting" else trustedTimeFailureMessage ?: trustedTimeUnavailableDiagnostic()
         _cachedPlaybackAllowed.value = authorized
@@ -579,7 +614,10 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
         }
     }
     private fun currentBootCount(): Int? = runCatching { Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT) }.getOrNull()
-    private fun currentOfflineAuthorizationRemainingMillis(): Long = offlineAuthorizationRemainingMillis(activeAuthorization, store.credentials()?.screenId, SystemClock.elapsedRealtime(), currentBootCount())
+    private fun currentOfflineAuthorizationRemainingMillis(): Long {
+        if (store.authorizationRevocationPending()) return 0L
+        return offlineAuthorizationRemainingMillis(activeAuthorization, store.credentials()?.screenId, SystemClock.elapsedRealtime(), currentBootCount())
+    }
     fun isOfflineAuthorizationValid(): Boolean = currentOfflineAuthorizationRemainingMillis() > 0L
     private fun scheduleAuthorizationExpiry() {
         authorizationExpiryJob?.cancel()
@@ -735,12 +773,23 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             val credentials = store.credentials()
             if (credentials == null) { clearInMemoryAuthorizationAfterUnpair(); return@launch }
             if (!hasValidatedInternet()) { _state.value = ScreenState.Setup("Unpair was not sent · validated internet is required before OORO can acknowledge it.", true); return@launch }
+            if (!store.authorizationRevocationPending() && !store.beginAuthorizationRevocation()) {
+                active = null; activeAuthorization = null; _authorizationValid.value = false; _cachedPlaybackAllowed.value = false; _currentCreative.value = null
+                val oldAuthorizationCleared = runCatching { db.manifestDao().invalidateAuthorization() }.isSuccess
+                _state.value = ScreenState.Setup("Unpair was not sent · local authorization revocation could not be saved.", true)
+                _diagnostic.value = if (oldAuthorizationCleared) "Authorization marker could not be saved; cached authorization was cleared locally. Retry unpair when storage is healthy." else "Authorization marker and cached authorization cleanup both failed. Playback is paused; storage repair is required."
+                return@launch
+            }
+            active = null; activeAuthorization = null
+            _authorizationValid.value = false; _cachedPlaybackAllowed.value = false; _currentCreative.value = null
             _state.value = ScreenState.Setup("Unpair pending · waiting for OORO acknowledgement.", true)
             runCatching { api.unpair(credentials) }.onSuccess {
-                val localAuthorizationRevoked = runCatching { db.manifestDao().invalidateAuthorization() }.isSuccess
+                val cleanup = retryAuthorizationRevocation(store) { db.manifestDao().invalidateAuthorization() }
+                val localAuthorizationRevoked = cleanup is AuthorizationRevocationAttempt.Cleared || cleanup is AuthorizationRevocationAttempt.NotPending
                 store.clear()
                 clearInMemoryAuthorizationAfterUnpair()
                 _state.value = ScreenState.Setup(if (localAuthorizationRevoked) "Unpair acknowledged · pair this device again before playback." else "OORO acknowledged unpair · local authorization cleanup was incomplete. Pair again while online to refresh safely.", true)
+                if (cleanup is AuthorizationRevocationAttempt.Pending) _diagnostic.value = cleanup.diagnostic
             }.onFailure { error ->
                 _state.value = ScreenState.Setup("Unpair acknowledgement is unavailable · local credentials are retained. Reconnect and check pairing status before retrying.", true)
                 _diagnostic.value = "Unpair request outcome is unknown · local credentials remain stored until an acknowledgement is received."

@@ -267,7 +267,7 @@ internal fun manifestSyncFailureMessage(error: Throwable?, networkValidated: Boo
     }
 }
 
-internal enum class PairingFailureStage { NETWORK_VALIDATION, API_REQUEST, CREDENTIAL_PERSISTENCE, AUTHORIZATION_RESET }
+internal enum class PairingFailureStage { REVOCATION_MARKER, NETWORK_VALIDATION, API_REQUEST, CREDENTIAL_PERSISTENCE, AUTHORIZATION_RESET }
 
 /** Keep the network-gate message specific to the gate; do not mislabel later failures as connectivity. */
 internal fun pairingAttemptFailureMessage(stage: PairingFailureStage, kind: DeviceFailureKind?): String {
@@ -276,6 +276,7 @@ internal fun pairingAttemptFailureMessage(stage: PairingFailureStage, kind: Devi
     }
     if (kind != null) return pairingFailureMessage(kind)
     return when (stage) {
+        PairingFailureStage.REVOCATION_MARKER -> "Recovery could not start because local authorization revocation could not be saved. Playback remains locked until recovery can be safely retried."
         PairingFailureStage.NETWORK_VALIDATION -> error("handled above")
         PairingFailureStage.API_REQUEST -> "Pairing request failed after Android reported validated internet. Check the latest pairing diagnostic and Admin > Screens before retrying."
         PairingFailureStage.CREDENTIAL_PERSISTENCE -> "The pairing response arrived, but secure credentials could not be saved on this device. Check Admin > Screens before retrying."

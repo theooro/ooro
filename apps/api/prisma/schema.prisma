@@ -408,6 +408,8 @@ model Display {
   vehicle                   Vehicle?                    @relation(fields: [vehicleId], references: [id])
   deviceTokenHash           String?                     @unique
   state                     String                      @default("UNPAIRED")
+  pairingStatus             String                      @default("UNPAIRED")
+  pairedAt                  DateTime?
   appVersion                String?
   manifestVersion           Int?
   lastLatitude              Float?

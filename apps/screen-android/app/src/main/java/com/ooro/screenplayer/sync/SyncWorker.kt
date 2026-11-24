@@ -11,6 +11,8 @@ import com.ooro.screenplayer.data.DeviceStore
 import com.ooro.screenplayer.model.PlayerStatus
 import com.ooro.screenplayer.data.OoroDatabase
 import com.ooro.screenplayer.data.ProofEntity
+import com.ooro.screenplayer.data.AuthorizationRevocationAttempt
+import com.ooro.screenplayer.data.retryAuthorizationRevocation
 import com.ooro.screenplayer.model.ProofOfPlay
 import com.ooro.screenplayer.acknowledgedProofEventIds
 import org.json.JSONObject
@@ -80,6 +82,10 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         }
         val db = SyncWorkerDependencies.database?.invoke(applicationContext) ?: OoroDatabase.get(applicationContext)
         return try {
+            if (store.authorizationRevocationPending()) {
+                val cleanup = retryAuthorizationRevocation(store) { db.manifestDao().invalidateAuthorization() }
+                if (cleanup is AuthorizationRevocationAttempt.Pending) return Result.retry()
+            }
             val validated = SyncWorkerDependencies.validatedInternet?.invoke(applicationContext) ?: run {
                 val connectivity = applicationContext.getSystemService(ConnectivityManager::class.java)
                 val activeNetwork = connectivity?.activeNetwork

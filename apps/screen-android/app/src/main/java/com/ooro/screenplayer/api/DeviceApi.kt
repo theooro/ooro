@@ -54,7 +54,7 @@ internal fun classifyNetworkFailure(error: Throwable): DeviceFailureKind {
     }
 }
 
-interface DeviceApi { suspend fun health(); suspend fun pair(request: PairRequest): PairResponse; suspend fun manifest(credentials: DeviceCredentials, correlationId: String? = null): DeviceManifest; suspend fun heartbeat(credentials: DeviceCredentials, status: PlayerStatus, manifestVersion: Long, telemetry: HeartbeatTelemetry = HeartbeatTelemetry()); suspend fun uploadProof(credentials: DeviceCredentials, events: List<ProofOfPlay>): ProofUploadResult; suspend fun pendingCommands(credentials: DeviceCredentials): List<DeviceCommand> = emptyList(); suspend fun acknowledgeCommand(credentials: DeviceCredentials, result: CommandResult) {}; suspend fun unpair(credentials: DeviceCredentials) }
+interface DeviceApi { suspend fun health(); suspend fun pair(request: PairRequest): PairResponse; suspend fun manifest(credentials: DeviceCredentials, correlationId: String? = null): DeviceManifest; suspend fun heartbeat(credentials: DeviceCredentials, status: PlayerStatus, manifestVersion: Long, telemetry: HeartbeatTelemetry = HeartbeatTelemetry()); suspend fun uploadProof(credentials: DeviceCredentials, events: List<ProofOfPlay>): ProofUploadResult; suspend fun pendingCommands(credentials: DeviceCredentials): List<DeviceCommand> = emptyList(); suspend fun acknowledgeCommand(credentials: DeviceCredentials, result: CommandResult) {}; suspend fun reportPairingFailure(credentials: DeviceCredentials, failureStage: String, exceptionClass: String?, sqliteCode: Int?) {}; suspend fun unpair(credentials: DeviceCredentials) }
 
 class MockDeviceApi : DeviceApi {
     override suspend fun health() = Unit
@@ -143,6 +143,13 @@ class HttpDeviceApi(private val baseUrl: String) : DeviceApi {
     override suspend fun pendingCommands(credentials: DeviceCredentials): List<DeviceCommand> { val root = JSONObject(request("/api/device/commands", "GET", credentials.token)); val values = root.optJSONArray("data") ?: root.optJSONArray("commands") ?: org.json.JSONArray(); return (0 until values.length()).map { val j = values.getJSONObject(it); val expiresAt = j.optString("expiresAt").takeIf { value -> value.isNotBlank() && value != "null" }?.let(Instant::parse); DeviceCommand(j.getString("id"), j.getString("commandType"), j.optJSONObject("payload"), expiresAt) } }
     override suspend fun acknowledgeCommand(credentials: DeviceCredentials, result: CommandResult) { request("/api/device/commands/${result.commandId}/ack", "POST", credentials.token, JSONObject().put("status", result.status).put("receivedAt", result.receivedAt.toString()).put("startedAt", result.startedAt?.toString()).put("completedAt", result.completedAt?.toString()).put("errorCode", result.errorCode).put("errorMessage", result.errorMessage).toString()) }
     override suspend fun unpair(credentials: DeviceCredentials) { request("/api/device/unpair", "POST", credentials.token) }
+    override suspend fun reportPairingFailure(credentials: DeviceCredentials, failureStage: String, exceptionClass: String?, sqliteCode: Int?) {
+        require(failureStage.matches(Regex("[A-Z_]{1,48}")))
+        val payload = JSONObject().put("failureStage", failureStage)
+        exceptionClass?.takeIf { it.matches(Regex("[A-Za-z][A-Za-z0-9]{0,79}")) }?.let { payload.put("exceptionClass", it) }
+        sqliteCode?.takeIf { it in 0..255 }?.let { payload.put("sqliteCode", it) }
+        request("/api/device/pairing-failed", "POST", credentials.token, payload.toString())
+    }
     private fun PairRequest.toJson() = JSONObject().put("pairingCode", pairingCode).put("deviceId", deviceId).put("manufacturer", manufacturer).put("model", model).put("androidVersion", androidVersion).put("appVersion", BuildConfig.VERSION_NAME).toString()
 }
 

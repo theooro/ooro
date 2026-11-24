@@ -131,6 +131,42 @@ class OfflinePersistenceIntegrationTest {
         assertEquals(listOf("queued-before-unpair"), database.proofDao().pending(10).map { it.eventId })
     }
 
+    @Test fun failedAuthorizationCleanupRetainsCredentialAndProofAndStartupRetryFailsClosed() = runBlocking {
+        val database = open()
+        val preferencesName = "recovery-${System.nanoTime()}"
+        val testCipher = object : CredentialCipherPort { override fun encrypt(value: String) = value; override fun decrypt(value: String) = value }
+        val store = DeviceStore(context, preferencesName, testCipher)
+        val credentialsReturnedByPair = DeviceCredentials("device-recovery", "screen-new", "workspace", "sensitive-token-not-logged", "Recovery")
+        store.save(credentialsReturnedByPair)
+        assertTrue(store.beginAuthorizationRevocation())
+        val lease = requireNotNull(issueOfflineAuthorization("screen-old", Instant.parse("2026-01-01T00:00:00Z"), Instant.parse("2026-01-01T00:10:00Z"), Instant.parse("2026-01-01T00:00:01Z"), 10_000L, 7))
+        val manifest = DeviceManifest(7, "screen-old", "Asia/Kolkata", emptyList(), Instant.parse("2026-01-01T00:10:00Z"))
+        database.manifestDao().put(ManifestEntity(version = 7, timezone = manifest.timezone, validUntil = manifest.validUntil.toString(), json = ManifestCodec.encode(manifest), authorizationReceivedElapsedMillis = lease.receivedElapsedMillis, authorizationBootCount = lease.bootCount, authorizationDurationMillis = lease.durationMillis, authorizationScreenId = lease.screenId, authorizationServerTimeUtcMillis = lease.serverTimeUtcMillis))
+        database.proofDao().add(ProofEntity("queued-recovery-proof", "{}"))
+        database.openHelper.writableDatabase.execSQL("CREATE TRIGGER reject_authorization_cleanup BEFORE UPDATE OF authorizationReceivedElapsedMillis ON campaign_manifest BEGIN SELECT RAISE(ABORT, 'injected cleanup'); END")
+
+        val failed = retryAuthorizationRevocation(store) { database.manifestDao().invalidateAuthorization() }
+        assertTrue(failed is AuthorizationRevocationAttempt.Pending)
+        assertEquals(credentialsReturnedByPair, store.credentials())
+        assertTrue(store.authorizationRevocationPending())
+        assertFalse(cachedAuthorizationMayBeUsed(store.authorizationRevocationPending(), 10_000L))
+        assertEquals("queued-recovery-proof", database.proofDao().pending(10).single().eventId)
+        assertTrue(store.authorizationRevocationFailure().orEmpty().contains("SQLiteConstraintException"))
+        assertTrue(store.authorizationRevocationFailure().orEmpty().contains("SQLite code 19"))
+        assertFalse(store.authorizationRevocationFailure().orEmpty().contains(credentialsReturnedByPair.token))
+
+        database.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_authorization_cleanup")
+        database.close(); db = null
+        val reopenedDatabase = open()
+        val restartedStore = DeviceStore(context, preferencesName, testCipher)
+        assertTrue(restartedStore.authorizationRevocationPending())
+        assertEquals(credentialsReturnedByPair, restartedStore.credentials())
+        assertEquals(AuthorizationRevocationAttempt.Cleared, retryAuthorizationRevocation(restartedStore) { reopenedDatabase.manifestDao().invalidateAuthorization() })
+        assertFalse(restartedStore.authorizationRevocationPending())
+        assertNull(reopenedDatabase.manifestDao().active()?.authorizationScreenId)
+        assertEquals("queued-recovery-proof", reopenedDatabase.proofDao().pending(10).single().eventId)
+    }
+
     @Test fun corruptChecksumNamedLegacyAssetFailsClosedAndIsNotCopiedToItemPath() = runBlocking {
         val isolatedFilesDir = File(context.cacheDir, "legacy-corrupt-${System.nanoTime()}").also { it.mkdirs() }
         val isolatedContext = object : ContextWrapper(context) { override fun getFilesDir() = isolatedFilesDir }

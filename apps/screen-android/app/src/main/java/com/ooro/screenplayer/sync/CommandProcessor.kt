@@ -12,6 +12,8 @@ import com.ooro.screenplayer.recordManifestSync
 import com.ooro.screenplayer.api.CommandResult
 import com.ooro.screenplayer.api.DeviceApi
 import com.ooro.screenplayer.data.DeviceStore
+import com.ooro.screenplayer.data.AuthorizationRevocationAttempt
+import com.ooro.screenplayer.data.retryAuthorizationRevocation
 import com.ooro.screenplayer.data.ManifestEntity
 import com.ooro.screenplayer.data.OoroDatabase
 import com.ooro.screenplayer.model.DeviceCredentials
@@ -190,10 +192,12 @@ class CommandProcessor(private val context: Context, private val api: DeviceApi,
     private suspend fun acknowledge(credentials: DeviceCredentials, receipt: CommandReceipt, result: CommandResult) {
         try {
             if (receipt.commandType == "UNPAIR" && result.status == "SUCCEEDED") UnpairPendingBus.request()
+            if (receipt.commandType == "UNPAIR" && result.status == "SUCCEEDED" && !store.authorizationRevocationPending() && !store.beginAuthorizationRevocation()) throw IllegalStateException("authorization revocation marker could not be persisted")
             api.acknowledgeCommand(credentials, result)
             receipts.put(receipt.copy(phase = CommandReceiptPhase.ACKED, result = result, updatedAt = System.currentTimeMillis()))
             if (receipt.commandType == "UNPAIR" && result.status == "SUCCEEDED") {
-                invalidateAuthorizationAfterConfirmedUnpair()
+                val cleanup = retryAuthorizationRevocation(store) { OoroDatabase.get(context).manifestDao().invalidateAuthorization() }
+                if (cleanup is AuthorizationRevocationAttempt.Pending) Log.w("OoroScreen", "unpair acknowledged; cached authorization remains blocked until cleanup succeeds")
                 store.clear()
                 ManifestRefreshBus.request()
             }
@@ -250,7 +254,8 @@ class CommandProcessor(private val context: Context, private val api: DeviceApi,
     }
 
     private suspend fun invalidateAuthorizationAfterConfirmedUnpair() {
-        OoroDatabase.get(context).manifestDao().invalidateAuthorization()
+        if (!store.authorizationRevocationPending() && !store.beginAuthorizationRevocation()) return
+        retryAuthorizationRevocation(store) { OoroDatabase.get(context).manifestDao().invalidateAuthorization() }
     }
 
     companion object { private val processingMutex = Mutex() }
