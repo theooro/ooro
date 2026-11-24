@@ -7,6 +7,7 @@ import com.ooro.screenplayer.api.ApiProvider
 import com.ooro.screenplayer.api.DeviceApi
 import com.ooro.screenplayer.model.DeviceCredentials
 import com.ooro.screenplayer.BuildConfig
+import com.ooro.screenplayer.ManifestRefreshBus
 import com.ooro.screenplayer.data.DeviceStore
 import com.ooro.screenplayer.model.PlayerStatus
 import com.ooro.screenplayer.data.OoroDatabase
@@ -76,15 +77,19 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         val attempt = runAttemptCount
         Log.i("OoroScreen", "proof worker started attempt=$attempt")
         val store = DeviceStore(applicationContext)
-        val credentials = (SyncWorkerDependencies.credentials?.invoke(applicationContext) ?: store.credentials()) ?: run {
-            Log.w("OoroScreen", "proof worker skipped credentials unavailable attempt=$attempt")
-            return Result.success()
-        }
-        val db = SyncWorkerDependencies.database?.invoke(applicationContext) ?: OoroDatabase.get(applicationContext)
         return try {
+            val db = SyncWorkerDependencies.database?.invoke(applicationContext) ?: OoroDatabase.get(applicationContext)
             if (store.authorizationRevocationPending()) {
                 val cleanup = retryAuthorizationRevocation(store) { db.manifestDao().invalidateAuthorization() }
                 if (cleanup is AuthorizationRevocationAttempt.Pending) return Result.retry()
+                if (cleanup is AuthorizationRevocationAttempt.Cleared) {
+                    Log.i("OoroScreen", "authorization cleanup completed; refreshing local screen state")
+                    ManifestRefreshBus.request()
+                }
+            }
+            val credentials = (SyncWorkerDependencies.credentials?.invoke(applicationContext) ?: store.credentials()) ?: run {
+                Log.w("OoroScreen", "proof worker skipped credentials unavailable attempt=$attempt")
+                return Result.success()
             }
             val validated = SyncWorkerDependencies.validatedInternet?.invoke(applicationContext) ?: run {
                 val connectivity = applicationContext.getSystemService(ConnectivityManager::class.java)

@@ -67,7 +67,7 @@ internal fun ensureDeliveryQuotaTables(db: androidx.sqlite.db.SupportSQLiteDatab
     db.execSQL("CREATE INDEX IF NOT EXISTS index_quota_consumption_grantId_revision ON quota_consumption (grantId, revision)")
 }
 
-@Database(entities = [ManifestEntity::class, ProofEntity::class, ErrorEntity::class, DeliveryQuotaEntity::class, QuotaConsumptionEntity::class], version = 5, exportSchema = false)
+@Database(entities = [ManifestEntity::class, ProofEntity::class, ErrorEntity::class, DeliveryQuotaEntity::class, QuotaConsumptionEntity::class], version = 6, exportSchema = false)
 abstract class OoroDatabase : RoomDatabase() { abstract fun manifestDao(): ManifestDao; abstract fun proofDao(): ProofDao; abstract fun errorDao(): ErrorDao; abstract fun deliveryQuotaDao(): DeliveryQuotaDao
     companion object {
         internal val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
@@ -95,10 +95,18 @@ abstract class OoroDatabase : RoomDatabase() { abstract fun manifestDao(): Manif
                 db.execSQL("ALTER TABLE proof_of_play ADD COLUMN quarantined INTEGER NOT NULL DEFAULT 0")
             }
         }
+        /** Re-stamp databases created by schema-version 5 builds whose Room identity hash drifted. */
+        internal val MIGRATION_5_6 = object : androidx.room.migration.Migration(5, 6) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                // Keep the upgrade additive and idempotent. Room validates the existing entity schema
+                // and writes the current identity hash only after this migration succeeds.
+                ensureDeliveryQuotaTables(db)
+            }
+        }
         @Volatile private var instance: OoroDatabase? = null
         fun get(context: Context) = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context, OoroDatabase::class.java, "ooro.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build().also { instance = it }
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build().also { instance = it }
         }
     }
 }

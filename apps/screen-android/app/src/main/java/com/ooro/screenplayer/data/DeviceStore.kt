@@ -39,8 +39,8 @@ class DeviceStore internal constructor(context: Context, preferencesName: String
     fun authorizationRevocationPending(): Boolean = prefs.getBoolean(KEY_AUTHORIZATION_REVOCATION_PENDING, false)
     fun completeAuthorizationRevocation(): Boolean = prefs.edit().putBoolean(KEY_AUTHORIZATION_REVOCATION_PENDING, false).remove(KEY_AUTHORIZATION_REVOCATION_FAILURE).commit()
     fun authorizationRevocationFailure(): String? = prefs.getString(KEY_AUTHORIZATION_REVOCATION_FAILURE, null)
-    fun recordAuthorizationRevocationFailure(error: Throwable): String {
-        val safe = safeAuthorizationRevocationFailure(error)
+    internal fun recordAuthorizationRevocationFailure(error: Throwable, stage: AuthorizationCleanupStage): String {
+        val safe = safeAuthorizationRevocationFailure(error, stage, safeAuthorizationFailureOrigin(error))
         prefs.edit().putString(KEY_AUTHORIZATION_REVOCATION_FAILURE, safe).commit()
         return safe
     }
@@ -56,15 +56,27 @@ class DeviceStore internal constructor(context: Context, preferencesName: String
     }
 }
 
-internal data class AuthorizationRevocationFailure(val exceptionClass: String, val sqliteCode: Int?) {
-    val safeMessage get() = if (sqliteCode == null) "Authorization cleanup pending ($exceptionClass)." else "Authorization cleanup pending ($exceptionClass, SQLite code $sqliteCode)."
+internal enum class AuthorizationCleanupStage { ROOM_INVALIDATE, REVOCATION_MARKER_CLEAR }
+
+internal data class AuthorizationRevocationFailure(val exceptionClass: String, val sqliteCode: Int?, val stage: AuthorizationCleanupStage, val origin: String) {
+    val safeMessage get() = if (sqliteCode == null) "Authorization cleanup pending [${stage.name}] ($exceptionClass; origin=$origin)." else "Authorization cleanup pending [${stage.name}] ($exceptionClass, SQLite code $sqliteCode; origin=$origin)."
 }
 
-internal fun safeAuthorizationRevocationFailure(error: Throwable): String {
+internal fun safeAuthorizationFailureOrigin(error: Throwable): String {
+    val frame = error.stackTrace.firstOrNull {
+        it.className.startsWith("androidx.room.") || it.className.startsWith("androidx.sqlite.") || it.className.startsWith("android.database.")
+    } ?: error.stackTrace.firstOrNull { it.className.startsWith("com.ooro.screenplayer.data.") }
+    if (frame == null) return "unknown"
+    val className = frame.className.substringAfterLast('.')
+    return "$className#${frame.methodName}"
+}
+
+internal fun safeAuthorizationRevocationFailure(error: Throwable, stage: AuthorizationCleanupStage, origin: String): String {
     val sqlite = generateSequence(error) { it.cause }.firstOrNull { it is SQLiteException }
     val name = (sqlite ?: error).javaClass.simpleName.takeIf { it.matches(Regex("[A-Za-z][A-Za-z0-9]{0,79}")) } ?: "UnknownDatabaseFailure"
     val code = sqlite?.let(::sqliteFailureCode)
-    return AuthorizationRevocationFailure(name, code).safeMessage
+    val safeOrigin = origin.takeIf { it.matches(Regex("[A-Za-z0-9_.$#]{1,160}")) } ?: "unknown"
+    return AuthorizationRevocationFailure(name, code, stage, safeOrigin).safeMessage
 }
 
 private fun sqliteFailureCode(error: Throwable): Int? = when (error) {

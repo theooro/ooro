@@ -15,6 +15,9 @@ import com.ooro.screenplayer.repository.ProofOfPlayRepository
 import com.ooro.screenplayer.sync.SyncWorker
 import com.ooro.screenplayer.sync.SyncWorkerDependencies
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.flow.first
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Test
@@ -53,15 +56,50 @@ class OfflinePersistenceIntegrationTest {
         legacy.close()
 
         val migrated = Room.databaseBuilder(context, OoroDatabase::class.java, name)
-            .addMigrations(OoroDatabase.MIGRATION_1_2, OoroDatabase.MIGRATION_2_3, OoroDatabase.MIGRATION_3_4, OoroDatabase.MIGRATION_4_5)
+            .addMigrations(OoroDatabase.MIGRATION_1_2, OoroDatabase.MIGRATION_2_3, OoroDatabase.MIGRATION_3_4, OoroDatabase.MIGRATION_4_5, OoroDatabase.MIGRATION_5_6)
             .allowMainThreadQueries().build()
         db = migrated
         migrated.openHelper.writableDatabase
 
-        assertEquals(5, migrated.openHelper.readableDatabase.version)
+        assertEquals(6, migrated.openHelper.readableDatabase.version)
         assertEquals(17L, migrated.manifestDao().active()?.version)
         assertEquals(1, migrated.proofDao().pendingCount())
         assertTrue(migrated.deliveryQuotaDao().all().isEmpty())
+    }
+
+    @Test fun staleVersionFiveRoomIdentityMigratesAndAllowsAuthorizationCleanupWithoutDataLoss() = runBlocking {
+        val databaseFile = context.getDatabasePath(name).also { it.parentFile?.mkdirs() }
+        val legacy = SQLiteDatabase.openOrCreateDatabase(databaseFile, null)
+        legacy.execSQL("CREATE TABLE campaign_manifest (id TEXT NOT NULL PRIMARY KEY, version INTEGER NOT NULL, timezone TEXT NOT NULL, validUntil TEXT, json TEXT NOT NULL, authorizationReceivedElapsedMillis INTEGER, authorizationBootCount INTEGER, authorizationDurationMillis INTEGER, authorizationScreenId TEXT, authorizationServerTimeUtcMillis INTEGER)")
+        legacy.execSQL("CREATE TABLE proof_of_play (eventId TEXT NOT NULL PRIMARY KEY, payload TEXT NOT NULL, synced INTEGER NOT NULL, createdAt INTEGER NOT NULL, quarantined INTEGER NOT NULL DEFAULT 0)")
+        legacy.execSQL("CREATE TABLE app_error (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, message TEXT NOT NULL, createdAt INTEGER NOT NULL)")
+        legacy.execSQL("CREATE TABLE delivery_quota (grantId TEXT NOT NULL PRIMARY KEY, campaignId TEXT NOT NULL, revision INTEGER NOT NULL, remainingPlays INTEGER, unlimited INTEGER NOT NULL)")
+        legacy.execSQL("CREATE TABLE quota_consumption (eventId TEXT NOT NULL PRIMARY KEY, grantId TEXT NOT NULL, revision INTEGER NOT NULL, consumedAt INTEGER NOT NULL)")
+        legacy.execSQL("CREATE INDEX index_quota_consumption_grantId_revision ON quota_consumption (grantId, revision)")
+        legacy.execSQL("CREATE TABLE room_master_table (id INTEGER PRIMARY KEY, identity_hash TEXT)")
+        legacy.execSQL("INSERT INTO room_master_table (id, identity_hash) VALUES (42, 'stale-version-five-identity')")
+        legacy.execSQL("INSERT INTO campaign_manifest (id, version, timezone, validUntil, json, authorizationReceivedElapsedMillis, authorizationBootCount, authorizationDurationMillis, authorizationScreenId, authorizationServerTimeUtcMillis) VALUES ('active', 12, 'Asia/Kolkata', '2026-12-01T00:00:00Z', '{}', 100, 7, 900000, 'screen-preserved', 1700000000000)")
+        legacy.execSQL("INSERT INTO proof_of_play (eventId, payload, synced, createdAt, quarantined) VALUES ('proof-preserved', '{}', 0, 1, 0)")
+        legacy.version = 5
+        legacy.close()
+
+        val migrated = Room.databaseBuilder(context, OoroDatabase::class.java, name)
+            .addMigrations(OoroDatabase.MIGRATION_1_2, OoroDatabase.MIGRATION_2_3, OoroDatabase.MIGRATION_3_4, OoroDatabase.MIGRATION_4_5, OoroDatabase.MIGRATION_5_6)
+            .allowMainThreadQueries().build()
+        db = migrated
+        val opened = migrated.openHelper.writableDatabase
+
+        assertEquals(6, opened.version)
+        assertNotEquals("stale-version-five-identity", opened.query("SELECT identity_hash FROM room_master_table WHERE id = 42").use { cursor -> cursor.moveToFirst(); cursor.getString(0) })
+        assertEquals(12L, migrated.manifestDao().active()?.version)
+        assertEquals("screen-preserved", migrated.manifestDao().active()?.authorizationScreenId)
+        assertEquals(1, migrated.proofDao().pendingCount())
+        migrated.manifestDao().invalidateAuthorization()
+        val manifest = migrated.manifestDao().active()!!
+        assertNull(manifest.authorizationScreenId)
+        assertNull(manifest.authorizationReceivedElapsedMillis)
+        assertEquals("{}", manifest.json)
+        assertEquals(1, migrated.proofDao().pendingCount())
     }
 
     @Test fun checksumNamedLegacyAssetsAreVerifiedAndReusedWithoutNetworkOrCopy() = runBlocking {
@@ -153,6 +191,8 @@ class OfflinePersistenceIntegrationTest {
         assertEquals("queued-recovery-proof", database.proofDao().pending(10).single().eventId)
         assertTrue(store.authorizationRevocationFailure().orEmpty().contains("SQLiteConstraintException"))
         assertTrue(store.authorizationRevocationFailure().orEmpty().contains("SQLite code 19"))
+        assertTrue(store.authorizationRevocationFailure().orEmpty().contains("[ROOM_INVALIDATE]"))
+        assertTrue(store.authorizationRevocationFailure().orEmpty().contains("origin="))
         assertFalse(store.authorizationRevocationFailure().orEmpty().contains(credentialsReturnedByPair.token))
 
         database.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_authorization_cleanup")
@@ -418,6 +458,50 @@ class OfflinePersistenceIntegrationTest {
         SyncWorkerDependencies.database = { reopened }
         assertEquals(androidx.work.ListenableWorker.Result.success(), TestListenableWorkerBuilder<SyncWorker>(context).build().doWork())
         assertEquals(0, reopened.proofDao().pendingCount())
+    }
+
+    @Test fun workerRetriesPendingAuthorizationCleanupBeforeCheckingPairingCredentials() = runBlocking {
+        val database = open()
+        val store = DeviceStore(context)
+        store.clear()
+        assertTrue(store.beginAuthorizationRevocation())
+        val serverNow = Instant.now().toEpochMilli()
+        database.manifestDao().put(ManifestEntity(
+            version = 4,
+            timezone = "Asia/Kolkata",
+            validUntil = Instant.now().plusSeconds(900).toString(),
+            json = "{}",
+            authorizationReceivedElapsedMillis = 100L,
+            authorizationBootCount = 1,
+            authorizationDurationMillis = 900_000L,
+            authorizationScreenId = "old-screen",
+            authorizationServerTimeUtcMillis = serverNow,
+        ))
+        database.proofDao().add(ProofEntity("queued-proof", "{}"))
+        database.openHelper.writableDatabase.execSQL("CREATE TRIGGER fail_authorization_cleanup BEFORE UPDATE ON campaign_manifest BEGIN SELECT RAISE(ABORT, 'injected cleanup failure'); END")
+        SyncWorkerDependencies.database = { database }
+
+        val failedAttempt = TestListenableWorkerBuilder<SyncWorker>(context).build().doWork()
+
+        assertEquals(androidx.work.ListenableWorker.Result.retry(), failedAttempt)
+        assertTrue("failed local cleanup must retain its marker", store.authorizationRevocationPending())
+        assertTrue(store.authorizationRevocationFailure().orEmpty().contains("[ROOM_INVALIDATE]"))
+        assertEquals(1, database.proofDao().pendingCount())
+        database.openHelper.writableDatabase.execSQL("DROP TRIGGER fail_authorization_cleanup")
+        val stateRefresh = async(start = CoroutineStart.UNDISPATCHED) { ManifestRefreshBus.events.first() }
+
+        val result = TestListenableWorkerBuilder<SyncWorker>(context).build().doWork()
+
+        assertEquals(androidx.work.ListenableWorker.Result.success(), result)
+        assertFalse("cleanup marker must clear without credentials", store.authorizationRevocationPending())
+        val manifest = database.manifestDao().active()!!
+        assertNull(manifest.authorizationReceivedElapsedMillis)
+        assertNull(manifest.authorizationBootCount)
+        assertNull(manifest.authorizationDurationMillis)
+        assertNull(manifest.authorizationScreenId)
+        assertNull(manifest.authorizationServerTimeUtcMillis)
+        assertEquals(1, database.proofDao().pendingCount())
+        stateRefresh.await()
     }
 
     @Test fun failedUploadSurvivesWorkerRecreationAndRetriesWithSameEventId() = runBlocking {
