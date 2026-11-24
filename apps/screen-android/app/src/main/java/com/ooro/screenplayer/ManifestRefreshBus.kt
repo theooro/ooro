@@ -8,3 +8,9 @@ object ManifestRefreshBus {
     val events = _events.asSharedFlow()
     fun request() { _events.tryEmit(Unit) }
 }
+
+object UnpairPendingBus {
+    private val _events = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val events = _events.asSharedFlow()
+    fun request() { _events.tryEmit(Unit) }
+}

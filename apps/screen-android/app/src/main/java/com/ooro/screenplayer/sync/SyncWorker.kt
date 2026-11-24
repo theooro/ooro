@@ -16,6 +16,8 @@ import com.ooro.screenplayer.acknowledgedProofEventIds
 import org.json.JSONObject
 import java.time.Instant
 import android.util.Log
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import com.ooro.screenplayer.location.LocationReporter
 import androidx.work.Constraints
 import androidx.room.withTransaction
@@ -31,7 +33,8 @@ internal object SyncWorkerDependencies {
     var credentials: ((Context) -> DeviceCredentials?)? = null
     var database: ((Context) -> OoroDatabase)? = null
     var api: ((Context, DeviceStore) -> DeviceApi)? = null
-    fun reset() { credentials = null; database = null; api = null }
+    var validatedInternet: ((Context) -> Boolean)? = null
+    fun reset() { credentials = null; database = null; api = null; validatedInternet = null }
 }
 
 object ProofSyncScheduler {
@@ -77,6 +80,15 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         }
         val db = SyncWorkerDependencies.database?.invoke(applicationContext) ?: OoroDatabase.get(applicationContext)
         return try {
+            val validated = SyncWorkerDependencies.validatedInternet?.invoke(applicationContext) ?: run {
+                val connectivity = applicationContext.getSystemService(ConnectivityManager::class.java)
+                val activeNetwork = connectivity?.activeNetwork
+                activeNetwork?.let { network -> connectivity.getNetworkCapabilities(network)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) } == true
+            }
+            if (!validated) {
+                Log.i("OoroScreen", "proof worker deferred; Android has no validated internet attempt=$attempt")
+                return Result.retry()
+            }
             val api = SyncWorkerDependencies.api?.invoke(applicationContext, store) ?: ApiProvider(store).api
             val pendingCount = db.proofDao().pendingCount()
             if (!shouldRunWorkerNetworkCheck(inputData.getBoolean(SCHEDULED_HEARTBEAT, false), pendingCount)) {
@@ -102,8 +114,8 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                 if (staleRows.isNotEmpty()) {
                     staleBatches++
                     staleCount += staleRows.size
-                    db.proofDao().delete(staleRows.map { it.eventId })
-                    Log.w("OoroScreen", "proof worker quarantined stale rows=${staleRows.size} expectedScreen=${credentials.screenId} expectedDevice=${credentials.deviceId}")
+                    db.proofDao().quarantine(staleRows.map { it.eventId })
+                    Log.w("OoroScreen", "proof worker retained stale history in quarantine rows=${staleRows.size} expectedScreen=${credentials.screenId} expectedDevice=${credentials.deviceId}")
                 }
                 uploadRows = batch.uploadRows
                 if (uploadRows.isEmpty()) {

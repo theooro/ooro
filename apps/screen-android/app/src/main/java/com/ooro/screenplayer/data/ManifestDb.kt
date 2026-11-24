@@ -4,13 +4,19 @@ import android.content.Context
 import androidx.room.*
 
 @Entity(tableName = "campaign_manifest") data class ManifestEntity(@PrimaryKey val id: String = "active", val version: Long, val timezone: String, val validUntil: String?, val json: String, val authorizationReceivedElapsedMillis: Long? = null, val authorizationBootCount: Int? = null, val authorizationDurationMillis: Long? = null, val authorizationScreenId: String? = null, val authorizationServerTimeUtcMillis: Long? = null)
-@Entity(tableName = "proof_of_play") data class ProofEntity(@PrimaryKey val eventId: String, val payload: String, val synced: Boolean = false, val createdAt: Long = System.currentTimeMillis())
+@Entity(tableName = "proof_of_play") data class ProofEntity(@PrimaryKey val eventId: String, val payload: String, val synced: Boolean = false, val createdAt: Long = System.currentTimeMillis(), @ColumnInfo(defaultValue = "0") val quarantined: Boolean = false)
 @Entity(tableName = "app_error") data class ErrorEntity(@PrimaryKey(autoGenerate = true) val id: Long = 0, val message: String, val createdAt: Long = System.currentTimeMillis())
 @Entity(tableName = "delivery_quota") data class DeliveryQuotaEntity(@PrimaryKey val grantId: String, val campaignId: String, val revision: Int, val remainingPlays: Int?, val unlimited: Boolean)
 @Entity(tableName = "quota_consumption", indices = [Index(value = ["grantId", "revision"])]) data class QuotaConsumptionEntity(@PrimaryKey val eventId: String, val grantId: String, val revision: Int, val consumedAt: Long = System.currentTimeMillis())
 
-@Dao interface ManifestDao { @Query("SELECT * FROM campaign_manifest WHERE id = 'active' LIMIT 1") suspend fun active(): ManifestEntity?; @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun put(entity: ManifestEntity) }
-@Dao interface ProofDao { @Query("SELECT * FROM proof_of_play WHERE synced = 0 ORDER BY createdAt LIMIT :limit") suspend fun pending(limit: Int): List<ProofEntity>; @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun add(entity: ProofEntity); @Query("DELETE FROM proof_of_play WHERE eventId IN (:ids)") suspend fun delete(ids: List<String>); @Query("SELECT COUNT(*) FROM proof_of_play WHERE synced = 0") suspend fun pendingCount(): Int }
+@Dao interface ManifestDao {
+    @Query("SELECT * FROM campaign_manifest WHERE id = 'active' LIMIT 1") suspend fun active(): ManifestEntity?
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun put(entity: ManifestEntity)
+    /** Revoke identity-bound authorization while preserving the cached manifest and assets. */
+    @Query("UPDATE campaign_manifest SET authorizationReceivedElapsedMillis = NULL, authorizationBootCount = NULL, authorizationDurationMillis = NULL, authorizationScreenId = NULL, authorizationServerTimeUtcMillis = NULL WHERE id = 'active'")
+    suspend fun invalidateAuthorization()
+}
+@Dao interface ProofDao { @Query("SELECT * FROM proof_of_play WHERE synced = 0 AND quarantined = 0 ORDER BY createdAt LIMIT :limit") suspend fun pending(limit: Int): List<ProofEntity>; @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun add(entity: ProofEntity); @Query("DELETE FROM proof_of_play WHERE eventId IN (:ids)") suspend fun delete(ids: List<String>); @Query("UPDATE proof_of_play SET quarantined = 1 WHERE eventId IN (:ids)") suspend fun quarantine(ids: List<String>); @Query("SELECT * FROM proof_of_play ORDER BY createdAt") suspend fun history(): List<ProofEntity>; @Query("SELECT COUNT(*) FROM proof_of_play WHERE synced = 0 AND quarantined = 0") suspend fun pendingCount(): Int }
 @Dao interface ErrorDao {
     @Insert suspend fun add(entity: ErrorEntity)
     @Query("SELECT message FROM app_error ORDER BY createdAt DESC LIMIT :limit") suspend fun recent(limit: Int): List<String>
@@ -61,7 +67,7 @@ internal fun ensureDeliveryQuotaTables(db: androidx.sqlite.db.SupportSQLiteDatab
     db.execSQL("CREATE INDEX IF NOT EXISTS index_quota_consumption_grantId_revision ON quota_consumption (grantId, revision)")
 }
 
-@Database(entities = [ManifestEntity::class, ProofEntity::class, ErrorEntity::class, DeliveryQuotaEntity::class, QuotaConsumptionEntity::class], version = 4, exportSchema = false)
+@Database(entities = [ManifestEntity::class, ProofEntity::class, ErrorEntity::class, DeliveryQuotaEntity::class, QuotaConsumptionEntity::class], version = 5, exportSchema = false)
 abstract class OoroDatabase : RoomDatabase() { abstract fun manifestDao(): ManifestDao; abstract fun proofDao(): ProofDao; abstract fun errorDao(): ErrorDao; abstract fun deliveryQuotaDao(): DeliveryQuotaDao
     companion object {
         internal val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
@@ -84,10 +90,15 @@ abstract class OoroDatabase : RoomDatabase() { abstract fun manifestDao(): Manif
                 db.execSQL("ALTER TABLE campaign_manifest ADD COLUMN authorizationServerTimeUtcMillis INTEGER")
             }
         }
+        internal val MIGRATION_4_5 = object : androidx.room.migration.Migration(4, 5) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE proof_of_play ADD COLUMN quarantined INTEGER NOT NULL DEFAULT 0")
+            }
+        }
         @Volatile private var instance: OoroDatabase? = null
         fun get(context: Context) = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context, OoroDatabase::class.java, "ooro.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().also { instance = it }
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build().also { instance = it }
         }
     }
 }

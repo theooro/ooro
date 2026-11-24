@@ -134,6 +134,7 @@ class OfflinePlaybackRulesTest {
             trustedTimeUnavailableMessage(lease, "screen-test", 500L, 9),
         )
         assertTrue(trustedTimeUnavailableMessage(null, "screen-test", 500L, 9).contains("no authenticated schedule-time anchor"))
+        assertTrue(trustedTimeUnavailableMessage(null, null, 500L, 9).contains("unpaired"))
     }
 
     @Test fun campaignDatesAreInclusiveByCalendarDayAndExclusiveAtNextMidnight() {
@@ -151,6 +152,32 @@ class OfflinePlaybackRulesTest {
         assertEquals(creative.id, scheduler.next(manifest(listOf(creative)), start, 0, eligibleIds)?.id)
         assertEquals(creative.id, scheduler.next(manifest(listOf(creative)), end.minusNanos(1), 0, eligibleIds)?.id)
         assertNull(scheduler.next(manifest(listOf(creative)), end, 0, eligibleIds))
+    }
+
+    @Test fun asiaKolkataStartAndEndCalendarDatesAreInclusive() {
+        val item = item("ist-window").copy(
+            startAt = Instant.parse("2026-11-04T18:30:00Z"), // 2026-11-05 00:00 Asia/Kolkata
+            endAt = Instant.parse("2026-11-06T18:30:00Z"), // exclusive next midnight after inclusive Nov 6
+        )
+        val scheduler = ScheduleEngine()
+        val cached = manifest(listOf(item))
+        val start = requireNotNull(item.startAt)
+        val end = requireNotNull(item.endAt)
+        assertNull(scheduler.next(cached, start.minusNanos(1), 0, setOf(item.id)))
+        assertEquals(item.id, scheduler.next(cached, start, 0, setOf(item.id))?.id)
+        assertEquals(item.id, scheduler.next(cached, end.minusNanos(1), 0, setOf(item.id))?.id)
+        assertNull(scheduler.next(cached, end, 0, setOf(item.id)))
+    }
+
+    @Test fun cachedCreativeContinuesLoopingAfterPerPlayCounterIsExhaustedOnlyInOfflineMode() {
+        val exhausted = item("cached-loop").copy(deliveryQuota = com.ooro.screenplayer.model.DeliveryQuota("grant", 2, 0, false))
+        val cached = manifest(listOf(exhausted))
+        val scheduler = ScheduleEngine()
+        assertNull(scheduler.next(cached, now, 0, setOf(exhausted.id)))
+        assertEquals(exhausted.id, nextVerifiedCachedItem(cached, scheduler, now, 0, setOf(exhausted.id))?.id)
+        assertNull(nextVerifiedCachedItem(cached, scheduler, now.plusSeconds(2 * 86_400), 0, setOf(exhausted.id)))
+        assertNull(nextVerifiedCachedItem(cached, scheduler, now, 0, emptySet()))
+        assertNull(nextVerifiedCachedItem(cached, scheduler, now, 0, setOf(exhausted.id), allowExhaustedOfflineGrant = false))
     }
 
     @Test fun offlineLeaseFailsClosedForWrongScreenRebootRollbackMalformedOrOverlongWindow() {

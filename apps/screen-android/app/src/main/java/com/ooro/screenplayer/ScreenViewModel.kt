@@ -103,18 +103,22 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
     private val connectivityManager = context.getSystemService(ConnectivityManager::class.java)
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onLost(network: Network) {
+            online = false
+            lastNetworkRecoveryAt = 0L
             _validatedInternet.value = hasValidatedInternet()
             _cachedPlaybackAllowed.value = currentOfflineAuthorizationRemainingMillis() > 0L
         }
         override fun onAvailable(network: Network) {
             val validated = isValidated(network)
             _validatedInternet.value = validated
+            if (!validated) online = false
             if (!validated) return
             recoverNetworkNow()
         }
         override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
             val validated = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
             _validatedInternet.value = validated
+            if (!validated) online = false
             if (validated) recoverNetworkNow()
         }
     }
@@ -159,7 +163,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
                 val credentials = store.credentials()
                 if (credentials != null) {
                     val current = session
-                    runCatching {
+                    if (hasValidatedInternet()) runCatching {
                         api.heartbeat(credentials, if (current != null) PlayerStatus.PLAYING else PlayerStatus.READY,
                             db.manifestDao().active()?.version ?: 0,
                             withDeviceHealth(HeartbeatTelemetry(fix, current?.campaignId, current?.creativeId, current?.assetId,
@@ -179,7 +183,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
                         if (error is DeviceApiException && error.kind.requiresRepair()) showRecovery(error)
                         else { keepCachedPlayback(); scheduleReconnect() }
                     }
-                    runCatching { CommandProcessor(context, api, store).poll() }
+                    if (hasValidatedInternet()) runCatching { CommandProcessor(context, api, store).poll() }
                     delay(BuildConfig.SYNC_INTERVAL_SECONDS * 1_000L)
                 } else delay(90_000)
             }
@@ -241,9 +245,10 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
                             _diagnostic.value = "Playing authorized cached delivery · refreshing manifest when connected"
                             scheduleManifestRefresh(cached)
                         } else if (leaseRemaining <= 0L) _diagnostic.value = trustedTimeUnavailableDiagnostic()
-                        else if (startup.block == CachedStartupBlock.NO_ELIGIBLE_VERIFIED_ASSET) _diagnostic.value = offlineEmptyMessage(cached, Instant.now(), _verifiedAssetIds.value)
+                        else if (startup.block == CachedStartupBlock.NO_ELIGIBLE_VERIFIED_ASSET) _diagnostic.value = offlineEmptyMessage(cached, trustedNow, _verifiedAssetIds.value)
                     }
                 }
+                if (pairedScreenId == null) _diagnostic.value = "Screen is unpaired · pair this device to sync approved content."
             } catch (error: Exception) {
                 Log.e("OoroScreen", "cached startup restore failed; playlist unavailable", error)
                 _diagnostic.value = "Cached content could not be verified · reconnect to refresh approved content"
@@ -254,10 +259,21 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             }
             networkRecoveryReady = true
             if (store.credentials() != null) sync()
-            ManifestRefreshBus.events.collect { sync() }
+            ManifestRefreshBus.events.collect {
+                if (store.credentials() == null) clearInMemoryAuthorizationAfterUnpair() else sync()
+            }
+        }
+        viewModelScope.launch {
+            UnpairPendingBus.events.collect {
+                if (store.credentials() != null) {
+                    _cachedPlaybackAllowed.value = false
+                    _state.value = ScreenState.Setup("Unpair is pending · waiting for OORO to acknowledge. Keep this screen connected before pairing it again.", true)
+                    _diagnostic.value = "Unpair pending acknowledgment · the current screen identity remains stored until OORO confirms."
+                }
+            }
         }
     }
-    fun pair(rawCode: String) { if (_pairing.value) return; val code = rawCode.trim().uppercase(); if (code.isBlank()) { _state.value = ScreenState.Setup("Enter a pairing code", true); return }; _pairing.value = true; viewModelScope.launch { try { runCatching { api.health(); val result = api.pair(PairRequest(code,deviceId,android.os.Build.MANUFACTURER,android.os.Build.MODEL,android.os.Build.VERSION.RELEASE,BuildConfig.VERSION_NAME)); store.save(result.credentials); _pairedScreenId.value = result.credentials.screenId; repairMode = false; Log.i("OoroScreen", "pairing succeeded displayId=${result.credentials.screenId} tokenPresent=${result.credentials.token.isNotBlank()} paired=true"); sync() }.onFailure { error -> Log.e("OoroScreen", "pairing failed displayId=$deviceId", error); val message = if (error is DeviceApiException) pairingFailureMessage(error.kind) else "Waiting for internet access. Keep this screen recovery code and retry when the screen is online."; _state.value = ScreenState.Setup(message, true) } } finally { _pairing.value = false } } }
+    fun pair(rawCode: String) { if (_pairing.value) return; val code = rawCode.trim().uppercase(); if (code.isBlank()) { _state.value = ScreenState.Setup("Enter a pairing code", true); return }; _pairing.value = true; viewModelScope.launch { try { runCatching { check(hasValidatedInternet()) { "Android has not validated an internet connection" }; val result = api.pair(PairRequest(code,deviceId,android.os.Build.MANUFACTURER,android.os.Build.MODEL,android.os.Build.VERSION.RELEASE,BuildConfig.VERSION_NAME)); store.save(result.credentials); activeAuthorization = null; trustedTimeFailureMessage = null; _authorizationValid.value = false; _cachedPlaybackAllowed.value = false; runCatching { db.manifestDao().invalidateAuthorization() }.onFailure { store.clear(); _pairedScreenId.value = null; active = null; throw it }; _pairedScreenId.value = result.credentials.screenId; repairMode = false; Log.i("OoroScreen", "pairing succeeded displayId=${result.credentials.screenId} paired=true"); if (hasValidatedInternet()) sync() }.onFailure { error -> Log.e("OoroScreen", "pairing failed; credential values redacted", error); val message = if (error is DeviceApiException) pairingFailureMessage(error.kind) else "Pairing needs validated internet access. Connect this screen and retry the recovery code."; _state.value = ScreenState.Setup(message, true) } } finally { _pairing.value = false } } }
     fun reconnect() { if (_reconnecting.value) return; _reconnecting.value = true; val current = (_state.value as? ScreenState.AuthRecovery); if (current != null) _state.value = current.copy(reconnecting = true); viewModelScope.launch { try { sync() } finally { _reconnecting.value = false } } }
     fun beginRepair() { repairMode = true; _state.value = ScreenState.Setup("Enter a new pairing code. This keeps the existing screen identity and history.", true) }
     fun onActivityResumed(commandId: String?) {
@@ -300,7 +316,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
     private suspend fun syncInternal() {
         manifestRefreshJob?.cancel()
         manifestRefreshJob = null
-        val c = store.credentials() ?: run { Log.w("OoroScreen", "sync skipped tokenPresent=false paired=false"); return }
+        val c = store.credentials() ?: run { _pairedScreenId.value = null; _state.value = ScreenState.Setup("Screen is unpaired · enter a pairing code to restore authenticated playback.", true); _diagnostic.value = "Screen is unpaired · pair this device to sync approved content."; _authorizationValid.value = false; _cachedPlaybackAllowed.value = false; Log.w("OoroScreen", "sync skipped paired=false"); return }
         Log.w("OoroScreen", "sync started displayId=${c.screenId} tokenPresent=true paired=true")
         if (active == null) _state.value = ScreenState.Preparing
 
@@ -349,9 +365,10 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             updateLastManifestAttempt(attempt)
             val previousAuthorizationEntity = db.manifestDao().active()
             timeRequestStartElapsedMillis = SystemClock.elapsedRealtime()
-            previousTrustedServerTimeMillis = previousAuthorizationEntity?.authorizationServerTimeUtcMillis
-            previousTrustedReceivedElapsedMillis = previousAuthorizationEntity?.authorizationReceivedElapsedMillis
-            previousTrustedBootCount = previousAuthorizationEntity?.authorizationBootCount
+            val sameIdentityAuthorization = previousAuthorizationEntity?.takeIf { it.authorizationScreenId == c.screenId }
+            previousTrustedServerTimeMillis = sameIdentityAuthorization?.authorizationServerTimeUtcMillis
+            previousTrustedReceivedElapsedMillis = sameIdentityAuthorization?.authorizationReceivedElapsedMillis
+            previousTrustedBootCount = sameIdentityAuthorization?.authorizationBootCount
             failureStage = "COMPARE_TRUSTED_ANCHOR"
             attempt = attempt.copy(failureStage = failureStage)
             updateLastManifestAttempt(attempt)
@@ -535,7 +552,9 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             if (currentOfflineAuthorizationRemainingMillis() <= 0L) {
                 _cachedPlaybackAllowed.value = false
                 _authorizationValid.value = false
-                _diagnostic.value = "Offline authorization lease expired · reconnect to refresh delivery"
+                _diagnostic.value = "Authenticated schedule authorization expired · validated internet is required for a fresh manifest sync before playback can resume."
+                val playing = session?.let { current -> active?.items?.firstOrNull { it.id == current.itemId } }
+                if (playing != null) creativeFinished(playing, playbackPositionMs ?: 0L, false, "AUTHORIZATION_EXPIRED")
                 Log.w("OoroScreen", "cached delivery withheld because the server authorization lease expired")
             }
         }
@@ -579,7 +598,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             return null
         }
         val current = manifest.items.find { it.id == session?.itemId && it.id in verifiedIds && it.isCampaignDateEligibleAt(now) }
-        val emergency = manifest.items.any { it.priority >= 1000 && it.hasAuthorizedDeliveryQuota && it.isCampaignDateEligibleAt(now) }
+        val emergency = manifest.items.any { it.priority >= 1000 && (it.hasAuthorizedDeliveryQuota || (allowCachedOffline && it.deliveryQuota != null)) && it.isCampaignDateEligibleAt(now) }
         return current?.takeIf { !emergency || it.priority >= 1000 }
             ?: if (allowCachedOffline) nextVerifiedCachedItem(manifest, scheduler, now, offset, verifiedIds)
                 else nextVerifiedManifestItem(manifest, scheduler, now, offset, verifiedIds)
@@ -602,12 +621,15 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
         val playbackSession = PlaybackSession(java.util.UUID.randomUUID().toString(), item.id, item.campaignId, item.creativeId, item.assetId, Instant.now(), item.durationSeconds * 1000L, quota.id, quota.revision)
         viewModelScope.launch {
             try {
-                if (!db.deliveryQuotaDao().consumeOnce(quota.id, quota.revision, playbackSession.eventId)) {
+                val consumed = db.deliveryQuotaDao().consumeOnce(quota.id, quota.revision, playbackSession.eventId)
+                val offlineQuotaReplay = !consumed && quota.remainingPlays == 0 && !hasValidatedInternet() && _cachedPlaybackAllowed.value && isOfflineAuthorizationValid()
+                if (!consumed && !offlineQuotaReplay) {
                     _diagnostic.value = "Authorized delivery quota exhausted · waiting for a new server grant"
                     _playbackOffset.value += 1
                     return@launch
                 }
-                refreshPersistedQuotas()
+                if (consumed) refreshPersistedQuotas()
+                if (offlineQuotaReplay) Log.i("OoroPlayback", "cached offline loop continued after local quota exhaustion; proof will be submitted for server budget validation campaignId=${item.campaignId} creativeId=${item.creativeId}")
                 if (!playback.start(playbackSession)) return@launch
                 scheduler.recordStarted(item)
                 _currentCreative.value = item
@@ -635,7 +657,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
     }
     fun setNavigationState(state: NavigationState) { _navigation.value = state.copy(currentLatitude = _location.value?.latitude, currentLongitude = _location.value?.longitude) }
     fun reportMapHealth(rendered: Boolean, error: String? = null) { _mapTilesRendered.value = rendered; _mapTileError.value = error }
-    private fun reportPlayback(item: ManifestItem, state: String, positionMs: Long? = null) { viewModelScope.launch { store.credentials()?.let { credentials -> runCatching { api.heartbeat(credentials, if (state == "PLAYING") PlayerStatus.PLAYING else if (state == "FAILED") PlayerStatus.ERROR else PlayerStatus.READY, db.manifestDao().active()?.version ?: 0, withDeviceHealth(HeartbeatTelemetry(location.current(), item.campaignId, item.creativeId, item.assetId, state, session?.startedAt, positionMs, item.durationSeconds * 1000L))) } } } }
+    private fun reportPlayback(item: ManifestItem, state: String, positionMs: Long? = null) { viewModelScope.launch { if (hasValidatedInternet()) store.credentials()?.let { credentials -> runCatching { api.heartbeat(credentials, if (state == "PLAYING") PlayerStatus.PLAYING else if (state == "FAILED") PlayerStatus.ERROR else PlayerStatus.READY, db.manifestDao().active()?.version ?: 0, withDeviceHealth(HeartbeatTelemetry(location.current(), item.campaignId, item.creativeId, item.assetId, state, session?.startedAt, positionMs, item.durationSeconds * 1000L))) } } } }
     suspend fun localFile(item: ManifestItem): String? = assets.ensure(item)?.absolutePath
     fun showAdmin() {
         _state.value = ScreenState.Admin(active)
@@ -665,10 +687,38 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             else -> ScreenState.Setup()
         }
     }
-    fun unpair() { repairMode = false; viewModelScope.launch { store.credentials()?.let { runCatching { api.unpair(it) } }; store.clear(); _pairedScreenId.value = null; active=null; _state.value=ScreenState.Setup("Screen unpaired") } }
+    fun unpair() {
+        repairMode = false
+        viewModelScope.launch {
+            val credentials = store.credentials()
+            if (credentials == null) { clearInMemoryAuthorizationAfterUnpair(); return@launch }
+            if (!hasValidatedInternet()) { _state.value = ScreenState.Setup("Unpair was not sent · validated internet is required before OORO can acknowledge it.", true); return@launch }
+            _state.value = ScreenState.Setup("Unpair pending · waiting for OORO acknowledgement.", true)
+            runCatching { api.unpair(credentials) }.onSuccess {
+                val localAuthorizationRevoked = runCatching { db.manifestDao().invalidateAuthorization() }.isSuccess
+                store.clear()
+                clearInMemoryAuthorizationAfterUnpair()
+                _state.value = ScreenState.Setup(if (localAuthorizationRevoked) "Unpair acknowledged · pair this device again before playback." else "OORO acknowledged unpair · local authorization cleanup was incomplete. Pair again while online to refresh safely.", true)
+            }.onFailure { error ->
+                _state.value = ScreenState.Setup("Unpair acknowledgement is unavailable · local credentials are retained. Reconnect and check pairing status before retrying.", true)
+                _diagnostic.value = "Unpair request outcome is unknown · local credentials remain stored until an acknowledgement is received."
+                Log.w("OoroScreen", "unpair not acknowledged; retaining pairing state kind=${(error as? DeviceApiException)?.kind ?: error.javaClass.simpleName}")
+            }
+        }
+    }
+    private fun clearInMemoryAuthorizationAfterUnpair() {
+        authorizationExpiryJob?.cancel(); manifestRefreshJob?.cancel(); reconnectJob?.cancel()
+        activeAuthorization = null; trustedTimeFailureMessage = null; active = null; online = false
+        _pairedScreenId.value = null; _authorizationValid.value = false; _cachedPlaybackAllowed.value = false
+        _verifiedAssetIds.value = emptySet(); _currentCreative.value = null
+        _state.value = ScreenState.Setup("Screen is unpaired · enter a pairing code to restore authenticated playback.", true)
+        _diagnostic.value = "Screen is unpaired · pair this device to sync approved content."
+    }
     fun runDiagnostics() { viewModelScope.launch {
         _diagnostics.value = _diagnostics.value.copy(running = true, message = "Running network and device checks…")
-        val probe = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { probeApi(BuildConfig.API_BASE_URL) }
+        val validated = hasValidatedInternet()
+        val probe = if (validated) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { probeApi(BuildConfig.API_BASE_URL) }
+            else ApiProbe(java.net.URL(BuildConfig.API_BASE_URL).host, null, false, null, null, null, "Android has not validated an internet connection")
         var result = _diagnostics.value.copy(running = false, probe = probe, message = null)
         result = if (probe.connected) result.copy(apiLastSuccessAt = System.currentTimeMillis(), apiLastError = null)
             else result.copy(apiLastError = probe.error ?: "Could not connect to host")
@@ -679,7 +729,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
         var heartbeatSucceeded = false
         result = result.copy(heartbeatLastAttemptAt = System.currentTimeMillis())
         if (credentials != null) {
-            runCatching {
+            if (!validated) result = result.copy(heartbeatError = "Internet connectivity is not validated") else runCatching {
                 api.heartbeat(credentials, PlayerStatus.DEGRADED, active?.version ?: db.manifestDao().active()?.version ?: 0,
                     withDeviceHealth(HeartbeatTelemetry(location.current())))
             }.onSuccess {

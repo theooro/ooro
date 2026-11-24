@@ -19,6 +19,8 @@ The device UUID and encrypted device token are persisted. Pairing stores the dev
 
 The manifest refreshes every three minutes while Android reports validated internet. Map rendering uses MapLibre with a provider-neutral style URL configured at build time through `-PmapStyleUrl=https://...` or `OORO_MAP_STYLE_URL`. Configure a production tile provider whose license and usage limits cover the deployment. The player does not use the public OpenStreetMap tile endpoint as a production service; without a configured HTTPS style, the map zone shows a non-blocking unavailable message and advertising playback continues.
 
+Offline playback requires the active screen identity, an authenticated manifest authorization lease for that screen and boot, a currently eligible campaign date window, and a locally checksum-verified asset. Campaign start and end calendar dates are inclusive in Asia/Kolkata; the API represents that as a UTC start-inclusive, next-midnight-exclusive window. Cached creatives may continue looping while offline after the local per-play counter reaches zero. Every playback is recorded with a stable event ID and uploaded as proof; the API records over-quota playback as `FAILED` with `DELIVERY_QUOTA_EXHAUSTED` and does not increment the authorized budget. Playback stops when the authenticated lease expires. Confirmed unpair invalidates the persisted time lease but retains cached files and queued proof history.
+
 ## Kiosk and boot
 
 `BootReceiver` starts paired devices after boot and package replacement. Without Device Owner, the player uses immersive fullscreen only. When provisioned as Device Owner, the app configures Lock Task and starts it from the display activity. Provision managed test hardware after a factory reset with:

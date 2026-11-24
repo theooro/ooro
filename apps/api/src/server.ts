@@ -1480,6 +1480,7 @@ app.post('/api/device/proof-of-play', async (request, reply) => {
     }
     const location = await prisma.displayLocationEvent.findFirst({ where: { displayId: display.id, occurredAt: { gte: new Date(started.getTime() - 10 * 60_000), lte: new Date(started.getTime() + 2 * 60_000) } }, orderBy: { occurredAt: 'desc' } })
     const proofData = { proofId, rideId: e.rideId, displayId: display.id, campaignSessionId: e.campaignSessionId, campaignId: e.campaignId, creativeId: e.creativeId, scheduleItemId: e.scheduleItemId, assetId, playbackStartedAt: started, playbackEndedAt: ended, expectedDuration: expected, actualDuration: actual, manifestVersion: e.manifestVersion, playerVersion: e.playerVersion ?? e.appVersion, playbackCompleted: succeeded, status: canonicalProofStatus(succeeded, actual, expected), invalidReason: e.failureReason, slot, latitude: location?.latitude, longitude: location?.longitude, locationAccuracy: location?.accuracyMeters, locationOccurredAt: location?.occurredAt } as any
+    let quotaRejected = false
     try {
       await prisma.$transaction(async (tx) => {
         const existing = await tx.proofOfPlay.findUnique({ where: { proofId } })
@@ -1501,15 +1502,19 @@ app.post('/api/device/proof-of-play', async (request, reply) => {
             if (grant.unlimitedOfflineAuthorized) {
               // Unlimited delivery is accepted only when explicitly authorized.
             } else if (grant.offlinePlaysAuthorized != null) {
-              if (grant.offlinePlaysConsumed >= grant.offlinePlaysAuthorized) throw new ApiError('DELIVERY_QUOTA_EXHAUSTED', 'Authorized playback quota is exhausted', 409)
-              const consumed = await tx.displayCampaignAssignment.updateMany({ where: { id: grant.id, offlinePlaysConsumed: { lt: grant.offlinePlaysAuthorized } }, data: { offlinePlaysConsumed: { increment: 1 } } })
-              if (consumed.count !== 1) throw new ApiError('DELIVERY_QUOTA_EXHAUSTED', 'Authorized playback quota is exhausted', 409)
+              if (grant.offlinePlaysConsumed >= grant.offlinePlaysAuthorized) quotaRejected = true
+              else {
+                const consumed = await tx.displayCampaignAssignment.updateMany({ where: { id: grant.id, offlinePlaysConsumed: { lt: grant.offlinePlaysAuthorized } }, data: { offlinePlaysConsumed: { increment: 1 } } })
+                if (consumed.count !== 1) quotaRejected = true
+              }
             } else if (display.supportsDeliveryQuota) {
               throw new ApiError('DELIVERY_QUOTA_REQUIRED', 'Campaign has no bounded or explicitly unlimited delivery grant', 409)
             }
           }
         }
-        await tx.proofOfPlay.create({ data: proofData })
+        // Keep an idempotent audit record for offline playback after the local
+        // grant is exhausted, but never count or report it as valid delivery.
+        await tx.proofOfPlay.create({ data: quotaRejected ? { ...proofData, status: 'FAILED', invalidReason: 'DELIVERY_QUOTA_EXHAUSTED' } : proofData })
       }, { isolationLevel: 'Serializable' })
     } catch (error: any) {
       if (error?.code !== 'P2002' && error?.code !== 'P2034') throw error
@@ -1519,7 +1524,7 @@ app.post('/api/device/proof-of-play', async (request, reply) => {
       request.log.info({ proofId }, 'proof duplicate acknowledged idempotently')
     }
     const eventId = e.eventId ?? proofId
-    if (eventId) await prisma.playbackEvent.create({ data: { eventId, displayId: display.id, rideId: e.rideId, campaignSessionId: e.campaignSessionId, campaignId: e.campaignId, creativeId: e.creativeId, assetId, eventType: succeeded ? 'CREATIVE_COMPLETED' : 'CREATIVE_FAILED', occurredAt: ended ?? started, duration: actual, manifestVersion: e.manifestVersion, playerVersion: e.playerVersion ?? e.appVersion, errorCode: succeeded ? undefined : e.failureReason, latitude: location?.latitude, longitude: location?.longitude, locationAccuracy: location?.accuracyMeters, locationOccurredAt: location?.occurredAt } }).catch((error: any) => error?.code === 'P2002' ? null : Promise.reject(error))
+    if (eventId) await prisma.playbackEvent.create({ data: { eventId, displayId: display.id, rideId: e.rideId, campaignSessionId: e.campaignSessionId, campaignId: e.campaignId, creativeId: e.creativeId, assetId, eventType: succeeded && !quotaRejected ? 'CREATIVE_COMPLETED' : 'CREATIVE_FAILED', occurredAt: ended ?? started, duration: actual, manifestVersion: e.manifestVersion, playerVersion: e.playerVersion ?? e.appVersion, errorCode: quotaRejected ? 'DELIVERY_QUOTA_EXHAUSTED' : succeeded ? undefined : e.failureReason, latitude: location?.latitude, longitude: location?.longitude, locationAccuracy: location?.accuracyMeters, locationOccurredAt: location?.occurredAt } }).catch((error: any) => error?.code === 'P2002' ? null : Promise.reject(error))
     accepted += 1
     acceptedEventIds.push(proofId)
   }

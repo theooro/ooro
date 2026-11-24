@@ -88,6 +88,7 @@ internal fun trustedTimeUnavailableMessage(
     currentElapsedMillis: Long,
     currentBootCount: Int?,
 ): String = when {
+    pairedScreenId.isNullOrBlank() -> "Screen is unpaired · pair this device to establish authenticated schedule time before playback."
     authorization == null -> "Trusted time unavailable: no authenticated schedule-time anchor is stored. Reconnect to renew it before playback."
     pairedScreenId.isNullOrBlank() || authorization.screenId != pairedScreenId -> "Trusted time unavailable: the authenticated anchor does not match this screen. Reconnect to renew it before playback."
     currentBootCount == null -> "Trusted time unavailable: the current boot identity cannot be verified. Reconnect to renew it before playback."
@@ -180,7 +181,8 @@ internal fun nextVerifiedCachedItem(
     now: Instant,
     offset: Int,
     verifiedItemIds: Set<String>,
-): ManifestItem? = scheduler.next(manifest, now, offset, verifiedItemIds)
+    allowExhaustedOfflineGrant: Boolean = true,
+): ManifestItem? = scheduler.next(manifest, now, offset, verifiedItemIds, allowExhaustedOfflineGrant)
 
 internal enum class CachedStartupBlock {
     NONE,

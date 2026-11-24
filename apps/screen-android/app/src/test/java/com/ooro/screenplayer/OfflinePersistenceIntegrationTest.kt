@@ -53,12 +53,12 @@ class OfflinePersistenceIntegrationTest {
         legacy.close()
 
         val migrated = Room.databaseBuilder(context, OoroDatabase::class.java, name)
-            .addMigrations(OoroDatabase.MIGRATION_1_2, OoroDatabase.MIGRATION_2_3, OoroDatabase.MIGRATION_3_4)
+            .addMigrations(OoroDatabase.MIGRATION_1_2, OoroDatabase.MIGRATION_2_3, OoroDatabase.MIGRATION_3_4, OoroDatabase.MIGRATION_4_5)
             .allowMainThreadQueries().build()
         db = migrated
         migrated.openHelper.writableDatabase
 
-        assertEquals(4, migrated.openHelper.readableDatabase.version)
+        assertEquals(5, migrated.openHelper.readableDatabase.version)
         assertEquals(17L, migrated.manifestDao().active()?.version)
         assertEquals(1, migrated.proofDao().pendingCount())
         assertTrue(migrated.deliveryQuotaDao().all().isEmpty())
@@ -108,6 +108,27 @@ class OfflinePersistenceIntegrationTest {
         assertEquals(8, quotas.find("campaign:screen")?.remainingPlays)
         assertTrue("duplicate event must not decrement twice", quotas.consumeOnce("campaign:screen", 3, "offline-proof-2"))
         assertEquals(8, quotas.find("campaign:screen")?.remainingPlays)
+    }
+
+    @Test fun confirmedUnpairInvalidatesOldScreenLeaseWithoutDeletingManifestOrQueuedProofs() = runBlocking {
+        val database = open()
+        val lease = requireNotNull(issueOfflineAuthorization("screen-test", Instant.parse("2026-01-01T00:00:00Z"), Instant.parse("2026-01-01T00:10:00Z"), Instant.parse("2026-01-01T00:00:01Z"), 10_000L, 7))
+        val manifest = DeviceManifest(7, "screen-test", "Asia/Kolkata", emptyList(), Instant.parse("2026-01-01T00:10:00Z"))
+        database.manifestDao().put(ManifestEntity(version = 7, timezone = manifest.timezone, validUntil = manifest.validUntil.toString(), json = ManifestCodec.encode(manifest), authorizationReceivedElapsedMillis = lease.receivedElapsedMillis, authorizationBootCount = lease.bootCount, authorizationDurationMillis = lease.durationMillis, authorizationScreenId = lease.screenId, authorizationServerTimeUtcMillis = lease.serverTimeUtcMillis))
+        database.proofDao().add(ProofEntity("queued-before-unpair", "{}"))
+
+        // The production command path calls this only after OORO acknowledges UNPAIR.
+        database.manifestDao().invalidateAuthorization()
+
+        val persisted = requireNotNull(database.manifestDao().active())
+        assertEquals(7L, persisted.version)
+        assertEquals("screen-test", ManifestCodec.parse(persisted.json).screenId)
+        assertNull(persisted.authorizationReceivedElapsedMillis)
+        assertNull(persisted.authorizationBootCount)
+        assertNull(persisted.authorizationDurationMillis)
+        assertNull(persisted.authorizationScreenId)
+        assertNull(persisted.authorizationServerTimeUtcMillis)
+        assertEquals(listOf("queued-before-unpair"), database.proofDao().pending(10).map { it.eventId })
     }
 
     @Test fun corruptChecksumNamedLegacyAssetFailsClosedAndIsNotCopiedToItemPath() = runBlocking {
@@ -344,6 +365,7 @@ class OfflinePersistenceIntegrationTest {
 
     @Test fun productionWorkerKeepsPartialAcknowledgementsForRetryAndDeduplicatesIds() = runBlocking {
         val database = open()
+        SyncWorkerDependencies.validatedInternet = { true }
         database.proofDao().add(ProofEntity("accepted", "{\"screenId\":\"${credentials.screenId}\",\"deviceId\":\"${credentials.deviceId}\",\"campaignId\":\"c\",\"creativeId\":\"a\",\"scheduleItemId\":\"i\",\"startedAt\":\"2026-01-01T00:00:00Z\",\"endedAt\":\"2026-01-01T00:00:10Z\",\"success\":true,\"appVersion\":\"test\"}"))
         database.proofDao().add(ProofEntity("retry", "{\"screenId\":\"${credentials.screenId}\",\"deviceId\":\"${credentials.deviceId}\",\"campaignId\":\"c\",\"creativeId\":\"b\",\"scheduleItemId\":\"i\",\"startedAt\":\"2026-01-01T00:00:00Z\",\"endedAt\":\"2026-01-01T00:00:10Z\",\"success\":true,\"appVersion\":\"test\"}"))
         val api = FakeApi(setOf("accepted"))
@@ -364,6 +386,7 @@ class OfflinePersistenceIntegrationTest {
 
     @Test fun failedUploadSurvivesWorkerRecreationAndRetriesWithSameEventId() = runBlocking {
         val database = open()
+        SyncWorkerDependencies.validatedInternet = { true }
         database.proofDao().add(ProofEntity("stable-retry-id", "{\"screenId\":\"${credentials.screenId}\",\"deviceId\":\"${credentials.deviceId}\",\"campaignId\":\"c\",\"creativeId\":\"a\",\"scheduleItemId\":\"i\",\"startedAt\":\"2026-01-01T00:00:00Z\",\"endedAt\":\"2026-01-01T00:00:10Z\",\"success\":true,\"appVersion\":\"test\"}"))
         val api = FakeApi(failUpload = true)
         SyncWorkerDependencies.credentials = { credentials }
