@@ -94,7 +94,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       return { creativeIds, manifestRefreshQueued: displayIds.length };
     }, { isolationLevel: "Serializable" });
     if ("error" in result && result.error) {
-      const [status, message] = result.error === "CAMPAIGN_UNAVAILABLE"
+      const [status, message]: [number, string] = result.error === "CAMPAIGN_UNAVAILABLE"
         ? [404, "Choose an available campaign."]
         : [409, "The campaign creative list changed. Refresh and try again."];
       return NextResponse.json({ error: { code: result.error, message } }, { status });
