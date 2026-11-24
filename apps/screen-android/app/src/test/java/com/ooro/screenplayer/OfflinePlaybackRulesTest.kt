@@ -515,6 +515,14 @@ class OfflinePlaybackRulesTest {
         assertFalse(com.ooro.screenplayer.sync.shouldRetryProofBatch(selectedCount = 2, acknowledgedCount = 2))
     }
 
+    @Test fun pairingFailuresAreNotMisreportedAsNetworkValidationErrors() {
+        assertTrue(pairingAttemptFailureMessage(PairingFailureStage.NETWORK_VALIDATION, null).contains("not marked this connection as validated"))
+        assertTrue(pairingAttemptFailureMessage(PairingFailureStage.API_REQUEST, null).contains("Pairing request failed after Android reported validated internet"))
+        assertTrue(pairingAttemptFailureMessage(PairingFailureStage.CREDENTIAL_PERSISTENCE, null).contains("secure credentials could not be saved"))
+        assertTrue(pairingAttemptFailureMessage(PairingFailureStage.AUTHORIZATION_RESET, null).contains("previous screen authorization could not be cleared"))
+        assertEquals(pairingFailureMessage(DeviceFailureKind.DNS_ERROR), pairingAttemptFailureMessage(PairingFailureStage.API_REQUEST, DeviceFailureKind.DNS_ERROR))
+    }
+
     @Test fun duplicateProofEventIdsRemainStableAcrossReconciliationRetries() {
         val eventId = "stable-event-123"
         assertEquals(setOf(eventId), acknowledgedProofEventIds(setOf(eventId), setOf(eventId)))
