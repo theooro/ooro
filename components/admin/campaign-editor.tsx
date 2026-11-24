@@ -11,7 +11,8 @@ type Screen = { screenId: string; screenName: string; city: string; vehicleIdent
 type LibraryCreative = { id: string; name: string; type: string; status: string; kind: string; campaign?: { name: string }; asset?: { active?: boolean; checksum?: string | null } };
 type LayoutDraftSummary = { id: string; name: string; mode: string; state: string };
 type Assignment = { displayId: string; display: { name: string; connectivity?: string; manifestVersion?: number | null; lastHeartbeatAt?: string | null; currentCampaignId?: string | null; currentCreativeId?: string | null; currentPlaybackState?: string | null; currentPlaybackStartedAt?: string | null; commands?: Array<{ status: string; error?: string | null }>; proofs?: Array<{ creativeId?: string | null; playbackStartedAt: string; playbackCompleted?: boolean; status: string }> } };
-type CampaignCreative = { id: string; name: string; type: string; status: string; displayOrder?: number };\ntype CampaignSnapshot = { status?: string; name?: string; deliverySlot?: "MAIN" | "SPONSORED"; startDate?: string | null; endDate?: string | null; timezone?: string | null; creatives?: CampaignCreative[]; metadata?: { offer?: Record<string, unknown> }; assignments?: Assignment[] };
+type CampaignCreative = { id: string; name: string; type: string; status: string; displayOrder?: number };
+type CampaignSnapshot = { status?: string; name?: string; deliverySlot?: "MAIN" | "SPONSORED"; startDate?: string | null; endDate?: string | null; timezone?: string | null; creatives?: CampaignCreative[]; metadata?: { offer?: Record<string, unknown> }; assignments?: Assignment[] };
 
 const statuses = ["DRAFT", "APPROVED", "ACTIVE", "PAUSED", "STOPPED", "REJECTED", "COMPLETED", "SCHEDULED"] as const;
 export function AdminCampaignEditor({ campaignId }: { campaignId?: string }) {
