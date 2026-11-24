@@ -267,6 +267,22 @@ internal fun manifestSyncFailureMessage(error: Throwable?, networkValidated: Boo
     }
 }
 
+internal enum class PairingFailureStage { NETWORK_VALIDATION, API_REQUEST, CREDENTIAL_PERSISTENCE, AUTHORIZATION_RESET }
+
+/** Keep the network-gate message specific to the gate; do not mislabel later failures as connectivity. */
+internal fun pairingAttemptFailureMessage(stage: PairingFailureStage, kind: DeviceFailureKind?): String {
+    if (stage == PairingFailureStage.NETWORK_VALIDATION) {
+        return "Android has not marked this connection as validated. Keep the recovery code and retry when Screen Player reports validated internet."
+    }
+    if (kind != null) return pairingFailureMessage(kind)
+    return when (stage) {
+        PairingFailureStage.NETWORK_VALIDATION -> error("handled above")
+        PairingFailureStage.API_REQUEST -> "Pairing request failed after Android reported validated internet. Check the latest pairing diagnostic and Admin > Screens before retrying."
+        PairingFailureStage.CREDENTIAL_PERSISTENCE -> "The pairing response arrived, but secure credentials could not be saved on this device. Check Admin > Screens before retrying."
+        PairingFailureStage.AUTHORIZATION_RESET -> "Pairing could not finish because the previous screen authorization could not be cleared. Playback remains locked; check Admin > Screens."
+    }
+}
+
 internal fun deliveryReasonMessage(reason: String): String = when (reason) {
     "NO_ASSIGNMENT" -> "No campaign is assigned to this screen."
     "DISPLAY_DISABLED" -> "This screen is disabled or unavailable for delivery."
