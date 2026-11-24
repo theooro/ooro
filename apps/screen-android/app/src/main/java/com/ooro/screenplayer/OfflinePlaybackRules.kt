@@ -6,6 +6,7 @@ import com.ooro.screenplayer.api.DeviceApiException
 import com.ooro.screenplayer.api.DeviceApi
 import com.ooro.screenplayer.api.DeviceFailureKind
 import com.ooro.screenplayer.model.DeviceCredentials
+import com.ooro.screenplayer.model.DeliveryQuota
 import com.ooro.screenplayer.player.ScheduleEngine
 import com.ooro.screenplayer.model.CreativeType
 import com.ooro.screenplayer.model.DisplayLayout
@@ -17,6 +18,9 @@ internal const val NETWORK_RECOVERY_THROTTLE_MILLIS = 30_000L
 internal const val MANIFEST_UPDATE_POLL_INTERVAL_MILLIS = 180_000L
 internal const val MAX_OFFLINE_AUTHORIZATION_MILLIS = 15 * 60_000L
 internal const val OFFLINE_AUTHORIZATION_SAFETY_MILLIS = 5_000L
+
+/** Unlimited server grants authorize looping without local per-play reservations. */
+internal fun requiresLocalQuotaReservation(grant: DeliveryQuota): Boolean = !grant.unlimited
 
 internal data class OfflineAuthorization(
     val screenId: String,
@@ -181,8 +185,7 @@ internal fun nextVerifiedCachedItem(
     now: Instant,
     offset: Int,
     verifiedItemIds: Set<String>,
-    allowExhaustedOfflineGrant: Boolean = true,
-): ManifestItem? = scheduler.next(manifest, now, offset, verifiedItemIds, allowExhaustedOfflineGrant)
+): ManifestItem? = scheduler.next(manifest, now, offset, verifiedItemIds)
 
 internal enum class CachedStartupBlock {
     NONE,

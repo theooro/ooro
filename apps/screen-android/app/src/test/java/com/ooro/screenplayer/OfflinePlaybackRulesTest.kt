@@ -169,15 +169,23 @@ class OfflinePlaybackRulesTest {
         assertNull(scheduler.next(cached, end, 0, setOf(item.id)))
     }
 
-    @Test fun cachedCreativeContinuesLoopingAfterPerPlayCounterIsExhaustedOnlyInOfflineMode() {
+    @Test fun onlyExplicitUnlimitedGrantContinuesLoopingOffline() {
         val exhausted = item("cached-loop").copy(deliveryQuota = com.ooro.screenplayer.model.DeliveryQuota("grant", 2, 0, false))
-        val cached = manifest(listOf(exhausted))
+        val unlimited = exhausted.copy(id = "unmetered", deliveryQuota = com.ooro.screenplayer.model.DeliveryQuota("grant-unmetered", 2, null, true))
+        val cached = manifest(listOf(exhausted, unlimited))
         val scheduler = ScheduleEngine()
         assertNull(scheduler.next(cached, now, 0, setOf(exhausted.id)))
-        assertEquals(exhausted.id, nextVerifiedCachedItem(cached, scheduler, now, 0, setOf(exhausted.id))?.id)
-        assertNull(nextVerifiedCachedItem(cached, scheduler, now.plusSeconds(2 * 86_400), 0, setOf(exhausted.id)))
+        assertNull(nextVerifiedCachedItem(cached, scheduler, now, 0, setOf(exhausted.id)))
+        assertEquals(unlimited.id, nextVerifiedCachedItem(cached, scheduler, now, 0, setOf(unlimited.id))?.id)
+        assertNull(nextVerifiedCachedItem(cached, scheduler, now.plusSeconds(2 * 86_400), 0, setOf(unlimited.id)))
         assertNull(nextVerifiedCachedItem(cached, scheduler, now, 0, emptySet()))
-        assertNull(nextVerifiedCachedItem(cached, scheduler, now, 0, setOf(exhausted.id), allowExhaustedOfflineGrant = false))
+    }
+
+    @Test fun unlimitedGrantDoesNotReserveOrDecrementLocalPlayQuota() {
+        val bounded = com.ooro.screenplayer.model.DeliveryQuota("bounded", 1, 2, false)
+        val unlimited = com.ooro.screenplayer.model.DeliveryQuota("unlimited", 1, null, true)
+        assertTrue(requiresLocalQuotaReservation(bounded))
+        assertFalse(requiresLocalQuotaReservation(unlimited))
     }
 
     @Test fun offlineLeaseFailsClosedForWrongScreenRebootRollbackMalformedOrOverlongWindow() {

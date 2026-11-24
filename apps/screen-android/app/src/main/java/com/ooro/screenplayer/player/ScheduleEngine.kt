@@ -5,16 +5,17 @@ import java.time.Instant
 
 class ScheduleEngine {
     fun recordStarted(item: ManifestItem, now: Instant = Instant.now()) = Unit
-    fun eligible(manifest: DeviceManifest, now: Instant = Instant.now(), allowExhaustedOfflineGrant: Boolean = false): List<ManifestItem> {
+    fun eligible(manifest: DeviceManifest, now: Instant = Instant.now()): List<ManifestItem> {
         // Date bounds are server-issued UTC instants representing inclusive dates in the campaign timezone.
         // Daily hour/day legacy fields are intentionally ignored.
         return manifest.items.filter { item ->
-            (item.deliveryQuota != null && (item.hasAuthorizedDeliveryQuota || allowExhaustedOfflineGrant)) && item.isCampaignDateEligibleAt(now)
+            item.hasAuthorizedDeliveryQuota && item.isCampaignDateEligibleAt(now)
         }
-            .sortedWith(compareByDescending<ManifestItem> { it.priority }.thenBy { it.campaignId }.thenBy { it.id })
+        // The manifest is an ordered server decision. Re-sorting here can make
+        // cached playback diverge from the approved creative order.
     }
-    fun next(manifest: DeviceManifest, now: Instant = Instant.now(), offset: Int = 0, availableItemIds: Set<String>? = null, allowExhaustedOfflineGrant: Boolean = false): ManifestItem? {
-        val eligible = eligible(manifest, now, allowExhaustedOfflineGrant)
+    fun next(manifest: DeviceManifest, now: Instant = Instant.now(), offset: Int = 0, availableItemIds: Set<String>? = null): ManifestItem? {
+        val eligible = eligible(manifest, now)
         // Emergency delivery remains exclusive: an unavailable authorized
         // emergency asset must not silently fall through to lower priority.
         if (availableItemIds != null && eligible.any { it.priority >= 1000 && it.id !in availableItemIds }) return null

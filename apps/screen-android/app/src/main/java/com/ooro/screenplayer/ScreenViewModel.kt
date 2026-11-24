@@ -678,7 +678,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             return null
         }
         val current = manifest.items.find { it.id == session?.itemId && it.id in verifiedIds && it.isCampaignDateEligibleAt(now) }
-        val emergency = manifest.items.any { it.priority >= 1000 && (it.hasAuthorizedDeliveryQuota || (allowCachedOffline && it.deliveryQuota != null)) && it.isCampaignDateEligibleAt(now) }
+        val emergency = manifest.items.any { it.priority >= 1000 && it.hasAuthorizedDeliveryQuota && it.isCampaignDateEligibleAt(now) }
         return current?.takeIf { !emergency || it.priority >= 1000 }
             ?: if (allowCachedOffline) nextVerifiedCachedItem(manifest, scheduler, now, offset, verifiedIds)
                 else nextVerifiedManifestItem(manifest, scheduler, now, offset, verifiedIds)
@@ -701,15 +701,17 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
         val playbackSession = PlaybackSession(java.util.UUID.randomUUID().toString(), item.id, item.campaignId, item.creativeId, item.assetId, Instant.now(), item.durationSeconds * 1000L, quota.id, quota.revision)
         viewModelScope.launch {
             try {
-                val consumed = db.deliveryQuotaDao().consumeOnce(quota.id, quota.revision, playbackSession.eventId)
-                val offlineQuotaReplay = !consumed && quota.remainingPlays == 0 && !hasValidatedInternet() && _cachedPlaybackAllowed.value && isOfflineAuthorizationValid()
-                if (!consumed && !offlineQuotaReplay) {
+                // PR #117's explicit unlimited grant is not a local play counter.
+                // Keep bounded legacy quota accounting, but never reserve or
+                // decrement plays for an unmetered grant.
+                val requiresReservation = requiresLocalQuotaReservation(quota)
+                val consumed = !requiresReservation || db.deliveryQuotaDao().consumeOnce(quota.id, quota.revision, playbackSession.eventId)
+                if (!consumed) {
                     _diagnostic.value = "Authorized delivery quota exhausted · waiting for a new server grant"
                     _playbackOffset.value += 1
                     return@launch
                 }
-                if (consumed) refreshPersistedQuotas()
-                if (offlineQuotaReplay) Log.i("OoroPlayback", "cached offline loop continued after local quota exhaustion; proof will be submitted for server budget validation campaignId=${item.campaignId} creativeId=${item.creativeId}")
+                if (requiresReservation) refreshPersistedQuotas()
                 if (!playback.start(playbackSession)) return@launch
                 scheduler.recordStarted(item)
                 _currentCreative.value = item
@@ -726,11 +728,12 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
         val quota = item.deliveryQuota ?: return
         val eventId = java.util.UUID.randomUUID().toString()
         viewModelScope.launch {
-            if (!db.deliveryQuotaDao().consumeOnce(quota.id, quota.revision, eventId)) {
+            val requiresReservation = requiresLocalQuotaReservation(quota)
+            if (requiresReservation && !db.deliveryQuotaDao().consumeOnce(quota.id, quota.revision, eventId)) {
                 Log.w("OoroPlayback", "sponsored delivery withheld: authorized quota unavailable campaignId=${item.campaignId} creativeId=${item.creativeId}")
                 return@launch
             }
-            refreshPersistedQuotas()
+            if (requiresReservation) refreshPersistedQuotas()
             val endedAt = Instant.now()
             proof.record(ProofOfPlay(eventId = eventId, screenId = credentials.screenId, deviceId = deviceId, campaignId = item.campaignId, creativeId = item.creativeId, scheduleItemId = item.id, startedAt = endedAt.minusMillis(displayedMs), endedAt = endedAt, expectedDurationMs = item.durationSeconds * 1_000L, actualPlayedMs = displayedMs, success = true, appVersion = BuildConfig.VERSION_NAME, assetId = item.assetId, slot = "SPONSORED", deliveryGrantId = quota.id, deliveryQuotaRevision = quota.revision))
         }
