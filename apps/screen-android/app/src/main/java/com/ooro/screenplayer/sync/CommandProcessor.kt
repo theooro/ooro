@@ -32,6 +32,8 @@ private val allowedDeviceCommands = setOf(
 internal fun commandIdIsValid(id: String): Boolean = runCatching { UUID.fromString(id); true }.getOrDefault(false)
 internal fun commandIsExpired(expiresAt: Instant?, now: Instant): Boolean = expiresAt != null && !now.isBefore(expiresAt)
 internal fun supportedDeviceCommand(type: String): Boolean = type.uppercase() in allowedDeviceCommands
+internal fun shouldFinalizeAcknowledgedUnpair(revocationPending: Boolean, hasAcknowledgedUnpair: Boolean): Boolean =
+    revocationPending && hasAcknowledgedUnpair
 internal enum class ReceiptRecovery { RETRY_ACK, FAIL_INTERRUPTED, FAIL_EXPIRED, WAIT_FOR_RESUME, REPLAY_NOT_STARTED, NONE }
 internal fun receiptRecovery(phase: CommandReceiptPhase, expired: Boolean): ReceiptRecovery = when (phase) {
     CommandReceiptPhase.ACK_PENDING -> ReceiptRecovery.RETRY_ACK
@@ -53,7 +55,13 @@ class CommandProcessor(private val context: Context, private val api: DeviceApi,
         com.ooro.screenplayer.RuntimeDiagnostics.increment(com.ooro.screenplayer.RuntimeDiagnostics.Counter.COMMAND_POLL)
         val credentials = store.credentials() ?: return
         try {
-            if (receipts.forDevice(credentials.deviceId).any { it.commandType == "UNPAIR" && it.phase == CommandReceiptPhase.ACKED && it.result?.status == "SUCCEEDED" }) {
+            // An acknowledged UNPAIR receipt is only a crash-recovery signal while
+            // its revocation marker is still pending. Replaying it after a later
+            // successful pairing would clear the newly stored credentials.
+            val hasAcknowledgedUnpair = receipts.forDevice(credentials.deviceId).any {
+                it.commandType == "UNPAIR" && it.phase == CommandReceiptPhase.ACKED && it.result?.status == "SUCCEEDED"
+            }
+            if (shouldFinalizeAcknowledgedUnpair(store.authorizationRevocationPending(), hasAcknowledgedUnpair)) {
                 invalidateAuthorizationAfterConfirmedUnpair()
                 store.clear()
                 ManifestRefreshBus.request()
