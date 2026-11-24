@@ -273,7 +273,49 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             }
         }
     }
-    fun pair(rawCode: String) { if (_pairing.value) return; val code = rawCode.trim().uppercase(); if (code.isBlank()) { _state.value = ScreenState.Setup("Enter a pairing code", true); return }; _pairing.value = true; viewModelScope.launch { try { runCatching { check(hasValidatedInternet()) { "Android has not validated an internet connection" }; val result = api.pair(PairRequest(code,deviceId,android.os.Build.MANUFACTURER,android.os.Build.MODEL,android.os.Build.VERSION.RELEASE,BuildConfig.VERSION_NAME)); store.save(result.credentials); activeAuthorization = null; trustedTimeFailureMessage = null; _authorizationValid.value = false; _cachedPlaybackAllowed.value = false; runCatching { db.manifestDao().invalidateAuthorization() }.onFailure { store.clear(); _pairedScreenId.value = null; active = null; throw it }; _pairedScreenId.value = result.credentials.screenId; repairMode = false; Log.i("OoroScreen", "pairing succeeded displayId=${result.credentials.screenId} paired=true"); if (hasValidatedInternet()) sync() }.onFailure { error -> Log.e("OoroScreen", "pairing failed; credential values redacted", error); val message = if (error is DeviceApiException) pairingFailureMessage(error.kind) else "Pairing needs validated internet access. Connect this screen and retry the recovery code."; _state.value = ScreenState.Setup(message, true) } } finally { _pairing.value = false } } }
+    fun pair(rawCode: String) {
+        if (_pairing.value) return
+        val code = rawCode.trim().uppercase()
+        if (code.isBlank()) {
+            _state.value = ScreenState.Setup("Enter a pairing code", true)
+            return
+        }
+        _pairing.value = true
+        viewModelScope.launch {
+            var stage = PairingFailureStage.NETWORK_VALIDATION
+            try {
+                runCatching {
+                    check(hasValidatedInternet()) { "Android has not validated an internet connection" }
+                    stage = PairingFailureStage.API_REQUEST
+                    val result = api.pair(PairRequest(code, deviceId, android.os.Build.MANUFACTURER, android.os.Build.MODEL, android.os.Build.VERSION.RELEASE, BuildConfig.VERSION_NAME))
+                    stage = PairingFailureStage.CREDENTIAL_PERSISTENCE
+                    store.save(result.credentials)
+                    activeAuthorization = null
+                    trustedTimeFailureMessage = null
+                    _authorizationValid.value = false
+                    _cachedPlaybackAllowed.value = false
+                    stage = PairingFailureStage.AUTHORIZATION_RESET
+                    runCatching { db.manifestDao().invalidateAuthorization() }.onFailure {
+                        store.clear()
+                        _pairedScreenId.value = null
+                        active = null
+                        throw it
+                    }
+                    _pairedScreenId.value = result.credentials.screenId
+                    repairMode = false
+                    Log.i("OoroScreen", "pairing succeeded displayId=${result.credentials.screenId} paired=true")
+                    if (hasValidatedInternet()) sync()
+                }.onFailure { error ->
+                    val failureKind = (error as? DeviceApiException)?.kind
+                    val message = pairingAttemptFailureMessage(stage, failureKind)
+                    Log.w("OoroScreen", "pairing failed stage=$stage validatedInternet=${hasValidatedInternet()} failure=${failureKind ?: error.javaClass.simpleName}")
+                    _state.value = ScreenState.Setup(message, true)
+                }
+            } finally {
+                _pairing.value = false
+            }
+        }
+    }
     fun reconnect() { if (_reconnecting.value) return; _reconnecting.value = true; val current = (_state.value as? ScreenState.AuthRecovery); if (current != null) _state.value = current.copy(reconnecting = true); viewModelScope.launch { try { sync() } finally { _reconnecting.value = false } } }
     fun beginRepair() { repairMode = true; _state.value = ScreenState.Setup("Enter a new pairing code. This keeps the existing screen identity and history.", true) }
     fun onActivityResumed(commandId: String?) {
