@@ -40,7 +40,7 @@ internal fun classifyDeviceFailure(status: Int, code: String?, edgeRejected: Boo
     status == 401 && code in setOf("DEVICE_REVOKED", "AUTH_REVOKED") -> DeviceFailureKind.AUTH_REVOKED
     status == 401 -> DeviceFailureKind.AUTH_INVALID
     status == 404 && code == "DEVICE_NOT_FOUND" -> DeviceFailureKind.DEVICE_NOT_FOUND
-    status == 404 -> DeviceFailureKind.PAIRING_REQUIRED
+    status == 409 && code == "PAIRING_REQUIRED" -> DeviceFailureKind.PAIRING_REQUIRED
     else -> DeviceFailureKind.REQUEST_FAILED
 }
 internal fun classifyNetworkFailure(error: Throwable): DeviceFailureKind {

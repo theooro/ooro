@@ -32,8 +32,8 @@ private val allowedDeviceCommands = setOf(
 internal fun commandIdIsValid(id: String): Boolean = runCatching { UUID.fromString(id); true }.getOrDefault(false)
 internal fun commandIsExpired(expiresAt: Instant?, now: Instant): Boolean = expiresAt != null && !now.isBefore(expiresAt)
 internal fun supportedDeviceCommand(type: String): Boolean = type.uppercase() in allowedDeviceCommands
-internal fun shouldFinalizeAcknowledgedUnpair(revocationPending: Boolean, hasAcknowledgedUnpair: Boolean): Boolean =
-    revocationPending && hasAcknowledgedUnpair
+internal fun shouldFinalizeAcknowledgedUnpair(confirmedUnpairPending: Boolean, hasAcknowledgedUnpair: Boolean): Boolean =
+    confirmedUnpairPending && hasAcknowledgedUnpair
 internal enum class ReceiptRecovery { RETRY_ACK, FAIL_INTERRUPTED, FAIL_EXPIRED, WAIT_FOR_RESUME, REPLAY_NOT_STARTED, NONE }
 internal fun receiptRecovery(phase: CommandReceiptPhase, expired: Boolean): ReceiptRecovery = when (phase) {
     CommandReceiptPhase.ACK_PENDING -> ReceiptRecovery.RETRY_ACK
@@ -54,16 +54,17 @@ class CommandProcessor(private val context: Context, private val api: DeviceApi,
     suspend fun poll() {
         com.ooro.screenplayer.RuntimeDiagnostics.increment(com.ooro.screenplayer.RuntimeDiagnostics.Counter.COMMAND_POLL)
         val credentials = store.credentials() ?: return
+        val credentialSavedAt = store.credentialsSavedAt()
         try {
             // An acknowledged UNPAIR receipt is only a crash-recovery signal while
             // its revocation marker is still pending. Replaying it after a later
             // successful pairing would clear the newly stored credentials.
             val hasAcknowledgedUnpair = receipts.forDevice(credentials.deviceId).any {
-                it.commandType == "UNPAIR" && it.phase == CommandReceiptPhase.ACKED && it.result?.status == "SUCCEEDED"
+                it.commandId == store.confirmedUnpairCommandId() && it.commandType == "UNPAIR" && it.phase == CommandReceiptPhase.ACKED && it.result?.status == "SUCCEEDED"
             }
-            if (shouldFinalizeAcknowledgedUnpair(store.authorizationRevocationPending(), hasAcknowledgedUnpair)) {
+            if (shouldFinalizeAcknowledgedUnpair(store.confirmedUnpairPending(), hasAcknowledgedUnpair)) {
                 invalidateAuthorizationAfterConfirmedUnpair()
-                store.clear()
+                store.clearIfCurrent(credentials, credentialSavedAt)
                 ManifestRefreshBus.request()
                 return
             }
@@ -169,7 +170,6 @@ class CommandProcessor(private val context: Context, private val api: DeviceApi,
             val completedAt = Instant.now()
             val result = CommandResult(command.id, credentials.deviceId, "SUCCEEDED", receivedAt, running.updatedAt.toInstant(), completedAt)
             finish(credentials, running, result)
-            if (command.type.uppercase() == "UNPAIR" && receipts.get(command.id)?.phase == CommandReceiptPhase.ACKED) store.clear()
         } catch (error: Exception) {
             val unsupported = error is UnsupportedOperationException
             finish(credentials, running, failure(running, if (unsupported) "UNSUPPORTED" else "FAILED", if (unsupported) "UNSUPPORTED_COMMAND" else "COMMAND_FAILED", sanitizedCommandError(error.message)))
@@ -198,15 +198,18 @@ class CommandProcessor(private val context: Context, private val api: DeviceApi,
     }
 
     private suspend fun acknowledge(credentials: DeviceCredentials, receipt: CommandReceipt, result: CommandResult) {
+        if (receipt.commandType == "UNPAIR" && result.receivedAt.toEpochMilli() < store.credentialsSavedAt()) return
+        if (store.credentials() != credentials) return
+        val credentialSavedAt = store.credentialsSavedAt()
         try {
             if (receipt.commandType == "UNPAIR" && result.status == "SUCCEEDED") UnpairPendingBus.request()
-            if (receipt.commandType == "UNPAIR" && result.status == "SUCCEEDED" && !store.authorizationRevocationPending() && !store.beginAuthorizationRevocation()) throw IllegalStateException("authorization revocation marker could not be persisted")
+            if (receipt.commandType == "UNPAIR" && result.status == "SUCCEEDED" && !store.confirmedUnpairPending() && !store.beginAuthorizationRevocation(forUnpair = true, unpairCommandId = receipt.commandId)) throw IllegalStateException("authorization revocation marker could not be persisted")
             api.acknowledgeCommand(credentials, result)
             receipts.put(receipt.copy(phase = CommandReceiptPhase.ACKED, result = result, updatedAt = System.currentTimeMillis()))
             if (receipt.commandType == "UNPAIR" && result.status == "SUCCEEDED") {
                 val cleanup = retryAuthorizationRevocation(store) { OoroDatabase.get(context).manifestDao().invalidateAuthorization() }
                 if (cleanup is AuthorizationRevocationAttempt.Pending) Log.w("OoroScreen", "unpair acknowledged; cached authorization remains blocked until cleanup succeeds")
-                store.clear()
+                store.clearIfCurrent(credentials, credentialSavedAt)
                 ManifestRefreshBus.request()
             }
             Log.i("OoroScreen", "command acknowledged type=${result.status} commandId=${result.commandId}")
@@ -262,7 +265,7 @@ class CommandProcessor(private val context: Context, private val api: DeviceApi,
     }
 
     private suspend fun invalidateAuthorizationAfterConfirmedUnpair() {
-        if (!store.authorizationRevocationPending() && !store.beginAuthorizationRevocation()) return
+        if (!store.confirmedUnpairPending() && !store.beginAuthorizationRevocation(forUnpair = true)) return
         retryAuthorizationRevocation(store) { OoroDatabase.get(context).manifestDao().invalidateAuthorization() }
     }
 

@@ -767,7 +767,19 @@ app.get('/api/vehicles', async (request, reply) => { const auth = await requireA
 app.get('/api/vehicles/:vehicleId', async (request, reply) => { const auth = await requireAuth(request); const d = await driverFrom(auth); const { vehicleId } = request.params as { vehicleId: string }; const v = await prisma.vehicle.findFirst({ where: { id: vehicleId, driverId: d.id }, include: { displays: true } }); if (!v) throw notFound('Vehicle not found'); return ok(request, v, reply) })
 app.patch('/api/vehicles/:vehicleId', async (request, reply) => { const auth = await requireAuth(request); const d = await driverFrom(auth); const { vehicleId } = request.params as { vehicleId: string }; const v = await prisma.vehicle.findFirst({ where: { id: vehicleId, driverId: d.id } }); if (!v) throw notFound('Vehicle not found'); return ok(request, await prisma.vehicle.update({ where: { id: vehicleId }, data: bodyOf(request, vehicleSchema.partial()) }), reply) })
 
+app.get('/api/displays/:displayId/recovery-code', async (request, reply) => {
+  const auth = await requirePermission(request, 'device:write')
+  const { displayId } = z.object({ displayId: z.string().uuid() }).parse(request.params)
+  reply.header('Cache-Control', 'no-store')
+  const row = await prisma.displayRecoveryCode.findUnique({ where: { displayId } })
+  if (!row) return ok(request, null, reply)
+  if (row.revokedAt) return ok(request, { displayId, pairingCode: null, status: 'REVOKED', createdAt: row.createdAt, expiresAt: null }, reply)
+  const code = decryptDisplayRecoveryCode(row.encryptedCode, config.documentStorageKey)
+  await prisma.auditLog.create({ data: { actorId: auth.userId, actorRole: auth.role, action: 'SCREEN_RECOVERY_CODE_REVEALED', entityType: 'Display', entityId: displayId, after: { codeLast4: row.codeLast4 }, requestId: request.id } })
+  return ok(request, { displayId, pairingCode: code, status: 'ACTIVE', createdAt: row.createdAt, expiresAt: null }, reply)
+})
 app.post('/api/displays/pairing-code', async (request, reply) => {
+  reply.header('Cache-Control', 'no-store')
   const auth = await requirePermission(request, 'device:write'); const input = bodyOf(request, z.object({ displayId: z.string().uuid() }))
   const display = await prisma.display.findFirst({ where: { id: input.displayId } })
   if (!display) throw notFound('Display not found')
@@ -815,12 +827,13 @@ app.post('/api/device/pair', async (request, reply) => {
   const legacy = recovery ? null : await prisma.displayPairingCode.findFirst({ where: { codeHash: submittedCodeHash, purpose: 'SCREEN_PLAYER', consumedAt: null, revokedAt: null, expiresAt: { gt: new Date() } }, select: { id: true, displayId: true } })
   const displayId = recovery?.displayId ?? legacy?.displayId
   if (!displayId) { await recordPairingFailure(request.ip); throw new ApiError('INVALID_PAIRING_CODE', 'Pairing code is invalid or revoked', 400) }
-  const token = randomSecret()
+  const token = recovery ? createHmac('sha256', config.documentStorageKey).update(JSON.stringify(['screen-recovery-v1', displayId, submittedCodeHash, input.deviceId])).digest('base64url') : randomSecret()
   const display = await prisma.$transaction(async tx => {
     if (recovery) { const stillActive = await tx.displayRecoveryCode.findFirst({ where: { displayId, codeHash: submittedCodeHash, revokedAt: null }, select: { id: true } }); if (!stillActive) throw new ApiError('INVALID_PAIRING_CODE', 'Pairing code is invalid or revoked', 400) }
     const owner = await tx.display.findUnique({ where: { deviceId: input.deviceId }, select: { id: true } })
     if (owner && owner.id !== displayId) throw new ApiError('DEVICE_ALREADY_PAIRED', 'This device is already registered to another screen', 409)
     if (legacy) { const consumed = await tx.displayPairingCode.updateMany({ where: { id: legacy.id, consumedAt: null, revokedAt: null, expiresAt: { gt: new Date() } }, data: { consumedAt: new Date() } }); if (consumed.count !== 1) throw new ApiError('INVALID_PAIRING_CODE', 'Pairing code is invalid or revoked', 400) }
+    await tx.displayCommand.updateMany({ where: { displayId, commandType: 'UNPAIR', status: { in: ['QUEUED', 'DELIVERED', 'PROCESSING'] } }, data: { status: 'CANCELLED', error: 'SUPERSEDED_BY_SCREEN_REPAIR' } })
     const updated = await tx.display.update({ where: { id: displayId }, data: { deviceId: input.deviceId, deviceTokenHash: hashSecret(token), state: 'READY', pairingStatus: 'PAIRING_PENDING', pairedAt: null, appVersion: input.appVersion, manufacturer: input.manufacturer, model: input.model, androidVersion: input.androidVersion } })
     await tx.auditLog.create({ data: { actorRole: 'SCREEN_PLAYER', action: 'SCREEN_PLAYER_RECOVERY_ACCEPTED', entityType: 'Display', entityId: updated.id, after: { pairingStatus: updated.pairingStatus, appVersion: input.appVersion }, requestId: request.id } })
     return updated

@@ -1,3 +1,4 @@
+import { parsePairingResponse } from "./pairing-response";
 import { deriveHealth, fleetHealth } from "./health";
 import type { CreateScreenInput, DeviceActivity, DeviceCommand, DeviceHeartbeat, DeviceHealth, PairingCode, Screen, ScreenFilters } from "./types";
 
@@ -61,13 +62,13 @@ class LiveDeviceHealthRepository implements DeviceHealthRepository {
   private async read(screenId: string) { const response = await fetch(`/api/admin/screens/${screenId}/health`, { cache: "no-store" }); if (!response.ok) throw new Error("Unable to load device health"); const payload = await response.json(); return payload.data ?? { health: null, history: [] }; }
 }
 class MockPairingRepository implements PairingRepository {
-  async getActiveCode(screenId: string) { return pairingCodes.find(code => code.screenId === screenId && code.status === "ACTIVE") ?? this.createCode(screenId); }
+  async getActiveCode(screenId: string) { return pairingCodes.find(code => code.screenId === screenId && code.status === "ACTIVE") ?? null; }
   async createCode(screenId: string) { const existing = pairingCodes.find(code => code.screenId === screenId && code.status === "ACTIVE"); if (existing) return existing; const alphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"; const bytes = new Uint8Array(10); crypto.getRandomValues(bytes); const code = Array.from(bytes, byte => alphabet[byte % alphabet.length]).join(""); const pairingCode: PairingCode = { code, screenId, status: "ACTIVE", createdAt: new Date().toISOString(), expiresAt: null }; pairingCodes.push(pairingCode); return pairingCode; }
   async revokeCode(code: string) { const match = pairingCodes.find(item => item.code === code); if (match) match.status = "REVOKED"; }
 }
 class LivePairingRepository implements PairingRepository {
-  async getActiveCode(screenId: string) { return this.createCode(screenId); }
-  async createCode(screenId: string) { const response = await fetch(`/api/admin/screens/${screenId}/pairing-code`, { method: "POST" }); const payload = await response.json().catch(() => null); if (!response.ok) throw new Error(payload?.error?.message || "Unable to load recovery code"); return payload.data as PairingCode; }
+  async getActiveCode(screenId: string) { const response = await fetch(`/api/admin/screens/${screenId}/pairing-code`, { cache: "no-store" }); const payload = await response.json().catch(() => null); if (!response.ok) throw new Error(payload?.error?.message || "Unable to reveal recovery code"); return payload?.data === null ? null : parsePairingResponse(payload, screenId); }
+  async createCode(screenId: string) { const response = await fetch(`/api/admin/screens/${screenId}/pairing-code`, { method: "POST" }); const payload = await response.json().catch(() => null); if (!response.ok) throw new Error(payload?.error?.message || "Unable to load recovery code"); return parsePairingResponse(payload, screenId); }
   async revokeCode(code: string, screenId?: string) { if (!screenId) return; const response = await fetch(`/api/admin/screens/${screenId}/pairing-code`, { method: "DELETE" }); if (!response.ok) throw new Error("Unable to revoke recovery code"); void code; }
 }
 class MockCommandRepository implements DeviceCommandRepository { async createCommand(screenId: string, type: DeviceCommand["type"]) { return { id: `command-${Date.now()}`, screenId, type, status: "QUEUED" as const, createdAt: new Date().toISOString() }; } async getLatestCommand() { return null; } }
