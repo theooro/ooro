@@ -20,10 +20,10 @@ test("legacy timing inputs are rejected rather than silently treated as campaign
   assert.equal(hasRemovedCampaignTiming({ name: "Draft", status: "DRAFT" }), false)
 })
 
-test("campaign presentation reports state and explicit quota, including safe legacy labeling", () => {
+test("campaign presentation shows status while removing legacy quota from the UI", () => {
   assert.equal(campaignDeliveryStateLabel("ACTIVE"), "ACTIVE")
   assert.equal(campaignDeliveryStateLabel("SCHEDULED"), "LEGACY · REVIEW REQUIRED")
-  assert.equal(campaignQuotaLabel({ offlinePlaysPerDisplay: 250 }), "250")
-  assert.equal(campaignQuotaLabel({ unlimitedOfflineDelivery: true }), "Unlimited · explicit authorization")
-  assert.equal(campaignQuotaLabel({}), "Not authorized")
+  assert.equal(campaignQuotaLabel({ offlinePlaysPerDisplay: 250 }), "No per-screen play limit")
+  assert.equal(campaignQuotaLabel({ unlimitedOfflineDelivery: true }), "No per-screen play limit")
+  assert.equal(campaignQuotaLabel({}), "No per-screen play limit")
 })
