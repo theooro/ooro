@@ -35,7 +35,10 @@ class LocationReporter(private val context: Context) {
         if (started) return
         started = true
         val manager = context.getSystemService(LocationManager::class.java)
-        manager.getProviders(true).filter { it == LocationManager.GPS_PROVIDER || it == LocationManager.NETWORK_PROVIDER }.forEach { provider -> runCatching { manager.requestLocationUpdates(provider, 10_000L, 75f, listener, Looper.getMainLooper()) } }
+        // Keep location fresh while the screen is parked. A large distance
+        // threshold left the portal showing an old point indefinitely when a
+        // display stayed in one place.
+        manager.getProviders(true).filter { it == LocationManager.GPS_PROVIDER || it == LocationManager.NETWORK_PROVIDER }.forEach { provider -> runCatching { manager.requestLocationUpdates(provider, 30_000L, 0f, listener, Looper.getMainLooper()) } }
         cached = latest()
         Log.d("OoroScreen", "LOCATION_REPORTER_STARTED snapshotAvailable=${cached != null}")
     }
@@ -49,7 +52,12 @@ class LocationReporter(private val context: Context) {
             Log.d("OoroScreen", "LOCATION_SNAPSHOT_UPDATED snapshotAvailable=true locationAgeSeconds=${ageSeconds(it.occurredAt)}")
         }
     }
-    fun current(): LocationSnapshot? = cached ?: latest().also { snapshot -> Log.d("OoroScreen", "LOCATION_CURRENT snapshotAvailable=${snapshot != null}") }
+    fun current(): LocationSnapshot? {
+        val now = System.currentTimeMillis()
+        val value = cached
+        if (value != null && now - value.occurredAt in 0..60_000L) return value
+        return latest().also { snapshot -> Log.d("OoroScreen", "LOCATION_CURRENT snapshotAvailable=${snapshot != null}") }
+    }
     private fun accuracyBucket(value: Float) = when { !value.isFinite() || value < 0f -> "invalid"; value < 20f -> "<20m"; value < 100f -> "20-100m"; else -> ">=100m" }
     private fun ageSeconds(occurredAt: Long) = ((System.currentTimeMillis() - occurredAt).coerceAtLeast(0L) / 1000L)
 }
