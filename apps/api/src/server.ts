@@ -833,9 +833,16 @@ app.post('/api/device/pair', async (request, reply) => {
     const owner = await tx.display.findUnique({ where: { deviceId: input.deviceId }, select: { id: true, state: true, pairingStatus: true, deviceTokenHash: true } })
     if (owner && owner.id !== displayId) {
       const safelyReleased = owner.state === 'DELETED' && owner.pairingStatus === 'UNPAIRED' && owner.deviceTokenHash === null
-      if (!safelyReleased) throw new ApiError('DEVICE_ALREADY_PAIRED', 'This device is already registered to another screen', 409)
-      await tx.display.update({ where: { id: owner.id }, data: { deviceId: 'deleted:' + owner.id + ':' + randomUUID() } })
-      await tx.auditLog.create({ data: { actorRole: 'SCREEN_PLAYER', action: 'SCREEN_DEVICE_ID_RECLAIMED_FROM_DELETED_RECORD', entityType: 'Display', entityId: owner.id, before: { state: owner.state, pairingStatus: owner.pairingStatus }, after: { reassignedToDisplayId: displayId }, requestId: request.id } })
+      // Admin removal can remain pending forever when the player has already
+      // lost its credential and therefore cannot acknowledge UNPAIR. A valid,
+      // display-bound recovery code is explicit authorization to repair this
+      // screen. In that case, finalize only the prior Admin-requested removal,
+      // revoke its stale credential, and preserve the old display/history row.
+      const adminRemovalPending = Boolean(recovery) && owner.pairingStatus === 'REMOVAL_PENDING' && ['DISABLED', 'UNPAIRED'].includes(owner.state)
+      if (!safelyReleased && !adminRemovalPending) throw new ApiError('DEVICE_ALREADY_PAIRED', 'This device is already registered to another screen', 409)
+      await tx.display.update({ where: { id: owner.id }, data: { deviceId: 'deleted:' + owner.id + ':' + randomUUID(), deviceTokenHash: null, state: 'DELETED', pairingStatus: 'UNPAIRED', pairedAt: null } })
+      await tx.displayCommand.updateMany({ where: { displayId: owner.id, commandType: 'UNPAIR', status: { in: ['QUEUED', 'DELIVERED', 'PROCESSING'] } }, data: { status: 'CANCELLED', error: 'SUPERSEDED_BY_SCREEN_RECOVERY' } })
+      await tx.auditLog.create({ data: { actorRole: 'SCREEN_PLAYER', action: safelyReleased ? 'SCREEN_DEVICE_ID_RECLAIMED_FROM_DELETED_RECORD' : 'SCREEN_DEVICE_ID_RECLAIMED_AFTER_ADMIN_REMOVAL', entityType: 'Display', entityId: owner.id, before: { state: owner.state, pairingStatus: owner.pairingStatus, hadDeviceCredential: owner.deviceTokenHash !== null }, after: { state: 'DELETED', pairingStatus: 'UNPAIRED', credentialRevoked: owner.deviceTokenHash !== null, reassignedToDisplayId: displayId }, requestId: request.id } })
     }
     if (legacy) { const consumed = await tx.displayPairingCode.updateMany({ where: { id: legacy.id, consumedAt: null, revokedAt: null, expiresAt: { gt: new Date() } }, data: { consumedAt: new Date() } }); if (consumed.count !== 1) throw new ApiError('INVALID_PAIRING_CODE', 'Pairing code is invalid or revoked', 400) }
     await tx.displayCommand.updateMany({ where: { displayId, commandType: 'UNPAIR', status: { in: ['QUEUED', 'DELIVERED', 'PROCESSING'] } }, data: { status: 'CANCELLED', error: 'SUPERSEDED_BY_SCREEN_REPAIR' } })
