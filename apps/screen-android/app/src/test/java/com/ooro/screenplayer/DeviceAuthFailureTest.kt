@@ -24,7 +24,7 @@ class DeviceAuthFailureTest {
     @Test fun connectivityAndServerFailuresAreNotReportedAsAuthFailures() {
         assertEquals(DeviceFailureKind.SERVER_UNAVAILABLE, classifyDeviceFailure(503, "UPSTREAM_UNAVAILABLE"))
         assertEquals(DeviceFailureKind.DEVICE_NOT_FOUND, classifyDeviceFailure(404, "DEVICE_NOT_FOUND"))
-        assertEquals(DeviceFailureKind.PAIRING_REQUIRED, classifyDeviceFailure(404, ""))
+        assertEquals(DeviceFailureKind.REQUEST_FAILED, classifyDeviceFailure(404, ""))
     }
 
     @Test fun rebootTimeRecoveryFailuresAreClassifiedWithoutCredentialDetails() {

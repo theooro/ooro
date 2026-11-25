@@ -29,13 +29,17 @@ class DeviceStore internal constructor(context: Context, preferencesName: String
     private val prefs = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
     val deviceId: String get() = prefs.getString("device_id", null) ?: "ooro-${UUID.randomUUID()}".also { prefs.edit().putString("device_id", it).apply() }
     fun credentials(): DeviceCredentials? = prefs.getString("token", null)?.let { encrypted -> runCatching { DeviceCredentials(prefs.getString("device_id", deviceId)!!, prefs.getString("screen_id", "")!!, prefs.getString("workspace_id", "")!!, cipher.decrypt(encrypted), prefs.getString("device_name", "OORO Screen")!!) }.onFailure { Log.w("OoroScreen", "credential read failed; treating device as unpaired") }.getOrNull() }
-    fun save(credentials: DeviceCredentials) {
+    @Synchronized fun save(credentials: DeviceCredentials) {
         val encrypted = cipher.encrypt(credentials.token)
-        check(prefs.edit().putString("device_id", credentials.deviceId).putString("screen_id", credentials.screenId).putString("workspace_id", credentials.workspaceId).putString("token", encrypted).putString("device_name", credentials.name).commit()) { "credential preferences commit failed" }
+        check(prefs.edit().putString("device_id", credentials.deviceId).putString("screen_id", credentials.screenId).putString("workspace_id", credentials.workspaceId).putLong("credential_saved_at", System.currentTimeMillis()).putBoolean("confirmed_unpair_pending", false).remove("confirmed_unpair_command_id").putString("token", encrypted).putString("device_name", credentials.name).commit()) { "credential preferences commit failed" }
         Log.i("OoroScreen", "credentials persisted displayId=${credentials.screenId} tokenPresent=${encrypted.isNotBlank()} paired=${credentials.screenId.isNotBlank()}")
     }
     fun clear() { prefs.edit().remove("screen_id").remove("workspace_id").remove("token").remove("device_name").remove("last_successful_manifest_sync").commit() }
-    fun beginAuthorizationRevocation(): Boolean = prefs.edit().putBoolean(KEY_AUTHORIZATION_REVOCATION_PENDING, true).remove(KEY_AUTHORIZATION_REVOCATION_FAILURE).commit()
+    fun credentialsSavedAt(): Long = prefs.getLong("credential_saved_at", 0L)
+    fun confirmedUnpairPending(): Boolean = prefs.getBoolean("confirmed_unpair_pending", false)
+    fun confirmedUnpairCommandId(): String? = prefs.getString("confirmed_unpair_command_id", null)
+    @Synchronized fun clearIfCurrent(expected: DeviceCredentials, savedAt: Long = credentialsSavedAt()) { if (credentials() == expected && credentialsSavedAt() == savedAt) clear() }
+    fun beginAuthorizationRevocation(forUnpair: Boolean = false, unpairCommandId: String? = null): Boolean = prefs.edit().putString("confirmed_unpair_command_id", unpairCommandId).putBoolean("confirmed_unpair_pending", forUnpair).putBoolean(KEY_AUTHORIZATION_REVOCATION_PENDING, true).remove(KEY_AUTHORIZATION_REVOCATION_FAILURE).commit()
     fun authorizationRevocationPending(): Boolean = prefs.getBoolean(KEY_AUTHORIZATION_REVOCATION_PENDING, false)
     fun completeAuthorizationRevocation(): Boolean = prefs.edit().putBoolean(KEY_AUTHORIZATION_REVOCATION_PENDING, false).remove(KEY_AUTHORIZATION_REVOCATION_FAILURE).commit()
     fun authorizationRevocationFailure(): String? = prefs.getString(KEY_AUTHORIZATION_REVOCATION_FAILURE, null)

@@ -301,6 +301,11 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
         viewModelScope.launch {
             var stage = PairingFailureStage.REVOCATION_MARKER
             try {
+                stage = PairingFailureStage.NETWORK_VALIDATION
+                check(hasValidatedInternet()) { "Android has not validated an internet connection" }
+                stage = PairingFailureStage.API_REQUEST
+                val result = api.pair(PairRequest(code, deviceId, android.os.Build.MANUFACTURER, android.os.Build.MODEL, android.os.Build.VERSION.RELEASE, BuildConfig.VERSION_NAME))
+                stage = PairingFailureStage.REVOCATION_MARKER
                 if (!store.beginAuthorizationRevocation()) {
                     active = null; activeAuthorization = null
                     _authorizationValid.value = false; _cachedPlaybackAllowed.value = false; _currentCreative.value = null
@@ -313,10 +318,6 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
                 _authorizationValid.value = false; _cachedPlaybackAllowed.value = false; _verifiedAssetIds.value = emptySet(); _currentCreative.value = null
                 _state.value = ScreenState.Setup("Recovery pending · old screen authorization is blocked while this display reconnects.", true)
                 _diagnostic.value = "Recovery pending · local screen authorization cleanup must complete before playback."
-                stage = PairingFailureStage.NETWORK_VALIDATION
-                check(hasValidatedInternet()) { "Android has not validated an internet connection" }
-                stage = PairingFailureStage.API_REQUEST
-                val result = api.pair(PairRequest(code, deviceId, android.os.Build.MANUFACTURER, android.os.Build.MODEL, android.os.Build.VERSION.RELEASE, BuildConfig.VERSION_NAME))
                 stage = PairingFailureStage.CREDENTIAL_PERSISTENCE
                 store.save(result.credentials)
                 _pairedScreenId.value = result.credentials.screenId
@@ -336,7 +337,12 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             } catch (error: Exception) {
                 val failureKind = (error as? DeviceApiException)?.kind
                 val message = pairingAttemptFailureMessage(stage, failureKind)
-                _state.value = ScreenState.Setup(message, true)
+                if (stage in setOf(PairingFailureStage.NETWORK_VALIDATION, PairingFailureStage.API_REQUEST) && store.credentials() != null) {
+                    repairMode = false
+                    _diagnostic.value = message
+                    keepCachedPlayback()
+                    scheduleReconnect()
+                } else _state.value = ScreenState.Setup(message, true)
                 Log.w("OoroScreen", "pairing failed stage=$stage validatedInternet=${hasValidatedInternet()} failure=${failureKind ?: error.javaClass.simpleName}")
                 if (stage in setOf(PairingFailureStage.API_REQUEST, PairingFailureStage.CREDENTIAL_PERSISTENCE, PairingFailureStage.AUTHORIZATION_RESET)) reportPairingFailure(stage, store.authorizationRevocationFailure())
             } finally {
@@ -813,7 +819,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             val credentials = store.credentials()
             if (credentials == null) { clearInMemoryAuthorizationAfterUnpair(); return@launch }
             if (!hasValidatedInternet()) { _state.value = ScreenState.Setup("Unpair was not sent · validated internet is required before OORO can acknowledge it.", true); return@launch }
-            if (!store.authorizationRevocationPending() && !store.beginAuthorizationRevocation()) {
+            if (!store.authorizationRevocationPending() && !store.beginAuthorizationRevocation(forUnpair = true)) {
                 active = null; activeAuthorization = null; _authorizationValid.value = false; _cachedPlaybackAllowed.value = false; _currentCreative.value = null
                 val oldAuthorizationCleared = runCatching { db.manifestDao().invalidateAuthorization() }.isSuccess
                 _state.value = ScreenState.Setup("Unpair was not sent · local authorization revocation could not be saved.", true)
