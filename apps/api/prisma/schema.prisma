@@ -620,6 +620,7 @@ model Creative {
   type            String
   status          String                 @default("PENDING_REVIEW")
   durationSeconds Int                    @default(10)
+  deliverySlot    String?
   displayOrder    Int                    @default(0)
   brandName       String?
   promotionalText String?

@@ -25,6 +25,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     let qrLabel: string | undefined;
     let brandName: string | undefined;
     let promotionalText: string | undefined;
+    let deliverySlot: "MAIN" | "SPONSORED" | undefined;
     if (contentType.includes("multipart/form-data")) {
       const form = await request.formData();
       const file = form.get("file");
@@ -37,17 +38,19 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       qrLabel = String(form.get("qrLabel") ?? "").trim() || undefined;
       brandName = String(form.get("brandName") ?? "").trim() || undefined;
       promotionalText = String(form.get("promotionalText") ?? "").trim() || undefined;
+      deliverySlot = form.get("deliverySlot") === "SPONSORED" ? "SPONSORED" : form.get("deliverySlot") === "MAIN" ? "MAIN" : undefined;
     } else {
-      const body = await request.json().catch(() => null) as { fileName?: string; mimeType?: string; base64?: string; durationSeconds?: number; width?: number; height?: number; brandName?: string; promotionalText?: string; qrEnabled?: boolean; qrTargetUrl?: string; qrLabel?: string } | null;
+      const body = await request.json().catch(() => null) as { fileName?: string; mimeType?: string; base64?: string; durationSeconds?: number; deliverySlot?: "MAIN" | "SPONSORED"; width?: number; height?: number; brandName?: string; promotionalText?: string; qrEnabled?: boolean; qrTargetUrl?: string; qrLabel?: string } | null;
       fileName = body?.fileName; mimeType = body?.mimeType; bytes = body?.base64 ? Buffer.from(body.base64, "base64") : Buffer.alloc(0);
       durationSeconds = body?.durationSeconds; width = body?.width; height = body?.height; qrEnabled = body?.qrEnabled === true;
       qrTargetUrl = body?.qrTargetUrl?.trim() || undefined; qrLabel = body?.qrLabel?.trim() || undefined;
       brandName = body?.brandName?.trim() || undefined; promotionalText = body?.promotionalText?.trim() || undefined;
+      deliverySlot = body?.deliverySlot;
     }
     if ((!mimeType || mimeType === "application/octet-stream") && fileName) mimeType = mimeByExtension[fileName.split(".").pop()?.toLowerCase() ?? ""] ?? mimeType;
     if (!fileName || !mimeType || !allowed.has(mimeType)) return NextResponse.json({ error: { message: "Use JPG, PNG, WebP, MP4 or WebM." } }, { status: 422 });
     if (!bytes.length || bytes.length > 100 * 1024 * 1024) return NextResponse.json({ error: { message: "Creative must be smaller than 100 MB." } }, { status: 422 });
-    if (!Number.isFinite(durationSeconds) || durationSeconds! < 1 || durationSeconds! > 3600) return NextResponse.json({ error: { message: "Creative duration must be between 1 and 3600 seconds." } }, { status: 422 });
+    if (!Number.isFinite(durationSeconds) || ![10, 15, 20, 30, 45].includes(Math.round(durationSeconds!))) return NextResponse.json({ error: { message: "Choose a still-image play length of 10, 15, 20, 30, or 45 seconds." } }, { status: 422 });
     if (qrEnabled && !qrTargetUrl) return NextResponse.json({ error: { message: "A QR destination is required when QR is enabled." } }, { status: 422 });
     if (qrTargetUrl && !safeDestination(qrTargetUrl, false)) return NextResponse.json({ error: { message: "QR destination must use HTTPS." } }, { status: 422 });
     const campaign = await webPrisma.campaign.findUnique({ where: { id } });
@@ -62,10 +65,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const playbackMedia = await prepareCreativeForPlayback(bytes, fileName, mimeType);
     fileName = playbackMedia.fileName; mimeType = playbackMedia.mimeType; bytes = playbackMedia.bytes;
     width = playbackMedia.width; height = playbackMedia.height;
-    if (playbackMedia.durationSeconds) durationSeconds = playbackMedia.durationSeconds;
+    if (playbackMedia.durationSeconds) {
+      if (playbackMedia.durationSeconds > 45) return NextResponse.json({ error: { message: "Video duration cannot exceed the 45-second campaign limit." } }, { status: 422 });
+      durationSeconds = playbackMedia.durationSeconds;
+    }
+    if (deliverySlot === "SPONSORED" && !mimeType.startsWith("image/")) return NextResponse.json({ error: { message: "Sponsored placement accepts image creatives only." } }, { status: 422 });
     const stored = await storeCreative(bytes, fileName, mimeType);
     const result = await webPrisma.$transaction(async tx => {
-      const creative = await tx.creative.create({ data: { campaignId: id, name: fileName!, type: mimeType!.startsWith("video/") ? "VIDEO" : "IMAGE", durationSeconds: Math.round(durationSeconds!), brandName, promotionalText, qrEnabled, qrTargetUrl, qrLabel } });
+      const creative = await tx.creative.create({ data: { campaignId: id, name: fileName!, type: mimeType!.startsWith("video/") ? "VIDEO" : "IMAGE", durationSeconds: Math.round(durationSeconds!), deliverySlot, brandName, promotionalText, qrEnabled, qrTargetUrl, qrLabel } });
       const asset = await tx.asset.create({ data: { creativeId: creative.id, fileName: fileName!, storageKey: stored.storageKey, url: stored.url, checksum: stored.checksum, mimeType, sizeBytes: BigInt(stored.size), width, height, durationSeconds } });
       await tx.auditLog.create({ data: { actorId: admin.userId, actorRole: admin.role, action: "CREATIVE_UPLOADED", entityType: "Campaign", entityId: id, after: { creativeId: creative.id, fileName, mimeType, size: stored.size, checksum: stored.checksum, brandName, promotionalText, qrEnabled, qrTargetUrl, qrLabel } } });
       return { creative, asset };
