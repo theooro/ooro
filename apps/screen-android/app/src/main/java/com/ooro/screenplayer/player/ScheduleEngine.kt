@@ -11,7 +11,8 @@ class ScheduleEngine {
         return manifest.items.filter { item ->
             item.hasAuthorizedDeliveryQuota && item.isCampaignDateEligibleAt(now)
         }
-            .sortedWith(compareByDescending<ManifestItem> { it.priority }.thenBy { it.campaignId }.thenBy { it.id })
+        // The manifest is an ordered server decision. Re-sorting here can make
+        // cached playback diverge from the approved creative order.
     }
     fun next(manifest: DeviceManifest, now: Instant = Instant.now(), offset: Int = 0, availableItemIds: Set<String>? = null): ManifestItem? {
         val eligible = eligible(manifest, now)

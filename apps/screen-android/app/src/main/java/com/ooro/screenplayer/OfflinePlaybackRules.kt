@@ -6,6 +6,7 @@ import com.ooro.screenplayer.api.DeviceApiException
 import com.ooro.screenplayer.api.DeviceApi
 import com.ooro.screenplayer.api.DeviceFailureKind
 import com.ooro.screenplayer.model.DeviceCredentials
+import com.ooro.screenplayer.model.DeliveryQuota
 import com.ooro.screenplayer.player.ScheduleEngine
 import com.ooro.screenplayer.model.CreativeType
 import com.ooro.screenplayer.model.DisplayLayout
@@ -17,6 +18,36 @@ internal const val NETWORK_RECOVERY_THROTTLE_MILLIS = 30_000L
 internal const val MANIFEST_UPDATE_POLL_INTERVAL_MILLIS = 180_000L
 internal const val MAX_OFFLINE_AUTHORIZATION_MILLIS = 15 * 60_000L
 internal const val OFFLINE_AUTHORIZATION_SAFETY_MILLIS = 5_000L
+
+/** Unlimited server grants authorize looping without local per-play reservations. */
+internal fun requiresLocalQuotaReservation(grant: DeliveryQuota): Boolean = !grant.unlimited
+
+/**
+ * A persisted unlimited grant may resume after a reboot only for the screen
+ * identity that received the authenticated manifest. Without a live time
+ * anchor, use its authenticated issue instant as the eligibility snapshot and
+ * mark proofs created from that mode as time-unverified.
+ */
+internal fun cachedUnlimitedGrantTime(
+    manifest: DeviceManifest?,
+    pairedScreenId: String?,
+    authorizationScreenId: String?,
+    revocationPending: Boolean,
+    verifiedItemIds: Set<String>,
+): Instant? {
+    if (revocationPending || pairedScreenId.isNullOrBlank() || authorizationScreenId != pairedScreenId) return null
+    if (manifest == null || manifest.screenId != pairedScreenId) return null
+    val issuedAt = manifest.generatedAt ?: return null
+    val eligible = (manifest.items + listOfNotNull(manifest.sponsoredItem)).any { item ->
+        item.id in verifiedItemIds && item.deliveryQuota?.unlimited == true && item.isCampaignDateEligibleAt(issuedAt)
+    }
+    return issuedAt.takeIf { eligible }
+}
+
+internal fun onlyUnlimitedOfflineItems(manifest: DeviceManifest, at: Instant): DeviceManifest = manifest.copy(
+    items = manifest.items.filter { it.deliveryQuota?.unlimited == true && it.isCampaignDateEligibleAt(at) },
+    sponsoredItem = manifest.sponsoredItem?.takeIf { it.deliveryQuota?.unlimited == true && it.isCampaignDateEligibleAt(at) },
+)
 
 internal data class OfflineAuthorization(
     val screenId: String,
@@ -88,6 +119,7 @@ internal fun trustedTimeUnavailableMessage(
     currentElapsedMillis: Long,
     currentBootCount: Int?,
 ): String = when {
+    pairedScreenId.isNullOrBlank() -> "Screen is unpaired · pair this device to establish authenticated schedule time before playback."
     authorization == null -> "Trusted time unavailable: no authenticated schedule-time anchor is stored. Reconnect to renew it before playback."
     pairedScreenId.isNullOrBlank() || authorization.screenId != pairedScreenId -> "Trusted time unavailable: the authenticated anchor does not match this screen. Reconnect to renew it before playback."
     currentBootCount == null -> "Trusted time unavailable: the current boot identity cannot be verified. Reconnect to renew it before playback."
@@ -262,6 +294,23 @@ internal fun manifestSyncFailureMessage(error: Throwable?, networkValidated: Boo
                 "OORO returned a manifest for a different screen\nThe response was rejected and playback remains paused."
             else -> "OORO manifest sync failed\nThe last verified manifest remains active while the screen retries."
         }
+    }
+}
+
+internal enum class PairingFailureStage { REVOCATION_MARKER, NETWORK_VALIDATION, API_REQUEST, CREDENTIAL_PERSISTENCE, AUTHORIZATION_RESET }
+
+/** Keep the network-gate message specific to the gate; do not mislabel later failures as connectivity. */
+internal fun pairingAttemptFailureMessage(stage: PairingFailureStage, kind: DeviceFailureKind?): String {
+    if (stage == PairingFailureStage.NETWORK_VALIDATION) {
+        return "Android has not marked this connection as validated. Keep the recovery code and retry when Screen Player reports validated internet."
+    }
+    if (kind != null) return pairingFailureMessage(kind)
+    return when (stage) {
+        PairingFailureStage.REVOCATION_MARKER -> "Recovery could not start because local authorization revocation could not be saved. Playback remains locked until recovery can be safely retried."
+        PairingFailureStage.NETWORK_VALIDATION -> error("handled above")
+        PairingFailureStage.API_REQUEST -> "Pairing request failed after Android reported validated internet. Check the latest pairing diagnostic and Admin > Screens before retrying."
+        PairingFailureStage.CREDENTIAL_PERSISTENCE -> "The pairing response arrived, but secure credentials could not be saved on this device. Check Admin > Screens before retrying."
+        PairingFailureStage.AUTHORIZATION_RESET -> "Pairing could not finish because the previous screen authorization could not be cleared. Playback remains locked; check Admin > Screens."
     }
 }
 

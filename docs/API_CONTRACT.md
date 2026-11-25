@@ -11,4 +11,6 @@ The Android player communicates outbound to the OORO API over HTTPS. The web app
 - `POST /api/device/errors` — bearer-authenticated bounded diagnostic events.
 - `POST /api/device/unpair` — bearer-authenticated revocation request.
 
+Proof events include `timingVerified`. Legacy clients default to `true`; the Android player sends `false` when a persisted unlimited offline grant resumes after its authenticated monotonic time lease is unavailable. The API accepts these events idempotently but records them as `UNVERIFIED_TIME` with `OFFLINE_TIME_UNVERIFIED`; they are excluded from valid-play reporting until reconciled.
+
 The future web flow is Screens → Add screen → backend creates a setup code → operator enters code on APK → backend binds Workspace/Screen/Device → screen appears Connected. Campaign assignments target Screen inventory, never a physical device directly.

@@ -70,7 +70,7 @@ class SchedulingTest {
         assertEquals("authorized", engine.next(manifest.copy(timezone = "Pacific/Honolulu"), trustedNow, 0)?.id)
     }
 
-    @Test fun completionOffsetAdvancesAcrossAuthorizedCreativesAndQuotaExhaustionRemovesItem() {
+    @Test fun completionOffsetFollowsManifestOrderAndSkipsExhaustedCreative() {
         val first = item("a", quota = 2).copy(offer = OfferMetadata(offerTitle = "Offer A", qrUrl = "https://example.com/a"))
         val second = item("b", quota = 2).copy(offer = OfferMetadata(offerTitle = "Offer B", qrUrl = "https://example.com/b"))
         val manifest = DeviceManifest(1, "screen", "UTC", listOf(first, second), null)
@@ -80,11 +80,11 @@ class SchedulingTest {
         assertEquals("creative-b", engine.next(manifest.copy(items = listOf(first.copy(deliveryQuota = DeliveryQuota("a", 2, 0, false)), second)), offset = 0)?.creativeId)
     }
 
-    @Test fun priorityOrdersOnlyStateAndQuotaEligibleItems() {
-        val paid = item("paid", priority = 100)
-        val emergency = item("emergency", priority = 1000)
-        val exhausted = item("exhausted", quota = 0, priority = 2000)
-        val manifest = DeviceManifest(1, "screen", "Asia/Kolkata", listOf(paid, emergency, exhausted), null)
-        assertEquals("emergency", ScheduleEngine().next(manifest)?.id)
+    @Test fun schedulerPreservesServerCreativeOrderInsteadOfSortingByPriority() {
+        val first = item("first", priority = 1)
+        val second = item("second", priority = 1000)
+        val manifest = DeviceManifest(1, "screen", "Asia/Kolkata", listOf(first, second), null)
+        assertEquals("first", ScheduleEngine().next(manifest)?.id)
+        assertEquals("second", ScheduleEngine().next(manifest, offset = 1)?.id)
     }
 }

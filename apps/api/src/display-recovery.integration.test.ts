@@ -32,11 +32,13 @@ test('Screen Player recovery reuses one screen code, replaces credentials, and b
     const reveal = await app.inject({ method: 'POST', url: '/api/displays/pairing-code', headers: { authorization: `Bearer ${adminToken}` }, payload: { displayId: one.id } })
     assert.equal(reveal.statusCode, 200, reveal.body)
     assert.equal(reveal.json().data.pairingCode, code)
+    assert.equal((await prisma.display.findUniqueOrThrow({ where: { id: one.id } })).pairingStatus, 'RECOVERY_REQUESTED')
     const deniedReveal = await app.inject({ method: 'POST', url: '/api/displays/pairing-code', headers: { authorization: `Bearer ${supportToken}` }, payload: { displayId: one.id } })
     assert.equal(deniedReveal.statusCode, 403)
 
     const firstPair = await app.inject({ method: 'POST', url: '/api/device/pair', payload: { pairingCode: code.toLowerCase(), deviceId: deviceIdOne, appVersion: 'test' } })
     assert.equal(firstPair.statusCode, 200, firstPair.body)
+    assert.equal(firstPair.json().data.pairingStatus, 'PAIRING_PENDING')
     const firstToken = firstPair.json().data.deviceToken as string
     assert.equal(firstPair.json().data.screenId, one.id)
 
@@ -45,6 +47,7 @@ test('Screen Player recovery reuses one screen code, replaces credentials, and b
     const secondToken = secondPair.json().data.deviceToken as string
     assert.notEqual(secondToken, firstToken)
     assert.equal(secondPair.json().data.screenId, one.id)
+    assert.equal((await prisma.display.findUniqueOrThrow({ where: { id: one.id } })).pairingStatus, 'PAIRING_PENDING')
     assert.equal((await prisma.display.findUniqueOrThrow({ where: { id: one.id } })).name, 'Recovery screen one')
     assert.equal(await prisma.displayRecoveryCode.count({ where: { displayId: one.id, revokedAt: null } }), 1)
     assert.equal(await prisma.displayCampaignAssignment.count({ where: { displayId: one.id, campaignId: campaign.id, active: true } }), 1)
@@ -53,6 +56,14 @@ test('Screen Player recovery reuses one screen code, replaces credentials, and b
     assert.equal(staleCredential.statusCode, 401)
     const currentCredential = await app.inject({ method: 'GET', url: '/api/device/manifest', headers: { authorization: `Bearer ${secondToken}` } })
     assert.equal(currentCredential.statusCode, 200, currentCredential.body)
+    const failedRecovery = await app.inject({ method: 'POST', url: '/api/device/pairing-failed', headers: { authorization: `Bearer ${secondToken}` }, payload: { failureStage: 'AUTHORIZATION_RESET', exceptionClass: 'SQLiteConstraintException', sqliteCode: 19 } })
+    assert.equal(failedRecovery.statusCode, 200, failedRecovery.body)
+    assert.equal((await prisma.display.findUniqueOrThrow({ where: { id: one.id } })).pairingStatus, 'PAIRING_FAILED')
+    const authenticatedHeartbeat = await app.inject({ method: 'POST', url: '/api/device/heartbeat', headers: { authorization: `Bearer ${secondToken}` }, payload: { appVersion: 'test', networkConnected: true } })
+    assert.equal(authenticatedHeartbeat.statusCode, 200, authenticatedHeartbeat.body)
+    const pairedAfterHeartbeat = await prisma.display.findUniqueOrThrow({ where: { id: one.id } })
+    assert.equal(pairedAfterHeartbeat.pairingStatus, 'PAIRED')
+    assert.ok(pairedAfterHeartbeat.pairedAt)
     const crossScreen = await app.inject({ method: 'POST', url: '/api/device/pair', payload: { pairingCode: code, deviceId: deviceIdTwo } })
     assert.equal(crossScreen.statusCode, 409)
     assert.equal((await prisma.display.findUniqueOrThrow({ where: { id: two.id } })).deviceTokenHash, null)
@@ -69,7 +80,7 @@ test('Screen Player recovery reuses one screen code, replaces credentials, and b
     assert.equal(revoke.statusCode, 200, revoke.body)
     const revokedCode = await app.inject({ method: 'POST', url: '/api/device/pair', payload: { pairingCode: rotatedCode, deviceId: deviceIdOne } })
     assert.equal(revokedCode.statusCode, 400)
-    const audit = await prisma.auditLog.findMany({ where: { entityId: one.id, action: { in: ['SCREEN_RECOVERY_CODE_REVEALED', 'SCREEN_RECOVERY_CODE_ROTATED', 'SCREEN_RECOVERY_CODE_REVOKED'] } }, select: { before: true, after: true } })
+    const audit = await prisma.auditLog.findMany({ where: { entityId: one.id, action: { in: ['SCREEN_RECOVERY_REQUESTED', 'SCREEN_PLAYER_RECOVERY_ACCEPTED', 'SCREEN_PLAYER_RECOVERY_FAILED', 'SCREEN_RECOVERY_CODE_REVEALED', 'SCREEN_RECOVERY_CODE_ROTATED', 'SCREEN_RECOVERY_CODE_REVOKED'] } }, select: { before: true, after: true } })
     assert.equal(JSON.stringify(audit).includes(code), false)
     assert.equal(JSON.stringify(audit).includes(rotatedCode), false)
   } finally {

@@ -7,10 +7,13 @@ import android.provider.Settings
 import android.util.Log
 import androidx.room.withTransaction
 import com.ooro.screenplayer.ManifestRefreshBus
+import com.ooro.screenplayer.UnpairPendingBus
 import com.ooro.screenplayer.recordManifestSync
 import com.ooro.screenplayer.api.CommandResult
 import com.ooro.screenplayer.api.DeviceApi
 import com.ooro.screenplayer.data.DeviceStore
+import com.ooro.screenplayer.data.AuthorizationRevocationAttempt
+import com.ooro.screenplayer.data.retryAuthorizationRevocation
 import com.ooro.screenplayer.data.ManifestEntity
 import com.ooro.screenplayer.data.OoroDatabase
 import com.ooro.screenplayer.model.DeviceCredentials
@@ -29,6 +32,8 @@ private val allowedDeviceCommands = setOf(
 internal fun commandIdIsValid(id: String): Boolean = runCatching { UUID.fromString(id); true }.getOrDefault(false)
 internal fun commandIsExpired(expiresAt: Instant?, now: Instant): Boolean = expiresAt != null && !now.isBefore(expiresAt)
 internal fun supportedDeviceCommand(type: String): Boolean = type.uppercase() in allowedDeviceCommands
+internal fun shouldFinalizeAcknowledgedUnpair(revocationPending: Boolean, hasAcknowledgedUnpair: Boolean): Boolean =
+    revocationPending && hasAcknowledgedUnpair
 internal enum class ReceiptRecovery { RETRY_ACK, FAIL_INTERRUPTED, FAIL_EXPIRED, WAIT_FOR_RESUME, REPLAY_NOT_STARTED, NONE }
 internal fun receiptRecovery(phase: CommandReceiptPhase, expired: Boolean): ReceiptRecovery = when (phase) {
     CommandReceiptPhase.ACK_PENDING -> ReceiptRecovery.RETRY_ACK
@@ -50,8 +55,16 @@ class CommandProcessor(private val context: Context, private val api: DeviceApi,
         com.ooro.screenplayer.RuntimeDiagnostics.increment(com.ooro.screenplayer.RuntimeDiagnostics.Counter.COMMAND_POLL)
         val credentials = store.credentials() ?: return
         try {
-            if (receipts.forDevice(credentials.deviceId).any { it.commandType == "UNPAIR" && it.phase == CommandReceiptPhase.ACKED && it.result?.status == "SUCCEEDED" }) {
+            // An acknowledged UNPAIR receipt is only a crash-recovery signal while
+            // its revocation marker is still pending. Replaying it after a later
+            // successful pairing would clear the newly stored credentials.
+            val hasAcknowledgedUnpair = receipts.forDevice(credentials.deviceId).any {
+                it.commandType == "UNPAIR" && it.phase == CommandReceiptPhase.ACKED && it.result?.status == "SUCCEEDED"
+            }
+            if (shouldFinalizeAcknowledgedUnpair(store.authorizationRevocationPending(), hasAcknowledgedUnpair)) {
+                invalidateAuthorizationAfterConfirmedUnpair()
                 store.clear()
+                ManifestRefreshBus.request()
                 return
             }
             val commands = api.pendingCommands(credentials)
@@ -186,9 +199,16 @@ class CommandProcessor(private val context: Context, private val api: DeviceApi,
 
     private suspend fun acknowledge(credentials: DeviceCredentials, receipt: CommandReceipt, result: CommandResult) {
         try {
+            if (receipt.commandType == "UNPAIR" && result.status == "SUCCEEDED") UnpairPendingBus.request()
+            if (receipt.commandType == "UNPAIR" && result.status == "SUCCEEDED" && !store.authorizationRevocationPending() && !store.beginAuthorizationRevocation()) throw IllegalStateException("authorization revocation marker could not be persisted")
             api.acknowledgeCommand(credentials, result)
             receipts.put(receipt.copy(phase = CommandReceiptPhase.ACKED, result = result, updatedAt = System.currentTimeMillis()))
-            if (receipt.commandType == "UNPAIR" && result.status == "SUCCEEDED") store.clear()
+            if (receipt.commandType == "UNPAIR" && result.status == "SUCCEEDED") {
+                val cleanup = retryAuthorizationRevocation(store) { OoroDatabase.get(context).manifestDao().invalidateAuthorization() }
+                if (cleanup is AuthorizationRevocationAttempt.Pending) Log.w("OoroScreen", "unpair acknowledged; cached authorization remains blocked until cleanup succeeds")
+                store.clear()
+                ManifestRefreshBus.request()
+            }
             Log.i("OoroScreen", "command acknowledged type=${result.status} commandId=${result.commandId}")
         } catch (error: Exception) {
             Log.w("OoroScreen", "command acknowledgement retry pending commandId=${result.commandId}", error)
@@ -222,7 +242,8 @@ class CommandProcessor(private val context: Context, private val api: DeviceApi,
         check(manifest.screenId == credentials.screenId) { "manifest is assigned to a different screen" }
         val authorization = com.ooro.screenplayer.issueOfflineAuthorization(credentials.screenId, manifest.generatedAt, manifest.validUntil, manifest.authenticatedServerTime, receivedElapsed, bootCount)
             ?: error("authenticated offline authorization lease is missing, expired, or invalid")
-        val previousServerTime = db.manifestDao().active()?.authorizationServerTimeUtcMillis
+        val previousEntity = db.manifestDao().active()?.takeIf { it.authorizationScreenId == credentials.screenId }
+        val previousServerTime = previousEntity?.authorizationServerTimeUtcMillis
         check(com.ooro.screenplayer.serverTimeDoesNotRollback(previousServerTime, authorization.serverTimeUtcMillis)) { "authenticated server time moved backwards; previous authorization retained" }
         val required = manifest.items.filter { it.url.isNotBlank() }
         val cached = required.mapNotNull { assets.ensure(it) }
@@ -238,6 +259,11 @@ class CommandProcessor(private val context: Context, private val api: DeviceApi,
         }
         recordManifestSync(context)
         ManifestRefreshBus.request()
+    }
+
+    private suspend fun invalidateAuthorizationAfterConfirmedUnpair() {
+        if (!store.authorizationRevocationPending() && !store.beginAuthorizationRevocation()) return
+        retryAuthorizationRevocation(store) { OoroDatabase.get(context).manifestDao().invalidateAuthorization() }
     }
 
     companion object { private val processingMutex = Mutex() }

@@ -15,6 +15,9 @@ import com.ooro.screenplayer.repository.ProofOfPlayRepository
 import com.ooro.screenplayer.sync.SyncWorker
 import com.ooro.screenplayer.sync.SyncWorkerDependencies
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.flow.first
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Test
@@ -53,15 +56,50 @@ class OfflinePersistenceIntegrationTest {
         legacy.close()
 
         val migrated = Room.databaseBuilder(context, OoroDatabase::class.java, name)
-            .addMigrations(OoroDatabase.MIGRATION_1_2, OoroDatabase.MIGRATION_2_3, OoroDatabase.MIGRATION_3_4)
+            .addMigrations(OoroDatabase.MIGRATION_1_2, OoroDatabase.MIGRATION_2_3, OoroDatabase.MIGRATION_3_4, OoroDatabase.MIGRATION_4_5, OoroDatabase.MIGRATION_5_6)
             .allowMainThreadQueries().build()
         db = migrated
         migrated.openHelper.writableDatabase
 
-        assertEquals(4, migrated.openHelper.readableDatabase.version)
+        assertEquals(6, migrated.openHelper.readableDatabase.version)
         assertEquals(17L, migrated.manifestDao().active()?.version)
         assertEquals(1, migrated.proofDao().pendingCount())
         assertTrue(migrated.deliveryQuotaDao().all().isEmpty())
+    }
+
+    @Test fun staleVersionFiveRoomIdentityMigratesAndAllowsAuthorizationCleanupWithoutDataLoss() = runBlocking {
+        val databaseFile = context.getDatabasePath(name).also { it.parentFile?.mkdirs() }
+        val legacy = SQLiteDatabase.openOrCreateDatabase(databaseFile, null)
+        legacy.execSQL("CREATE TABLE campaign_manifest (id TEXT NOT NULL PRIMARY KEY, version INTEGER NOT NULL, timezone TEXT NOT NULL, validUntil TEXT, json TEXT NOT NULL, authorizationReceivedElapsedMillis INTEGER, authorizationBootCount INTEGER, authorizationDurationMillis INTEGER, authorizationScreenId TEXT, authorizationServerTimeUtcMillis INTEGER)")
+        legacy.execSQL("CREATE TABLE proof_of_play (eventId TEXT NOT NULL PRIMARY KEY, payload TEXT NOT NULL, synced INTEGER NOT NULL, createdAt INTEGER NOT NULL, quarantined INTEGER NOT NULL DEFAULT 0)")
+        legacy.execSQL("CREATE TABLE app_error (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, message TEXT NOT NULL, createdAt INTEGER NOT NULL)")
+        legacy.execSQL("CREATE TABLE delivery_quota (grantId TEXT NOT NULL PRIMARY KEY, campaignId TEXT NOT NULL, revision INTEGER NOT NULL, remainingPlays INTEGER, unlimited INTEGER NOT NULL)")
+        legacy.execSQL("CREATE TABLE quota_consumption (eventId TEXT NOT NULL PRIMARY KEY, grantId TEXT NOT NULL, revision INTEGER NOT NULL, consumedAt INTEGER NOT NULL)")
+        legacy.execSQL("CREATE INDEX index_quota_consumption_grantId_revision ON quota_consumption (grantId, revision)")
+        legacy.execSQL("CREATE TABLE room_master_table (id INTEGER PRIMARY KEY, identity_hash TEXT)")
+        legacy.execSQL("INSERT INTO room_master_table (id, identity_hash) VALUES (42, 'stale-version-five-identity')")
+        legacy.execSQL("INSERT INTO campaign_manifest (id, version, timezone, validUntil, json, authorizationReceivedElapsedMillis, authorizationBootCount, authorizationDurationMillis, authorizationScreenId, authorizationServerTimeUtcMillis) VALUES ('active', 12, 'Asia/Kolkata', '2026-12-01T00:00:00Z', '{}', 100, 7, 900000, 'screen-preserved', 1700000000000)")
+        legacy.execSQL("INSERT INTO proof_of_play (eventId, payload, synced, createdAt, quarantined) VALUES ('proof-preserved', '{}', 0, 1, 0)")
+        legacy.version = 5
+        legacy.close()
+
+        val migrated = Room.databaseBuilder(context, OoroDatabase::class.java, name)
+            .addMigrations(OoroDatabase.MIGRATION_1_2, OoroDatabase.MIGRATION_2_3, OoroDatabase.MIGRATION_3_4, OoroDatabase.MIGRATION_4_5, OoroDatabase.MIGRATION_5_6)
+            .allowMainThreadQueries().build()
+        db = migrated
+        val opened = migrated.openHelper.writableDatabase
+
+        assertEquals(6, opened.version)
+        assertNotEquals("stale-version-five-identity", opened.query("SELECT identity_hash FROM room_master_table WHERE id = 42").use { cursor -> cursor.moveToFirst(); cursor.getString(0) })
+        assertEquals(12L, migrated.manifestDao().active()?.version)
+        assertEquals("screen-preserved", migrated.manifestDao().active()?.authorizationScreenId)
+        assertEquals(1, migrated.proofDao().pendingCount())
+        migrated.manifestDao().invalidateAuthorization()
+        val manifest = migrated.manifestDao().active()!!
+        assertNull(manifest.authorizationScreenId)
+        assertNull(manifest.authorizationReceivedElapsedMillis)
+        assertEquals("{}", manifest.json)
+        assertEquals(1, migrated.proofDao().pendingCount())
     }
 
     @Test fun checksumNamedLegacyAssetsAreVerifiedAndReusedWithoutNetworkOrCopy() = runBlocking {
@@ -108,6 +146,86 @@ class OfflinePersistenceIntegrationTest {
         assertEquals(8, quotas.find("campaign:screen")?.remainingPlays)
         assertTrue("duplicate event must not decrement twice", quotas.consumeOnce("campaign:screen", 3, "offline-proof-2"))
         assertEquals(8, quotas.find("campaign:screen")?.remainingPlays)
+    }
+
+    @Test fun confirmedUnpairInvalidatesOldScreenLeaseWithoutDeletingManifestOrQueuedProofs() = runBlocking {
+        val database = open()
+        val lease = requireNotNull(issueOfflineAuthorization("screen-test", Instant.parse("2026-01-01T00:00:00Z"), Instant.parse("2026-01-01T00:10:00Z"), Instant.parse("2026-01-01T00:00:01Z"), 10_000L, 7))
+        val manifest = DeviceManifest(7, "screen-test", "Asia/Kolkata", emptyList(), Instant.parse("2026-01-01T00:10:00Z"))
+        database.manifestDao().put(ManifestEntity(version = 7, timezone = manifest.timezone, validUntil = manifest.validUntil.toString(), json = ManifestCodec.encode(manifest), authorizationReceivedElapsedMillis = lease.receivedElapsedMillis, authorizationBootCount = lease.bootCount, authorizationDurationMillis = lease.durationMillis, authorizationScreenId = lease.screenId, authorizationServerTimeUtcMillis = lease.serverTimeUtcMillis))
+        database.proofDao().add(ProofEntity("queued-before-unpair", "{}"))
+
+        // The production command path calls this only after OORO acknowledges UNPAIR.
+        database.manifestDao().invalidateAuthorization()
+
+        val persisted = requireNotNull(database.manifestDao().active())
+        assertEquals(7L, persisted.version)
+        assertEquals("screen-test", ManifestCodec.parse(persisted.json).screenId)
+        assertNull(persisted.authorizationReceivedElapsedMillis)
+        assertNull(persisted.authorizationBootCount)
+        assertNull(persisted.authorizationDurationMillis)
+        assertNull(persisted.authorizationScreenId)
+        assertNull(persisted.authorizationServerTimeUtcMillis)
+        assertEquals(listOf("queued-before-unpair"), database.proofDao().pending(10).map { it.eventId })
+    }
+
+    @Test fun coldBootRestoresScreenBoundUnlimitedGrantWithoutRestoringTrustedTime() = runBlocking {
+        val database = open()
+        val issuedAt = Instant.parse("2026-01-01T00:00:00Z")
+        val manifest = DeviceManifest(
+            9, credentials.screenId, "Asia/Kolkata",
+            listOf(ManifestItem("cold-boot-item", "campaign", "creative", CreativeType.IMAGE, "file://verified", "a".repeat(64), 10, 1, issuedAt.minusSeconds(60), issuedAt.plusSeconds(86_400), emptySet(), null, null, deliveryQuota = DeliveryQuota("campaign:${credentials.screenId}", 4, null, true))),
+            issuedAt.plusSeconds(600), generatedAt = issuedAt, authenticatedServerTime = issuedAt.plusSeconds(1),
+        )
+        val lease = requireNotNull(issueOfflineAuthorization(credentials.screenId, manifest.generatedAt, manifest.validUntil, manifest.authenticatedServerTime, 10_000L, 7))
+        database.manifestDao().put(ManifestEntity(version = manifest.version, timezone = manifest.timezone, validUntil = manifest.validUntil.toString(), json = ManifestCodec.encode(manifest), authorizationReceivedElapsedMillis = lease.receivedElapsedMillis, authorizationBootCount = lease.bootCount, authorizationDurationMillis = lease.durationMillis, authorizationScreenId = lease.screenId, authorizationServerTimeUtcMillis = lease.serverTimeUtcMillis))
+        database.close(); db = null
+
+        val restored = ManifestCodec.parse(requireNotNull(open().manifestDao().active()).json)
+        assertEquals(0L, offlineAuthorizationRemainingMillis(lease, credentials.screenId, 20_000L, 8))
+        val grantTime = cachedUnlimitedGrantTime(restored, credentials.screenId, credentials.screenId, false, setOf("cold-boot-item"))
+        assertEquals(issuedAt, grantTime)
+        val selected = onlyUnlimitedOfflineItems(restored, requireNotNull(grantTime))
+        assertEquals("cold-boot-item", ScheduleEngine().next(selected, requireNotNull(grantTime), 0, setOf("cold-boot-item"))?.id)
+        assertNull(cachedUnlimitedGrantTime(restored, credentials.screenId, credentials.screenId, true, setOf("cold-boot-item")))
+    }
+
+    @Test fun failedAuthorizationCleanupRetainsCredentialAndProofAndStartupRetryFailsClosed() = runBlocking {
+        val database = open()
+        val preferencesName = "recovery-${System.nanoTime()}"
+        val testCipher = object : CredentialCipherPort { override fun encrypt(value: String) = value; override fun decrypt(value: String) = value }
+        val store = DeviceStore(context, preferencesName, testCipher)
+        val credentialsReturnedByPair = DeviceCredentials("device-recovery", "screen-new", "workspace", "sensitive-token-not-logged", "Recovery")
+        store.save(credentialsReturnedByPair)
+        assertTrue(store.beginAuthorizationRevocation())
+        val lease = requireNotNull(issueOfflineAuthorization("screen-old", Instant.parse("2026-01-01T00:00:00Z"), Instant.parse("2026-01-01T00:10:00Z"), Instant.parse("2026-01-01T00:00:01Z"), 10_000L, 7))
+        val manifest = DeviceManifest(7, "screen-old", "Asia/Kolkata", emptyList(), Instant.parse("2026-01-01T00:10:00Z"))
+        database.manifestDao().put(ManifestEntity(version = 7, timezone = manifest.timezone, validUntil = manifest.validUntil.toString(), json = ManifestCodec.encode(manifest), authorizationReceivedElapsedMillis = lease.receivedElapsedMillis, authorizationBootCount = lease.bootCount, authorizationDurationMillis = lease.durationMillis, authorizationScreenId = lease.screenId, authorizationServerTimeUtcMillis = lease.serverTimeUtcMillis))
+        database.proofDao().add(ProofEntity("queued-recovery-proof", "{}"))
+        database.openHelper.writableDatabase.execSQL("CREATE TRIGGER reject_authorization_cleanup BEFORE UPDATE OF authorizationReceivedElapsedMillis ON campaign_manifest BEGIN SELECT RAISE(ABORT, 'injected cleanup'); END")
+
+        val failed = retryAuthorizationRevocation(store) { database.manifestDao().invalidateAuthorization() }
+        assertTrue(failed is AuthorizationRevocationAttempt.Pending)
+        assertEquals(credentialsReturnedByPair, store.credentials())
+        assertTrue(store.authorizationRevocationPending())
+        assertFalse(cachedAuthorizationMayBeUsed(store.authorizationRevocationPending(), 10_000L))
+        assertEquals("queued-recovery-proof", database.proofDao().pending(10).single().eventId)
+        assertTrue(store.authorizationRevocationFailure().orEmpty().contains("SQLiteConstraintException"))
+        assertTrue(store.authorizationRevocationFailure().orEmpty().contains("SQLite code 19"))
+        assertTrue(store.authorizationRevocationFailure().orEmpty().contains("[ROOM_INVALIDATE]"))
+        assertTrue(store.authorizationRevocationFailure().orEmpty().contains("origin="))
+        assertFalse(store.authorizationRevocationFailure().orEmpty().contains(credentialsReturnedByPair.token))
+
+        database.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_authorization_cleanup")
+        database.close(); db = null
+        val reopenedDatabase = open()
+        val restartedStore = DeviceStore(context, preferencesName, testCipher)
+        assertTrue(restartedStore.authorizationRevocationPending())
+        assertEquals(credentialsReturnedByPair, restartedStore.credentials())
+        assertEquals(AuthorizationRevocationAttempt.Cleared, retryAuthorizationRevocation(restartedStore) { reopenedDatabase.manifestDao().invalidateAuthorization() })
+        assertFalse(restartedStore.authorizationRevocationPending())
+        assertNull(reopenedDatabase.manifestDao().active()?.authorizationScreenId)
+        assertEquals("queued-recovery-proof", reopenedDatabase.proofDao().pending(10).single().eventId)
     }
 
     @Test fun corruptChecksumNamedLegacyAssetFailsClosedAndIsNotCopiedToItemPath() = runBlocking {
@@ -293,6 +411,7 @@ class OfflinePersistenceIntegrationTest {
 
     private inner class FakeApi(var acknowledgements: Set<String> = emptySet(), var failUpload: Boolean = false) : DeviceApi {
         val submittedIds = mutableListOf<List<String>>()
+        val submittedTimingVerified = mutableListOf<List<Boolean>>()
         var manifestResponse: DeviceManifest? = null
         var manifestFailure: Throwable? = null
         override suspend fun health() = Unit
@@ -303,7 +422,7 @@ class OfflinePersistenceIntegrationTest {
             return if (response.generatedAt != null && response.authenticatedServerTime != null && response.validUntil != null) response else authorizedResponse(response)
         }
         override suspend fun heartbeat(credentials: DeviceCredentials, status: PlayerStatus, manifestVersion: Long, telemetry: HeartbeatTelemetry) = Unit
-        override suspend fun uploadProof(credentials: DeviceCredentials, events: List<ProofOfPlay>): ProofUploadResult { submittedIds += events.map { it.eventId }; if (failUpload) error("offline"); return ProofUploadResult(acknowledgements.size, acknowledgements) }
+        override suspend fun uploadProof(credentials: DeviceCredentials, events: List<ProofOfPlay>): ProofUploadResult { submittedIds += events.map { it.eventId }; submittedTimingVerified += events.map { it.timingVerified }; if (failUpload) error("offline"); return ProofUploadResult(acknowledgements.size, acknowledgements) }
         override suspend fun unpair(credentials: DeviceCredentials) = Unit
     }
 
@@ -344,6 +463,7 @@ class OfflinePersistenceIntegrationTest {
 
     @Test fun productionWorkerKeepsPartialAcknowledgementsForRetryAndDeduplicatesIds() = runBlocking {
         val database = open()
+        SyncWorkerDependencies.validatedInternet = { true }
         database.proofDao().add(ProofEntity("accepted", "{\"screenId\":\"${credentials.screenId}\",\"deviceId\":\"${credentials.deviceId}\",\"campaignId\":\"c\",\"creativeId\":\"a\",\"scheduleItemId\":\"i\",\"startedAt\":\"2026-01-01T00:00:00Z\",\"endedAt\":\"2026-01-01T00:00:10Z\",\"success\":true,\"appVersion\":\"test\"}"))
         database.proofDao().add(ProofEntity("retry", "{\"screenId\":\"${credentials.screenId}\",\"deviceId\":\"${credentials.deviceId}\",\"campaignId\":\"c\",\"creativeId\":\"b\",\"scheduleItemId\":\"i\",\"startedAt\":\"2026-01-01T00:00:00Z\",\"endedAt\":\"2026-01-01T00:00:10Z\",\"success\":true,\"appVersion\":\"test\"}"))
         val api = FakeApi(setOf("accepted"))
@@ -362,8 +482,69 @@ class OfflinePersistenceIntegrationTest {
         assertEquals(0, reopened.proofDao().pendingCount())
     }
 
+    @Test fun unverifiedOfflineProofRemainsQueuedUntilServerAcknowledgesItsStableId() = runBlocking {
+        val database = open()
+        SyncWorkerDependencies.validatedInternet = { true }
+        database.proofDao().add(ProofEntity("offline-unverified", "{\"screenId\":\"${credentials.screenId}\",\"deviceId\":\"${credentials.deviceId}\",\"campaignId\":\"c\",\"creativeId\":\"b\",\"scheduleItemId\":\"i\",\"startedAt\":\"2026-01-01T00:00:00Z\",\"endedAt\":\"2026-01-01T00:00:10Z\",\"success\":true,\"timingVerified\":false,\"appVersion\":\"test\"}"))
+        val api = FakeApi()
+        SyncWorkerDependencies.credentials = { credentials }
+        SyncWorkerDependencies.database = { database }
+        SyncWorkerDependencies.api = { _, _ -> api }
+        assertEquals(androidx.work.ListenableWorker.Result.retry(), TestListenableWorkerBuilder<SyncWorker>(context).build().doWork())
+        assertEquals(listOf(false), api.submittedTimingVerified.single())
+        assertEquals(1, database.proofDao().pendingCount())
+        api.acknowledgements = setOf("offline-unverified")
+        assertEquals(androidx.work.ListenableWorker.Result.success(), TestListenableWorkerBuilder<SyncWorker>(context).build().doWork())
+        assertEquals(0, database.proofDao().pendingCount())
+    }
+
+    @Test fun workerRetriesPendingAuthorizationCleanupBeforeCheckingPairingCredentials() = runBlocking {
+        val database = open()
+        val store = DeviceStore(context)
+        store.clear()
+        assertTrue(store.beginAuthorizationRevocation())
+        val serverNow = Instant.now().toEpochMilli()
+        database.manifestDao().put(ManifestEntity(
+            version = 4,
+            timezone = "Asia/Kolkata",
+            validUntil = Instant.now().plusSeconds(900).toString(),
+            json = "{}",
+            authorizationReceivedElapsedMillis = 100L,
+            authorizationBootCount = 1,
+            authorizationDurationMillis = 900_000L,
+            authorizationScreenId = "old-screen",
+            authorizationServerTimeUtcMillis = serverNow,
+        ))
+        database.proofDao().add(ProofEntity("queued-proof", "{}"))
+        database.openHelper.writableDatabase.execSQL("CREATE TRIGGER fail_authorization_cleanup BEFORE UPDATE ON campaign_manifest BEGIN SELECT RAISE(ABORT, 'injected cleanup failure'); END")
+        SyncWorkerDependencies.database = { database }
+
+        val failedAttempt = TestListenableWorkerBuilder<SyncWorker>(context).build().doWork()
+
+        assertEquals(androidx.work.ListenableWorker.Result.retry(), failedAttempt)
+        assertTrue("failed local cleanup must retain its marker", store.authorizationRevocationPending())
+        assertTrue(store.authorizationRevocationFailure().orEmpty().contains("[ROOM_INVALIDATE]"))
+        assertEquals(1, database.proofDao().pendingCount())
+        database.openHelper.writableDatabase.execSQL("DROP TRIGGER fail_authorization_cleanup")
+        val stateRefresh = async(start = CoroutineStart.UNDISPATCHED) { ManifestRefreshBus.events.first() }
+
+        val result = TestListenableWorkerBuilder<SyncWorker>(context).build().doWork()
+
+        assertEquals(androidx.work.ListenableWorker.Result.success(), result)
+        assertFalse("cleanup marker must clear without credentials", store.authorizationRevocationPending())
+        val manifest = database.manifestDao().active()!!
+        assertNull(manifest.authorizationReceivedElapsedMillis)
+        assertNull(manifest.authorizationBootCount)
+        assertNull(manifest.authorizationDurationMillis)
+        assertNull(manifest.authorizationScreenId)
+        assertNull(manifest.authorizationServerTimeUtcMillis)
+        assertEquals(1, database.proofDao().pendingCount())
+        stateRefresh.await()
+    }
+
     @Test fun failedUploadSurvivesWorkerRecreationAndRetriesWithSameEventId() = runBlocking {
         val database = open()
+        SyncWorkerDependencies.validatedInternet = { true }
         database.proofDao().add(ProofEntity("stable-retry-id", "{\"screenId\":\"${credentials.screenId}\",\"deviceId\":\"${credentials.deviceId}\",\"campaignId\":\"c\",\"creativeId\":\"a\",\"scheduleItemId\":\"i\",\"startedAt\":\"2026-01-01T00:00:00Z\",\"endedAt\":\"2026-01-01T00:00:10Z\",\"success\":true,\"appVersion\":\"test\"}"))
         val api = FakeApi(failUpload = true)
         SyncWorkerDependencies.credentials = { credentials }

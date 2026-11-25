@@ -7,15 +7,20 @@ import com.ooro.screenplayer.api.ApiProvider
 import com.ooro.screenplayer.api.DeviceApi
 import com.ooro.screenplayer.model.DeviceCredentials
 import com.ooro.screenplayer.BuildConfig
+import com.ooro.screenplayer.ManifestRefreshBus
 import com.ooro.screenplayer.data.DeviceStore
 import com.ooro.screenplayer.model.PlayerStatus
 import com.ooro.screenplayer.data.OoroDatabase
 import com.ooro.screenplayer.data.ProofEntity
+import com.ooro.screenplayer.data.AuthorizationRevocationAttempt
+import com.ooro.screenplayer.data.retryAuthorizationRevocation
 import com.ooro.screenplayer.model.ProofOfPlay
 import com.ooro.screenplayer.acknowledgedProofEventIds
 import org.json.JSONObject
 import java.time.Instant
 import android.util.Log
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import com.ooro.screenplayer.location.LocationReporter
 import androidx.work.Constraints
 import androidx.room.withTransaction
@@ -31,7 +36,8 @@ internal object SyncWorkerDependencies {
     var credentials: ((Context) -> DeviceCredentials?)? = null
     var database: ((Context) -> OoroDatabase)? = null
     var api: ((Context, DeviceStore) -> DeviceApi)? = null
-    fun reset() { credentials = null; database = null; api = null }
+    var validatedInternet: ((Context) -> Boolean)? = null
+    fun reset() { credentials = null; database = null; api = null; validatedInternet = null }
 }
 
 object ProofSyncScheduler {
@@ -71,12 +77,29 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         val attempt = runAttemptCount
         Log.i("OoroScreen", "proof worker started attempt=$attempt")
         val store = DeviceStore(applicationContext)
-        val credentials = (SyncWorkerDependencies.credentials?.invoke(applicationContext) ?: store.credentials()) ?: run {
-            Log.w("OoroScreen", "proof worker skipped credentials unavailable attempt=$attempt")
-            return Result.success()
-        }
-        val db = SyncWorkerDependencies.database?.invoke(applicationContext) ?: OoroDatabase.get(applicationContext)
         return try {
+            val db = SyncWorkerDependencies.database?.invoke(applicationContext) ?: OoroDatabase.get(applicationContext)
+            if (store.authorizationRevocationPending()) {
+                val cleanup = retryAuthorizationRevocation(store) { db.manifestDao().invalidateAuthorization() }
+                if (cleanup is AuthorizationRevocationAttempt.Pending) return Result.retry()
+                if (cleanup is AuthorizationRevocationAttempt.Cleared) {
+                    Log.i("OoroScreen", "authorization cleanup completed; refreshing local screen state")
+                    ManifestRefreshBus.request()
+                }
+            }
+            val credentials = (SyncWorkerDependencies.credentials?.invoke(applicationContext) ?: store.credentials()) ?: run {
+                Log.w("OoroScreen", "proof worker skipped credentials unavailable attempt=$attempt")
+                return Result.success()
+            }
+            val validated = SyncWorkerDependencies.validatedInternet?.invoke(applicationContext) ?: run {
+                val connectivity = applicationContext.getSystemService(ConnectivityManager::class.java)
+                val activeNetwork = connectivity?.activeNetwork
+                activeNetwork?.let { network -> connectivity.getNetworkCapabilities(network)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) } == true
+            }
+            if (!validated) {
+                Log.i("OoroScreen", "proof worker deferred; Android has no validated internet attempt=$attempt")
+                return Result.retry()
+            }
             val api = SyncWorkerDependencies.api?.invoke(applicationContext, store) ?: ApiProvider(store).api
             val pendingCount = db.proofDao().pendingCount()
             if (!shouldRunWorkerNetworkCheck(inputData.getBoolean(SCHEDULED_HEARTBEAT, false), pendingCount)) {
@@ -102,8 +125,8 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                 if (staleRows.isNotEmpty()) {
                     staleBatches++
                     staleCount += staleRows.size
-                    db.proofDao().delete(staleRows.map { it.eventId })
-                    Log.w("OoroScreen", "proof worker quarantined stale rows=${staleRows.size} expectedScreen=${credentials.screenId} expectedDevice=${credentials.deviceId}")
+                    db.proofDao().quarantine(staleRows.map { it.eventId })
+                    Log.w("OoroScreen", "proof worker retained stale history in quarantine rows=${staleRows.size} expectedScreen=${credentials.screenId} expectedDevice=${credentials.deviceId}")
                 }
                 uploadRows = batch.uploadRows
                 if (uploadRows.isEmpty()) {
@@ -121,7 +144,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             Log.i("OoroScreen", "proof worker selected rows=${uploadRows.size} stale=$staleCount attempt=$attempt")
             val events = uploadRows.map { row ->
                 val j = JSONObject(row.payload)
-                ProofOfPlay(eventId = row.eventId, screenId = j.getString("screenId"), deviceId = j.getString("deviceId"), campaignId = j.getString("campaignId"), creativeId = j.getString("creativeId"), scheduleItemId = j.getString("scheduleItemId"), startedAt = Instant.parse(j.getString("startedAt")), endedAt = Instant.parse(j.getString("endedAt")), expectedDurationMs = j.optLong("expectedDurationMs"), actualPlayedMs = j.optLong("actualPlayedMs"), success = j.getBoolean("success"), failureReason = j.optString("failureReason").takeIf { it.isNotBlank() }, appVersion = j.getString("appVersion"), assetId = j.optString("assetId").takeIf { it.isNotBlank() }, slot = j.optString("slot", "MAIN"), deliveryGrantId = j.optString("deliveryGrantId").takeIf { it.isNotBlank() && it != "null" }, deliveryQuotaRevision = j.optInt("deliveryQuotaRevision", -1).takeIf { it > 0 })
+                ProofOfPlay(eventId = row.eventId, screenId = j.getString("screenId"), deviceId = j.getString("deviceId"), campaignId = j.getString("campaignId"), creativeId = j.getString("creativeId"), scheduleItemId = j.getString("scheduleItemId"), startedAt = Instant.parse(j.getString("startedAt")), endedAt = Instant.parse(j.getString("endedAt")), expectedDurationMs = j.optLong("expectedDurationMs"), actualPlayedMs = j.optLong("actualPlayedMs"), success = j.getBoolean("success"), failureReason = j.optString("failureReason").takeIf { it.isNotBlank() }, appVersion = j.getString("appVersion"), assetId = j.optString("assetId").takeIf { it.isNotBlank() }, slot = j.optString("slot", "MAIN"), deliveryGrantId = j.optString("deliveryGrantId").takeIf { it.isNotBlank() && it != "null" }, deliveryQuotaRevision = j.optInt("deliveryQuotaRevision", -1).takeIf { it > 0 }, timingVerified = j.optBoolean("timingVerified", true))
             }
             Log.i("OoroScreen", "proof upload starting batch=${events.size} attempt=$attempt")
             val upload = api.uploadProof(credentials, events)

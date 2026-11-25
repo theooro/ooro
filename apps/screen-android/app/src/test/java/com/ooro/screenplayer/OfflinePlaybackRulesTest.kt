@@ -134,6 +134,7 @@ class OfflinePlaybackRulesTest {
             trustedTimeUnavailableMessage(lease, "screen-test", 500L, 9),
         )
         assertTrue(trustedTimeUnavailableMessage(null, "screen-test", 500L, 9).contains("no authenticated schedule-time anchor"))
+        assertTrue(trustedTimeUnavailableMessage(null, null, 500L, 9).contains("unpaired"))
     }
 
     @Test fun campaignDatesAreInclusiveByCalendarDayAndExclusiveAtNextMidnight() {
@@ -151,6 +152,54 @@ class OfflinePlaybackRulesTest {
         assertEquals(creative.id, scheduler.next(manifest(listOf(creative)), start, 0, eligibleIds)?.id)
         assertEquals(creative.id, scheduler.next(manifest(listOf(creative)), end.minusNanos(1), 0, eligibleIds)?.id)
         assertNull(scheduler.next(manifest(listOf(creative)), end, 0, eligibleIds))
+    }
+
+    @Test fun asiaKolkataStartAndEndCalendarDatesAreInclusive() {
+        val item = item("ist-window").copy(
+            startAt = Instant.parse("2026-11-04T18:30:00Z"), // 2026-11-05 00:00 Asia/Kolkata
+            endAt = Instant.parse("2026-11-06T18:30:00Z"), // exclusive next midnight after inclusive Nov 6
+        )
+        val scheduler = ScheduleEngine()
+        val cached = manifest(listOf(item))
+        val start = requireNotNull(item.startAt)
+        val end = requireNotNull(item.endAt)
+        assertNull(scheduler.next(cached, start.minusNanos(1), 0, setOf(item.id)))
+        assertEquals(item.id, scheduler.next(cached, start, 0, setOf(item.id))?.id)
+        assertEquals(item.id, scheduler.next(cached, end.minusNanos(1), 0, setOf(item.id))?.id)
+        assertNull(scheduler.next(cached, end, 0, setOf(item.id)))
+    }
+
+    @Test fun onlyExplicitUnlimitedGrantContinuesLoopingOffline() {
+        val exhausted = item("cached-loop").copy(deliveryQuota = com.ooro.screenplayer.model.DeliveryQuota("grant", 2, 0, false))
+        val unlimited = exhausted.copy(id = "unmetered", deliveryQuota = com.ooro.screenplayer.model.DeliveryQuota("grant-unmetered", 2, null, true))
+        val cached = manifest(listOf(exhausted, unlimited))
+        val scheduler = ScheduleEngine()
+        assertNull(scheduler.next(cached, now, 0, setOf(exhausted.id)))
+        assertNull(nextVerifiedCachedItem(cached, scheduler, now, 0, setOf(exhausted.id)))
+        assertEquals(unlimited.id, nextVerifiedCachedItem(cached, scheduler, now, 0, setOf(unlimited.id))?.id)
+        assertNull(nextVerifiedCachedItem(cached, scheduler, now.plusSeconds(2 * 86_400), 0, setOf(unlimited.id)))
+        assertNull(nextVerifiedCachedItem(cached, scheduler, now, 0, emptySet()))
+    }
+
+    @Test fun unlimitedGrantDoesNotReserveOrDecrementLocalPlayQuota() {
+        val bounded = com.ooro.screenplayer.model.DeliveryQuota("bounded", 1, 2, false)
+        val unlimited = com.ooro.screenplayer.model.DeliveryQuota("unlimited", 1, null, true)
+        assertTrue(requiresLocalQuotaReservation(bounded))
+        assertFalse(requiresLocalQuotaReservation(unlimited))
+    }
+
+    @Test fun coldBootResumesOnlyVerifiedUnlimitedGrantBoundToSameScreen() {
+        val item = item("cold-boot").copy(deliveryQuota = com.ooro.screenplayer.model.DeliveryQuota("campaign-screen", 3, null, true))
+        val cached = manifest(listOf(item)).copy(generatedAt = now)
+        val grantTime = cachedUnlimitedGrantTime(cached, "screen-test", "screen-test", false, setOf(item.id))
+        assertEquals(now, grantTime)
+        val startup = resolveCachedStartup(onlyUnlimitedOfflineItems(cached, requireNotNull(grantTime)), "screen-test", setOf(item.id), ScheduleEngine(), requireNotNull(grantTime))
+        assertEquals(CachedStartupBlock.NONE, startup.block)
+        assertEquals(item.id, startup.firstItem?.id)
+        assertNull(cachedUnlimitedGrantTime(cached, "different-screen", "screen-test", false, setOf(item.id)))
+        assertNull(cachedUnlimitedGrantTime(cached, "screen-test", null, false, setOf(item.id)))
+        assertNull(cachedUnlimitedGrantTime(cached, "screen-test", "screen-test", true, setOf(item.id)))
+        assertNull(cachedUnlimitedGrantTime(cached, "screen-test", "screen-test", false, emptySet()))
     }
 
     @Test fun offlineLeaseFailsClosedForWrongScreenRebootRollbackMalformedOrOverlongWindow() {
@@ -486,6 +535,14 @@ class OfflinePlaybackRulesTest {
         assertTrue(com.ooro.screenplayer.sync.shouldRetryProofBatch(selectedCount = 2, acknowledgedCount = 0))
         assertTrue(com.ooro.screenplayer.sync.shouldRetryProofBatch(selectedCount = 2, acknowledgedCount = 1))
         assertFalse(com.ooro.screenplayer.sync.shouldRetryProofBatch(selectedCount = 2, acknowledgedCount = 2))
+    }
+
+    @Test fun pairingFailuresAreNotMisreportedAsNetworkValidationErrors() {
+        assertTrue(pairingAttemptFailureMessage(PairingFailureStage.NETWORK_VALIDATION, null).contains("not marked this connection as validated"))
+        assertTrue(pairingAttemptFailureMessage(PairingFailureStage.API_REQUEST, null).contains("Pairing request failed after Android reported validated internet"))
+        assertTrue(pairingAttemptFailureMessage(PairingFailureStage.CREDENTIAL_PERSISTENCE, null).contains("secure credentials could not be saved"))
+        assertTrue(pairingAttemptFailureMessage(PairingFailureStage.AUTHORIZATION_RESET, null).contains("previous screen authorization could not be cleared"))
+        assertEquals(pairingFailureMessage(DeviceFailureKind.DNS_ERROR), pairingAttemptFailureMessage(PairingFailureStage.API_REQUEST, DeviceFailureKind.DNS_ERROR))
     }
 
     @Test fun duplicateProofEventIdsRemainStableAcrossReconciliationRetries() {

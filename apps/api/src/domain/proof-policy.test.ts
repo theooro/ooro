@@ -14,6 +14,11 @@ test('ride-linked and standalone retries use the same stable proof identity', ()
   assert.equal(canonicalProofStatus(true, 5, 10), 'PARTIAL')
 })
 
+test('successful proof with offline unverified timing is not marked billable', () => {
+  assert.equal(canonicalProofStatus(true, 10, 10, false), 'UNVERIFIED_TIME')
+  assert.equal(canonicalProofStatus(false, 10, 10, false), 'FAILED')
+})
+
 test('proof retries cannot move a canonical proof between displays', () => {
   assert.equal(proofIdentityBelongsToDisplay(undefined, 'display-a'), true)
   assert.equal(proofIdentityBelongsToDisplay('display-a', 'display-a'), true)
