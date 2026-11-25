@@ -26,7 +26,8 @@ class RecoveryCredentialTest {
         assertTrue(store.beginAuthorizationRevocation())
         assertFalse(shouldFinalizeAcknowledgedUnpair(store.confirmedUnpairPending(), true))
         assertTrue(store.credentials() == old)
-        assertTrue(store.beginAuthorizationRevocation(forUnpair = true))
+        assertTrue(store.beginAuthorizationRevocation(forUnpair = true, unpairCommandId = "pending-command"))
+        assertEquals("pending-command", store.confirmedUnpairCommandId())
         assertTrue(store.completeAuthorizationRevocation())
         assertTrue(shouldFinalizeAcknowledgedUnpair(store.confirmedUnpairPending(), true))
         val repaired = old.copy(token = UUID.randomUUID().toString())
@@ -34,5 +35,6 @@ class RecoveryCredentialTest {
         store.clearIfCurrent(old)
         assertTrue(store.credentials() == repaired)
         assertFalse(store.confirmedUnpairPending())
+        assertNull(store.confirmedUnpairCommandId())
     }
 }

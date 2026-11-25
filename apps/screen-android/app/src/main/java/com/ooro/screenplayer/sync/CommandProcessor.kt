@@ -203,7 +203,7 @@ class CommandProcessor(private val context: Context, private val api: DeviceApi,
         val credentialSavedAt = store.credentialsSavedAt()
         try {
             if (receipt.commandType == "UNPAIR" && result.status == "SUCCEEDED") UnpairPendingBus.request()
-            if (receipt.commandType == "UNPAIR" && result.status == "SUCCEEDED" && !store.confirmedUnpairPending() && !store.beginAuthorizationRevocation(forUnpair = true, unpairCommandId = receipt.commandId)) throw IllegalStateException("authorization revocation marker could not be persisted")
+            if (receipt.commandType == "UNPAIR" && result.status == "SUCCEEDED" && store.confirmedUnpairCommandId() != receipt.commandId && !store.beginAuthorizationRevocation(forUnpair = true, unpairCommandId = receipt.commandId)) throw IllegalStateException("authorization revocation marker could not be persisted")
             api.acknowledgeCommand(credentials, result)
             receipts.put(receipt.copy(phase = CommandReceiptPhase.ACKED, result = result, updatedAt = System.currentTimeMillis()))
             if (receipt.commandType == "UNPAIR" && result.status == "SUCCEEDED") {
