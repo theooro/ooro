@@ -1166,6 +1166,7 @@ model ProofOfPlay {
   playerVersion      String?
   slot               String           @default("MAIN")
   playbackCompleted  Boolean
+  timingVerified    Boolean          @default(true)
   status             String           @default("PENDING")
   invalidReason      String?
   displayHeartbeatId String?

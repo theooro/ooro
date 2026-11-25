@@ -22,6 +22,33 @@ internal const val OFFLINE_AUTHORIZATION_SAFETY_MILLIS = 5_000L
 /** Unlimited server grants authorize looping without local per-play reservations. */
 internal fun requiresLocalQuotaReservation(grant: DeliveryQuota): Boolean = !grant.unlimited
 
+/**
+ * A persisted unlimited grant may resume after a reboot only for the screen
+ * identity that received the authenticated manifest. Without a live time
+ * anchor, use its authenticated issue instant as the eligibility snapshot and
+ * mark proofs created from that mode as time-unverified.
+ */
+internal fun cachedUnlimitedGrantTime(
+    manifest: DeviceManifest?,
+    pairedScreenId: String?,
+    authorizationScreenId: String?,
+    revocationPending: Boolean,
+    verifiedItemIds: Set<String>,
+): Instant? {
+    if (revocationPending || pairedScreenId.isNullOrBlank() || authorizationScreenId != pairedScreenId) return null
+    if (manifest == null || manifest.screenId != pairedScreenId) return null
+    val issuedAt = manifest.generatedAt ?: return null
+    val eligible = (manifest.items + listOfNotNull(manifest.sponsoredItem)).any { item ->
+        item.id in verifiedItemIds && item.deliveryQuota?.unlimited == true && item.isCampaignDateEligibleAt(issuedAt)
+    }
+    return issuedAt.takeIf { eligible }
+}
+
+internal fun onlyUnlimitedOfflineItems(manifest: DeviceManifest, at: Instant): DeviceManifest = manifest.copy(
+    items = manifest.items.filter { it.deliveryQuota?.unlimited == true && it.isCampaignDateEligibleAt(at) },
+    sponsoredItem = manifest.sponsoredItem?.takeIf { it.deliveryQuota?.unlimited == true && it.isCampaignDateEligibleAt(at) },
+)
+
 internal data class OfflineAuthorization(
     val screenId: String,
     val receivedElapsedMillis: Long,

@@ -169,6 +169,27 @@ class OfflinePersistenceIntegrationTest {
         assertEquals(listOf("queued-before-unpair"), database.proofDao().pending(10).map { it.eventId })
     }
 
+    @Test fun coldBootRestoresScreenBoundUnlimitedGrantWithoutRestoringTrustedTime() = runBlocking {
+        val database = open()
+        val issuedAt = Instant.parse("2026-01-01T00:00:00Z")
+        val manifest = DeviceManifest(
+            9, credentials.screenId, "Asia/Kolkata",
+            listOf(ManifestItem("cold-boot-item", "campaign", "creative", CreativeType.IMAGE, "file://verified", "a".repeat(64), 10, 1, issuedAt.minusSeconds(60), issuedAt.plusSeconds(86_400), emptySet(), null, null, deliveryQuota = DeliveryQuota("campaign:${credentials.screenId}", 4, null, true))),
+            issuedAt.plusSeconds(600), generatedAt = issuedAt, authenticatedServerTime = issuedAt.plusSeconds(1),
+        )
+        val lease = requireNotNull(issueOfflineAuthorization(credentials.screenId, manifest.generatedAt, manifest.validUntil, manifest.authenticatedServerTime, 10_000L, 7))
+        database.manifestDao().put(ManifestEntity(version = manifest.version, timezone = manifest.timezone, validUntil = manifest.validUntil.toString(), json = ManifestCodec.encode(manifest), authorizationReceivedElapsedMillis = lease.receivedElapsedMillis, authorizationBootCount = lease.bootCount, authorizationDurationMillis = lease.durationMillis, authorizationScreenId = lease.screenId, authorizationServerTimeUtcMillis = lease.serverTimeUtcMillis))
+        database.close(); db = null
+
+        val restored = ManifestCodec.parse(requireNotNull(open().manifestDao().active()).json)
+        assertEquals(0L, offlineAuthorizationRemainingMillis(lease, credentials.screenId, 20_000L, 8))
+        val grantTime = cachedUnlimitedGrantTime(restored, credentials.screenId, credentials.screenId, false, setOf("cold-boot-item"))
+        assertEquals(issuedAt, grantTime)
+        val selected = onlyUnlimitedOfflineItems(restored, requireNotNull(grantTime))
+        assertEquals("cold-boot-item", ScheduleEngine().next(selected, requireNotNull(grantTime), 0, setOf("cold-boot-item"))?.id)
+        assertNull(cachedUnlimitedGrantTime(restored, credentials.screenId, credentials.screenId, true, setOf("cold-boot-item")))
+    }
+
     @Test fun failedAuthorizationCleanupRetainsCredentialAndProofAndStartupRetryFailsClosed() = runBlocking {
         val database = open()
         val preferencesName = "recovery-${System.nanoTime()}"
@@ -390,6 +411,7 @@ class OfflinePersistenceIntegrationTest {
 
     private inner class FakeApi(var acknowledgements: Set<String> = emptySet(), var failUpload: Boolean = false) : DeviceApi {
         val submittedIds = mutableListOf<List<String>>()
+        val submittedTimingVerified = mutableListOf<List<Boolean>>()
         var manifestResponse: DeviceManifest? = null
         var manifestFailure: Throwable? = null
         override suspend fun health() = Unit
@@ -400,7 +422,7 @@ class OfflinePersistenceIntegrationTest {
             return if (response.generatedAt != null && response.authenticatedServerTime != null && response.validUntil != null) response else authorizedResponse(response)
         }
         override suspend fun heartbeat(credentials: DeviceCredentials, status: PlayerStatus, manifestVersion: Long, telemetry: HeartbeatTelemetry) = Unit
-        override suspend fun uploadProof(credentials: DeviceCredentials, events: List<ProofOfPlay>): ProofUploadResult { submittedIds += events.map { it.eventId }; if (failUpload) error("offline"); return ProofUploadResult(acknowledgements.size, acknowledgements) }
+        override suspend fun uploadProof(credentials: DeviceCredentials, events: List<ProofOfPlay>): ProofUploadResult { submittedIds += events.map { it.eventId }; submittedTimingVerified += events.map { it.timingVerified }; if (failUpload) error("offline"); return ProofUploadResult(acknowledgements.size, acknowledgements) }
         override suspend fun unpair(credentials: DeviceCredentials) = Unit
     }
 
@@ -458,6 +480,22 @@ class OfflinePersistenceIntegrationTest {
         SyncWorkerDependencies.database = { reopened }
         assertEquals(androidx.work.ListenableWorker.Result.success(), TestListenableWorkerBuilder<SyncWorker>(context).build().doWork())
         assertEquals(0, reopened.proofDao().pendingCount())
+    }
+
+    @Test fun unverifiedOfflineProofRemainsQueuedUntilServerAcknowledgesItsStableId() = runBlocking {
+        val database = open()
+        SyncWorkerDependencies.validatedInternet = { true }
+        database.proofDao().add(ProofEntity("offline-unverified", "{\"screenId\":\"${credentials.screenId}\",\"deviceId\":\"${credentials.deviceId}\",\"campaignId\":\"c\",\"creativeId\":\"b\",\"scheduleItemId\":\"i\",\"startedAt\":\"2026-01-01T00:00:00Z\",\"endedAt\":\"2026-01-01T00:00:10Z\",\"success\":true,\"timingVerified\":false,\"appVersion\":\"test\"}"))
+        val api = FakeApi()
+        SyncWorkerDependencies.credentials = { credentials }
+        SyncWorkerDependencies.database = { database }
+        SyncWorkerDependencies.api = { _, _ -> api }
+        assertEquals(androidx.work.ListenableWorker.Result.retry(), TestListenableWorkerBuilder<SyncWorker>(context).build().doWork())
+        assertEquals(listOf(false), api.submittedTimingVerified.single())
+        assertEquals(1, database.proofDao().pendingCount())
+        api.acknowledgements = setOf("offline-unverified")
+        assertEquals(androidx.work.ListenableWorker.Result.success(), TestListenableWorkerBuilder<SyncWorker>(context).build().doWork())
+        assertEquals(0, database.proofDao().pendingCount())
     }
 
     @Test fun workerRetriesPendingAuthorizationCleanupBeforeCheckingPairingCredentials() = runBlocking {

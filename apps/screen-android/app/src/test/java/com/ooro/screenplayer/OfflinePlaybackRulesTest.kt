@@ -188,6 +188,20 @@ class OfflinePlaybackRulesTest {
         assertFalse(requiresLocalQuotaReservation(unlimited))
     }
 
+    @Test fun coldBootResumesOnlyVerifiedUnlimitedGrantBoundToSameScreen() {
+        val item = item("cold-boot").copy(deliveryQuota = com.ooro.screenplayer.model.DeliveryQuota("campaign-screen", 3, null, true))
+        val cached = manifest(listOf(item)).copy(generatedAt = now)
+        val grantTime = cachedUnlimitedGrantTime(cached, "screen-test", "screen-test", false, setOf(item.id))
+        assertEquals(now, grantTime)
+        val startup = resolveCachedStartup(onlyUnlimitedOfflineItems(cached, requireNotNull(grantTime)), "screen-test", setOf(item.id), ScheduleEngine(), requireNotNull(grantTime))
+        assertEquals(CachedStartupBlock.NONE, startup.block)
+        assertEquals(item.id, startup.firstItem?.id)
+        assertNull(cachedUnlimitedGrantTime(cached, "different-screen", "screen-test", false, setOf(item.id)))
+        assertNull(cachedUnlimitedGrantTime(cached, "screen-test", null, false, setOf(item.id)))
+        assertNull(cachedUnlimitedGrantTime(cached, "screen-test", "screen-test", true, setOf(item.id)))
+        assertNull(cachedUnlimitedGrantTime(cached, "screen-test", "screen-test", false, emptySet()))
+    }
+
     @Test fun offlineLeaseFailsClosedForWrongScreenRebootRollbackMalformedOrOverlongWindow() {
         val expiry = now.plusSeconds(900)
         val lease = issueOfflineAuthorization("screen-test", now.minusSeconds(1), expiry, now, 10_000L, 3)

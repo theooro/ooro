@@ -106,7 +106,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             online = false
             lastNetworkRecoveryAt = 0L
             _validatedInternet.value = hasValidatedInternet()
-            _cachedPlaybackAllowed.value = currentOfflineAuthorizationRemainingMillis() > 0L
+            _cachedPlaybackAllowed.value = currentOfflineAuthorizationRemainingMillis() > 0L || currentCachedUnlimitedGrantTime() != null
         }
         override fun onAvailable(network: Network) {
             val validated = isValidated(network)
@@ -145,7 +145,10 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
         viewModelScope.launch {
             cachedStartupReady.await()
             while (true) {
-                _scheduleClock.value = trustedScheduleTime(activeAuthorization, store.credentials()?.screenId, SystemClock.elapsedRealtime(), currentBootCount()) ?: Instant.EPOCH
+                val pairedScreenId = store.credentials()?.screenId
+                _scheduleClock.value = trustedScheduleTime(activeAuthorization, pairedScreenId, SystemClock.elapsedRealtime(), currentBootCount())
+                    ?: currentCachedUnlimitedGrantTime()
+                    ?: Instant.EPOCH
                 delay(1_000L)
             }
         }
@@ -234,11 +237,15 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
                 _verifiedAssetIds.value = identityMatched?.let { manifest ->
                     runCatching { assets.verifiedItemIds(manifest.items + listOfNotNull(manifest.sponsoredItem)) }.getOrDefault(emptySet())
                 } ?: emptySet()
-                val trustedNow = trustedScheduleTime(activeAuthorization, pairedScreenId, SystemClock.elapsedRealtime(), currentBootCount()) ?: Instant.EPOCH
-                _scheduleClock.value = trustedNow
-                val startup = resolveCachedStartup(identityMatched, pairedScreenId, _verifiedAssetIds.value, scheduler, trustedNow, allowExpiredForOfflinePlayback = leaseRemaining > 0L)
-                active = startup.manifest
-                _cachedPlaybackAllowed.value = startup.manifest != null && startup.manifest.screenId == pairedScreenId && leaseRemaining > 0L
+                val trustedNow = trustedScheduleTime(activeAuthorization, pairedScreenId, SystemClock.elapsedRealtime(), currentBootCount())
+                val offlineGrantNow = cachedUnlimitedGrantTime(identityMatched, pairedScreenId, activeAuthorization?.screenId, store.authorizationRevocationPending(), _verifiedAssetIds.value)
+                val scheduleNow = trustedNow ?: offlineGrantNow ?: Instant.EPOCH
+                _scheduleClock.value = scheduleNow
+                val startupManifest = if (trustedNow == null && offlineGrantNow != null) onlyUnlimitedOfflineItems(identityMatched!!, offlineGrantNow) else identityMatched
+                val startup = resolveCachedStartup(startupManifest, pairedScreenId, _verifiedAssetIds.value, scheduler, scheduleNow)
+                active = identityMatched
+                val cachedGrantReady = offlineGrantNow != null && startup.firstItem?.deliveryQuota?.unlimited == true
+                _cachedPlaybackAllowed.value = identityMatched != null && identityMatched.screenId == pairedScreenId && (leaseRemaining > 0L || cachedGrantReady)
                 scheduleAuthorizationExpiry()
                 _diagnostics.value = _diagnostics.value.copy(manifestLastSyncAt = lastManifestSyncAt(context))
                 Log.i("OoroScreen", "offline startup resolved paired=${pairedScreenId != null} manifestPresent=${parsed != null} manifestVersion=${parsed?.version ?: -1} itemCount=${parsed?.items?.size ?: 0} verifiedAssetCount=${_verifiedAssetIds.value.size} result=${startup.block}")
@@ -251,8 +258,10 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
                         if (startup.block == CachedStartupBlock.NONE && leaseRemaining > 0L) {
                             _diagnostic.value = "Playing authorized cached delivery · refreshing manifest when connected"
                             scheduleManifestRefresh(cached)
+                        } else if (startup.block == CachedStartupBlock.NONE && cachedGrantReady) {
+                            _diagnostic.value = "Playing previously authorized offline grant · proof timing is unverified until authenticated sync"
                         } else if (leaseRemaining <= 0L) _diagnostic.value = trustedTimeUnavailableDiagnostic()
-                        else if (startup.block == CachedStartupBlock.NO_ELIGIBLE_VERIFIED_ASSET) _diagnostic.value = offlineEmptyMessage(cached, trustedNow, _verifiedAssetIds.value)
+                        else if (startup.block == CachedStartupBlock.NO_ELIGIBLE_VERIFIED_ASSET) _diagnostic.value = offlineEmptyMessage(cached, scheduleNow, _verifiedAssetIds.value, trustedTimeAvailable = trustedNow != null)
                     }
                 }
                 if (pairedScreenId == null) _diagnostic.value = "Screen is unpaired · pair this device to sync approved content."
@@ -584,10 +593,15 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
             .onFailure { error -> Log.w("OoroScreen", "command poll failed displayId=${c.screenId}", error) }
     }
     private fun keepCachedPlayback(credentials: DeviceCredentials? = store.credentials()) {
-        val authorized = !store.authorizationRevocationPending() && credentials != null && active != null && currentOfflineAuthorizationRemainingMillis() > 0L
-        _authorizationValid.value = authorized
-        _diagnostic.value = if (authorized) "Authorized cached playback active · reconnecting" else trustedTimeFailureMessage ?: trustedTimeUnavailableDiagnostic()
-        _cachedPlaybackAllowed.value = authorized
+        val timeAuthorized = !store.authorizationRevocationPending() && credentials != null && active != null && currentOfflineAuthorizationRemainingMillis() > 0L
+        val grantAuthorized = !store.authorizationRevocationPending() && credentials != null && currentCachedUnlimitedGrantTime() != null
+        _authorizationValid.value = timeAuthorized
+        _diagnostic.value = when {
+            timeAuthorized -> "Authorized cached playback active · reconnecting"
+            grantAuthorized -> "Playing previously authorized offline grant · proof timing is unverified until authenticated sync"
+            else -> trustedTimeFailureMessage ?: trustedTimeUnavailableDiagnostic()
+        }
+        _cachedPlaybackAllowed.value = timeAuthorized || grantAuthorized
         if (_state.value !is ScreenState.AuthRecovery && credentials != null) _state.value = ScreenState.Player(active ?: fallback(credentials))
     }
     private fun trustedTimeUnavailableDiagnostic(): String = trustedTimeUnavailableMessage(
@@ -618,24 +632,39 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
         if (store.authorizationRevocationPending()) return 0L
         return offlineAuthorizationRemainingMillis(activeAuthorization, store.credentials()?.screenId, SystemClock.elapsedRealtime(), currentBootCount())
     }
+    private fun currentCachedUnlimitedGrantTime(manifest: DeviceManifest? = active): Instant? = cachedUnlimitedGrantTime(
+        manifest,
+        store.credentials()?.screenId,
+        activeAuthorization?.screenId,
+        store.authorizationRevocationPending(),
+        _verifiedAssetIds.value,
+    )
     fun isOfflineAuthorizationValid(): Boolean = currentOfflineAuthorizationRemainingMillis() > 0L
     private fun scheduleAuthorizationExpiry() {
         authorizationExpiryJob?.cancel()
         val remaining = currentOfflineAuthorizationRemainingMillis()
         if (remaining <= 0L) {
             _authorizationValid.value = false
-            _cachedPlaybackAllowed.value = false
+            val grantTime = currentCachedUnlimitedGrantTime()
+            _cachedPlaybackAllowed.value = grantTime != null
+            if (grantTime != null) _scheduleClock.value = grantTime
             return
         }
         authorizationExpiryJob = viewModelScope.launch {
             delay(remaining)
             if (currentOfflineAuthorizationRemainingMillis() <= 0L) {
-                _cachedPlaybackAllowed.value = false
                 _authorizationValid.value = false
-                _diagnostic.value = "Authenticated schedule authorization expired · validated internet is required for a fresh manifest sync before playback can resume."
-                val playing = session?.let { current -> active?.items?.firstOrNull { it.id == current.itemId } }
-                if (playing != null) creativeFinished(playing, playbackPositionMs ?: 0L, false, "AUTHORIZATION_EXPIRED")
-                Log.w("OoroScreen", "cached delivery withheld because the server authorization lease expired")
+                val grantTime = currentCachedUnlimitedGrantTime()
+                _cachedPlaybackAllowed.value = grantTime != null
+                if (grantTime != null) {
+                    _scheduleClock.value = grantTime
+                    _diagnostic.value = "Playing previously authorized offline grant · proof timing is unverified until authenticated sync"
+                } else {
+                    _diagnostic.value = "Authenticated schedule authorization expired · validated internet is required for a fresh manifest sync before playback can resume."
+                    val playing = session?.let { current -> active?.items?.firstOrNull { it.id == current.itemId } }
+                    if (playing != null) creativeFinished(playing, playbackPositionMs ?: 0L, false, "AUTHORIZATION_EXPIRED")
+                    Log.w("OoroScreen", "cached delivery withheld because the server authorization lease expired")
+                }
             }
         }
     }
@@ -673,9 +702,15 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
 
     fun currentItem(manifest: DeviceManifest, offset: Int = _playbackOffset.value, verifiedIds: Set<String> = _verifiedAssetIds.value, allowCachedOffline: Boolean = _cachedPlaybackAllowed.value, now: Instant = _scheduleClock.value): ManifestItem? {
         if (currentOfflineAuthorizationRemainingMillis() <= 0L) {
-            _cachedPlaybackAllowed.value = false
             _authorizationValid.value = false
-            return null
+            val grantTime = currentCachedUnlimitedGrantTime(manifest)
+            if (!allowCachedOffline || grantTime == null) {
+                _cachedPlaybackAllowed.value = false
+                return null
+            }
+            _cachedPlaybackAllowed.value = true
+            _scheduleClock.value = grantTime
+            return nextVerifiedCachedItem(onlyUnlimitedOfflineItems(manifest, grantTime), scheduler, grantTime, offset, verifiedIds)
         }
         val current = manifest.items.find { it.id == session?.itemId && it.id in verifiedIds && it.isCampaignDateEligibleAt(now) }
         val emergency = manifest.items.any { it.priority >= 1000 && it.hasAuthorizedDeliveryQuota && it.isCampaignDateEligibleAt(now) }
@@ -698,7 +733,8 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
         if (session?.itemId == item.id || !startingItems.add(item.id)) return
         val quota = item.deliveryQuota
         if (quota == null) { startingItems.remove(item.id); _diagnostic.value = "Delivery authorization missing · waiting for an authorized manifest"; return }
-        val playbackSession = PlaybackSession(java.util.UUID.randomUUID().toString(), item.id, item.campaignId, item.creativeId, item.assetId, Instant.now(), item.durationSeconds * 1000L, quota.id, quota.revision)
+        val authenticatedStart = trustedScheduleTime(activeAuthorization, store.credentials()?.screenId, SystemClock.elapsedRealtime(), currentBootCount())
+        val playbackSession = PlaybackSession(java.util.UUID.randomUUID().toString(), item.id, item.campaignId, item.creativeId, item.assetId, authenticatedStart ?: Instant.now(), item.durationSeconds * 1000L, quota.id, quota.revision, timingVerified = authenticatedStart != null)
         viewModelScope.launch {
             try {
                 // PR #117's explicit unlimited grant is not a local play counter.
@@ -721,7 +757,7 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
         }
     }
     fun creativePosition(item: ManifestItem, positionMs: Long) { if (session?.itemId == item.id) playbackPositionMs = positionMs.coerceAtLeast(0) }
-    fun creativeFinished(item: ManifestItem, actualMs: Long, success: Boolean, reason: String? = null) { val s = playback.finish(item.id) ?: return; val accepted = success && (item.type != CreativeType.VIDEO || ProofPolicy().videoSuccess(s.expectedDurationMs, actualMs)); reportPlayback(item, if (accepted) "IDLE" else "FAILED", actualMs); playbackPositionMs = null; if (_currentCreative.value?.id == item.id) _currentCreative.value = null; _playbackOffset.value = _playbackOffset.value + 1; viewModelScope.launch { proof.record(ProofOfPlay(eventId = s.eventId, screenId = store.credentials()?.screenId ?: "", deviceId = deviceId, campaignId = s.campaignId, creativeId = s.creativeId, scheduleItemId = s.itemId, startedAt = s.startedAt, endedAt = Instant.now(), expectedDurationMs = s.expectedDurationMs, actualPlayedMs = actualMs, success = accepted, failureReason = reason ?: if (!accepted) "PLAYBACK_BELOW_COMPLETION_POLICY" else null, appVersion = BuildConfig.VERSION_NAME, assetId = s.assetId, deliveryGrantId = item.deliveryQuota?.id, deliveryQuotaRevision = item.deliveryQuota?.revision)) } }
+    fun creativeFinished(item: ManifestItem, actualMs: Long, success: Boolean, reason: String? = null) { val s = playback.finish(item.id) ?: return; val accepted = success && (item.type != CreativeType.VIDEO || ProofPolicy().videoSuccess(s.expectedDurationMs, actualMs)); val authenticatedEnd = trustedScheduleTime(activeAuthorization, store.credentials()?.screenId, SystemClock.elapsedRealtime(), currentBootCount()); reportPlayback(item, if (accepted) "IDLE" else "FAILED", actualMs); playbackPositionMs = null; if (_currentCreative.value?.id == item.id) _currentCreative.value = null; _playbackOffset.value = _playbackOffset.value + 1; viewModelScope.launch { proof.record(ProofOfPlay(eventId = s.eventId, screenId = store.credentials()?.screenId ?: "", deviceId = deviceId, campaignId = s.campaignId, creativeId = s.creativeId, scheduleItemId = s.itemId, startedAt = s.startedAt, endedAt = authenticatedEnd ?: Instant.now(), expectedDurationMs = s.expectedDurationMs, actualPlayedMs = actualMs, success = accepted, failureReason = reason ?: if (!accepted) "PLAYBACK_BELOW_COMPLETION_POLICY" else null, appVersion = BuildConfig.VERSION_NAME, assetId = s.assetId, deliveryGrantId = item.deliveryQuota?.id, deliveryQuotaRevision = item.deliveryQuota?.revision, timingVerified = s.timingVerified && authenticatedEnd != null)) } }
     fun sponsoredDisplayCompleted(item: ManifestItem, displayedMs: Long) {
         val credentials = store.credentials() ?: return
         if (displayedMs < 1_000L || item.type != CreativeType.IMAGE) return
@@ -734,8 +770,9 @@ class ScreenViewModel(private val context: Context, private val store: DeviceSto
                 return@launch
             }
             if (requiresReservation) refreshPersistedQuotas()
-            val endedAt = Instant.now()
-            proof.record(ProofOfPlay(eventId = eventId, screenId = credentials.screenId, deviceId = deviceId, campaignId = item.campaignId, creativeId = item.creativeId, scheduleItemId = item.id, startedAt = endedAt.minusMillis(displayedMs), endedAt = endedAt, expectedDurationMs = item.durationSeconds * 1_000L, actualPlayedMs = displayedMs, success = true, appVersion = BuildConfig.VERSION_NAME, assetId = item.assetId, slot = "SPONSORED", deliveryGrantId = quota.id, deliveryQuotaRevision = quota.revision))
+            val authenticatedEnd = trustedScheduleTime(activeAuthorization, credentials.screenId, SystemClock.elapsedRealtime(), currentBootCount())
+            val endedAt = authenticatedEnd ?: Instant.now()
+            proof.record(ProofOfPlay(eventId = eventId, screenId = credentials.screenId, deviceId = deviceId, campaignId = item.campaignId, creativeId = item.creativeId, scheduleItemId = item.id, startedAt = endedAt.minusMillis(displayedMs), endedAt = endedAt, expectedDurationMs = item.durationSeconds * 1_000L, actualPlayedMs = displayedMs, success = true, appVersion = BuildConfig.VERSION_NAME, assetId = item.assetId, slot = "SPONSORED", deliveryGrantId = quota.id, deliveryQuotaRevision = quota.revision, timingVerified = authenticatedEnd != null))
         }
     }
     fun setNavigationState(state: NavigationState) { _navigation.value = state.copy(currentLatitude = _location.value?.latitude, currentLongitude = _location.value?.longitude) }
