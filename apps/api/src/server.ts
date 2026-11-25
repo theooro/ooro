@@ -830,8 +830,13 @@ app.post('/api/device/pair', async (request, reply) => {
   const token = recovery ? createHmac('sha256', config.documentStorageKey).update(JSON.stringify(['screen-recovery-v1', displayId, submittedCodeHash, input.deviceId])).digest('base64url') : randomSecret()
   const display = await prisma.$transaction(async tx => {
     if (recovery) { const stillActive = await tx.displayRecoveryCode.findFirst({ where: { displayId, codeHash: submittedCodeHash, revokedAt: null }, select: { id: true } }); if (!stillActive) throw new ApiError('INVALID_PAIRING_CODE', 'Pairing code is invalid or revoked', 400) }
-    const owner = await tx.display.findUnique({ where: { deviceId: input.deviceId }, select: { id: true } })
-    if (owner && owner.id !== displayId) throw new ApiError('DEVICE_ALREADY_PAIRED', 'This device is already registered to another screen', 409)
+    const owner = await tx.display.findUnique({ where: { deviceId: input.deviceId }, select: { id: true, state: true, pairingStatus: true, deviceTokenHash: true } })
+    if (owner && owner.id !== displayId) {
+      const safelyReleased = owner.state === 'DELETED' && owner.pairingStatus === 'UNPAIRED' && owner.deviceTokenHash === null
+      if (!safelyReleased) throw new ApiError('DEVICE_ALREADY_PAIRED', 'This device is already registered to another screen', 409)
+      await tx.display.update({ where: { id: owner.id }, data: { deviceId: 'deleted:' + owner.id + ':' + randomUUID() } })
+      await tx.auditLog.create({ data: { actorRole: 'SCREEN_PLAYER', action: 'SCREEN_DEVICE_ID_RECLAIMED_FROM_DELETED_RECORD', entityType: 'Display', entityId: owner.id, before: { state: owner.state, pairingStatus: owner.pairingStatus }, after: { reassignedToDisplayId: displayId }, requestId: request.id } })
+    }
     if (legacy) { const consumed = await tx.displayPairingCode.updateMany({ where: { id: legacy.id, consumedAt: null, revokedAt: null, expiresAt: { gt: new Date() } }, data: { consumedAt: new Date() } }); if (consumed.count !== 1) throw new ApiError('INVALID_PAIRING_CODE', 'Pairing code is invalid or revoked', 400) }
     await tx.displayCommand.updateMany({ where: { displayId, commandType: 'UNPAIR', status: { in: ['QUEUED', 'DELIVERED', 'PROCESSING'] } }, data: { status: 'CANCELLED', error: 'SUPERSEDED_BY_SCREEN_REPAIR' } })
     const updated = await tx.display.update({ where: { id: displayId }, data: { deviceId: input.deviceId, deviceTokenHash: hashSecret(token), state: 'READY', pairingStatus: 'PAIRING_PENDING', pairedAt: null, appVersion: input.appVersion, manufacturer: input.manufacturer, model: input.model, androidVersion: input.androidVersion } })
