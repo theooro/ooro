@@ -1489,25 +1489,16 @@ app.post('/api/device/proof-of-play', async (request, reply) => {
           return
         }
         if (e.campaignId) {
-          const grant = await tx.displayCampaignAssignment.findUnique({ where: { displayId_campaignId: { displayId: display.id, campaignId: e.campaignId } }, select: { id: true, offlinePlaysAuthorized: true, offlinePlaysConsumed: true, unlimitedOfflineAuthorized: true, offlineQuotaRevision: true } })
-          if (!grant) {
-            if (display.supportsDeliveryQuota) throw forbidden('Campaign has no quota grant for this device')
-            // Pre-quota devices may finish uploading already queued proofs. They
-            // cannot receive new manifests after declaring quota support.
-          } else {
-            if (display.supportsDeliveryQuota && (e.deliveryGrantId !== `${e.campaignId}:${display.id}` || !e.deliveryQuotaRevision || e.deliveryQuotaRevision > grant.offlineQuotaRevision)) {
-              throw forbidden('Proof does not identify a server-issued delivery quota grant')
-            }
-            if (grant.unlimitedOfflineAuthorized) {
-              // Unlimited delivery is accepted only when explicitly authorized.
-            } else if (grant.offlinePlaysAuthorized != null) {
-              if (grant.offlinePlaysConsumed >= grant.offlinePlaysAuthorized) throw new ApiError('DELIVERY_QUOTA_EXHAUSTED', 'Authorized playback quota is exhausted', 409)
-              const consumed = await tx.displayCampaignAssignment.updateMany({ where: { id: grant.id, offlinePlaysConsumed: { lt: grant.offlinePlaysAuthorized } }, data: { offlinePlaysConsumed: { increment: 1 } } })
-              if (consumed.count !== 1) throw new ApiError('DELIVERY_QUOTA_EXHAUSTED', 'Authorized playback quota is exhausted', 409)
-            } else if (display.supportsDeliveryQuota) {
-              throw new ApiError('DELIVERY_QUOTA_REQUIRED', 'Campaign has no bounded or explicitly unlimited delivery grant', 409)
-            }
+          const grant = await tx.displayCampaignAssignment.findUnique({
+            where: { displayId_campaignId: { displayId: display.id, campaignId: e.campaignId } },
+            select: { offlineQuotaRevision: true },
+          })
+          if (!grant && display.supportsDeliveryQuota) throw forbidden('Campaign is not assigned to this device')
+          if (grant && display.supportsDeliveryQuota && (e.deliveryGrantId !== `${e.campaignId}:${display.id}` || !e.deliveryQuotaRevision || e.deliveryQuotaRevision > grant.offlineQuotaRevision)) {
+            throw forbidden('Proof does not identify an authorized campaign delivery grant')
           }
+          // Accepted proofs are idempotent evidence only. They never decrement a
+          // per-screen counter or stop cached playback while the device is offline.
         }
         await tx.proofOfPlay.create({ data: proofData })
       }, { isolationLevel: 'Serializable' })
@@ -1515,7 +1506,7 @@ app.post('/api/device/proof-of-play', async (request, reply) => {
       if (error?.code !== 'P2002' && error?.code !== 'P2034') throw error
       const existing = await prisma.proofOfPlay.findUnique({ where: { proofId } })
       const sameIdentity = existing && existing.displayId === display.id && existing.campaignId === proofData.campaignId && existing.creativeId === proofData.creativeId && existing.scheduleItemId === proofData.scheduleItemId && existing.assetId === proofData.assetId && existing.slot === slot && existing.playbackCompleted === proofData.playbackCompleted && existing.expectedDuration === proofData.expectedDuration && existing.actualDuration === proofData.actualDuration
-      if (!sameIdentity) throw new ApiError('DELIVERY_QUOTA_CONFLICT', 'Proof could not be accepted without exceeding the authorized quota', 409)
+      if (!sameIdentity) throw new ApiError('PROOF_IDEMPOTENCY_CONFLICT', 'Proof could not be accepted because its identity conflicts with another event', 409)
       request.log.info({ proofId }, 'proof duplicate acknowledged idempotently')
     }
     const eventId = e.eventId ?? proofId
