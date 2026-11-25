@@ -82,9 +82,12 @@ Room database version 6 and schema identity
 After verifying signer and schema compatibility, `adb install -r` succeeded.
 Force-stop and launch retained credentials and the target screen identity.
 Room version and identity remained unchanged. The proof table had zero rows
-before and after; no proof or cache reset was performed. Post-restart checks
-found accepted heartbeats, no credential-read failures or fatal exceptions,
-and no Continue Repair / Connect Display recovery UI markers.
+before and after; no proof or cache reset was performed. The recent device log buffer contained accepted heartbeats and an earlier
+post-install UI probe found no Continue Repair / Connect Display markers. These
+log counts are not correlated to the final APK process and do not establish
+final-build heartbeat acceptance. The final credential/schema read succeeded,
+but final UI inspection timed out and final-process heartbeat confirmation is
+unavailable. Admin PAIRED and recovery-screen acceptance remain unverified.
 
 Cached manifest version `25239065` contains **zero items**. It cannot confirm
 eligible creative playback. Current staging campaign eligibility was not
