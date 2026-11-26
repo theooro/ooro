@@ -4,7 +4,7 @@ import { prisma } from '../prisma.js'
 import { config } from '../config.js'
 import { safeDestination } from './qr-destination.js'
 import { isCampaignDateEligible } from './campaign-date-window.js'
-import { validateLayoutDraft } from './layout-studio.js'
+import { deliverableLayoutContract } from './layout-manifest.js'
 
 export type ManifestReason = 'NO_ASSIGNMENT' | 'DISPLAY_DISABLED' | 'CLIENT_QUOTA_UNSUPPORTED' | 'CAMPAIGN_INACTIVE' | 'APPROVAL_REQUIRED' | 'FUNDING_REQUIRED' | 'NO_DELIVERY_QUOTA' | 'NO_APPROVED_CREATIVE' | 'ASSET_UNAVAILABLE' | 'NO_ELIGIBLE_CREATIVE'
 export type DeliveryQuota = { id: string; revision: number; remainingPlays: number | null; unlimited: boolean }
@@ -130,10 +130,7 @@ export async function buildDisplayManifest(displayId: string, now = new Date()):
   const { mainItems, sponsoredItem } = selectManifestDeliverySlots(deliveryItems, eligible.map(({ campaign }) => ({ id: campaign.id, deliverySlot: campaign.deliverySlot })), v3)
   const assignment = display.layoutAssignments[0]
   const candidateLayout = assignment?.template.state === 'PUBLISHED' && assignment.template.mode === 'CUSTOM' && assignment.revision.contract && typeof assignment.revision.contract === 'object' && !Array.isArray(assignment.revision.contract) ? assignment.revision.contract as Record<string, unknown> : null
-  const parsedLayout = candidateLayout ? validateLayoutDraft(candidateLayout) : null
-  const rotationReferences = parsedLayout?.draft?.zones.flatMap(zone => zone.rotation?.items.map(item => item.referenceId) ?? []) ?? []
-  const rotationMediaIsEligible = rotationReferences.every(referenceId => mainItems.some(item => item.creativeId === referenceId && item.type === 'IMAGE' && item.checksum))
-  const layoutStudioContract = parsedLayout?.draft && rotationMediaIsEligible && !parsedLayout.issues.some(issue => issue.code !== 'CAPABILITY_PROFILE_UNVERIFIED') ? candidateLayout : null
+  const layoutStudioContract = candidateLayout ? deliverableLayoutContract(candidateLayout, mainItems, sponsoredItem) : null
   const versionItems = mainItems.map((item) => ({ ...item, offer: Object.fromEntries(Object.entries(item.offer).filter(([key]) => key !== 'scanCount')) }))
   const news = { scrollSpeed: configured?.newsScrollSpeed ?? 42, announcements }
   const digest = createHash('sha256').update(JSON.stringify({ displayId, layout, leadCampaignId, layoutStudioContract, news, deliveryReasons: reasons, items: versionItems, ...(v3 ? { sponsoredItem } : {}) })).digest('hex')

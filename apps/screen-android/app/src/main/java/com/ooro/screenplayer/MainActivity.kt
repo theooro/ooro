@@ -386,7 +386,10 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     val parsedCustomLayout = (customLayoutParseResult as? LayoutParseResult.Valid)?.contract
     // Production rendering requires the contract to arrive inside a device-authenticated,
     // screen-bound manifest. Preview-only callers are isolated and proof-suppressed.
+    val runtimeMetrics = LocalContext.current.resources.displayMetrics
+    val runtimeFirmwareHash = remember { com.ooro.screenplayer.layoutstudio.MboxLayoutProfile.fingerprintHash(android.os.Build.FINGERPRINT) }
     val customLayout = parsedCustomLayout?.takeIf { contract ->
+        com.ooro.screenplayer.layoutstudio.MboxLayoutProfile.matchesRuntime(contract, android.os.Build.MODEL, android.os.Build.VERSION.SDK_INT, android.os.Build.SUPPORTED_ABIS.toList(), runtimeMetrics.widthPixels, runtimeMetrics.heightPixels, android.os.Build.HARDWARE, runtimeFirmwareHash) &&
         pairedScreenId == manifest.screenId && contract.zones.flatMap { it.rotationItems }.all { rotation ->
             manifest.items.any { item -> item.creativeId == rotation.referenceId && item.id in verifiedAssetIds && item.hasAuthorizedDeliveryQuota && item.isCampaignDateEligibleAt(scheduleClock) }
         }

@@ -62,14 +62,14 @@ class LayoutStudioInterpreterTest {
     @Test fun `optional widgets require explicit capabilities`() {
         val zones = """[{"id":"ticker","type":"TICKER","label":"Ticker","schemaVersion":1,"geometry":{"x":0,"y":0,"width":1,"height":0.1},"zIndex":0,"fit":"FIT","contentBinding":{"kind":"NONE"},"visible":true}]"""
         val rejected = LayoutStudioInterpreter.parse(contract(zones)) as LayoutParseResult.Invalid
-        assertEquals("WIDGET_CAPABILITY_REQUIRED", rejected.code)
-        assertTrue(LayoutStudioInterpreter.parse(contract(zones), setOf("TICKER")) is LayoutParseResult.Valid)
+        assertEquals("WIDGET_PROVIDER_UNAVAILABLE", rejected.code)
+        assertEquals("WIDGET_PROVIDER_UNAVAILABLE", (LayoutStudioInterpreter.parse(contract(zones), setOf("TICKER")) as LayoutParseResult.Invalid).code)
     }
 
     @Test fun `capability widgets remain within per-layout resource budgets`() {
         val maps = """[{"id":"map-a","type":"NAVIGATION_MAP","label":"Map A","schemaVersion":1,"geometry":{"x":0,"y":0,"width":0.5,"height":1},"zIndex":0,"contentBinding":{"kind":"NONE"},"visible":true},{"id":"map-b","type":"NAVIGATION_MAP","label":"Map B","schemaVersion":1,"geometry":{"x":0.5,"y":0,"width":0.5,"height":1},"zIndex":1,"contentBinding":{"kind":"NONE"},"visible":true}]"""
         val result = LayoutStudioInterpreter.parse(contract(maps), setOf("NAVIGATION_MAP")) as LayoutParseResult.Invalid
-        assertEquals("WIDGET_BUDGET_EXCEEDED", result.code)
+        assertEquals("WIDGET_PROVIDER_UNAVAILABLE", result.code)
     }
 
     @Test fun `invalid bounds overlap and multiple video zones fail closed`() {

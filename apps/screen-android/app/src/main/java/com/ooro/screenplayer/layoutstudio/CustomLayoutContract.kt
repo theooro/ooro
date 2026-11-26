@@ -9,6 +9,8 @@ data class LayoutStudioContract(
     val targetWidth: Int,
     val targetHeight: Int,
     val zones: List<LayoutStudioZone>,
+    val profileId: String = "OORO_PREMIUM",
+    val capabilityProfileVersion: Int? = null,
 )
 
 data class LayoutStudioZone(
@@ -45,6 +47,7 @@ object LayoutStudioInterpreter {
     private val capabilityWidgets = setOf("CLOCK", "WEATHER", "TICKER", "NAVIGATION_MAP")
     private val overlays = setOf("TEXT", "LOGO", "CLOCK")
 
+    @Suppress("UNUSED_PARAMETER") // Hardware flags cannot substitute for a real provider/data source.
     fun parse(json: String, enabledCapabilities: Set<String> = emptySet()): LayoutParseResult {
       return try {
         val root = JSONObject(json)
@@ -53,6 +56,10 @@ object LayoutStudioInterpreter {
         val targetWidth = target.optInt("width", 0)
         val targetHeight = target.optInt("height", 0)
         if (targetWidth !in 320..7680 || targetHeight !in 240..4320) return invalid("INVALID_TARGET", "Target dimensions are outside the supported range.")
+        val profileId = root.optString("profileId", "OORO_PREMIUM")
+        if (profileId !in setOf("OORO_AUTO_LITE", "OORO_PREMIUM", "OORO_RETAIL_EVENT", MboxLayoutProfile.ID)) return invalid("UNSUPPORTED_PROFILE", "Unknown runtime profile.")
+        val profileVersion = if (root.has("capabilityProfileVersion")) root.optInt("capabilityProfileVersion", -1) else null
+        if (profileId == MboxLayoutProfile.ID && (profileVersion != MboxLayoutProfile.VERSION || root.optString("screenType") != "AUTO_SCREEN" || targetWidth != 1280 || targetHeight != 720)) return invalid("PROFILE_TARGET_MISMATCH", "MBOX revision 1 requires AUTO_SCREEN at native 1280x720.")
         val array = root.optJSONArray("zones") ?: return invalid("INVALID_ZONES", "Zones are missing.")
         if (array.length() !in 1..24) return invalid("INVALID_ZONES", "A Custom layout requires 1–24 zones.")
         val zones = ArrayList<LayoutStudioZone>(array.length())
@@ -73,12 +80,12 @@ object LayoutStudioInterpreter {
             val height = geometry.optDouble("height", Double.NaN)
             if (id.isBlank() || !ids.add(id)) return invalid("DUPLICATE_ZONE_ID", "Zone IDs must be present and unique.")
             if (type !in baseWidgets && type !in capabilityWidgets) return invalid("UNSUPPORTED_WIDGET_TYPE", "Widget $type is not supported by this renderer.")
-            if (type in capabilityWidgets && type !in enabledCapabilities) return invalid("WIDGET_CAPABILITY_REQUIRED", "Widget $type is unsupported by the enabled device capabilities.")
+            if (type in capabilityWidgets) return invalid("WIDGET_PROVIDER_UNAVAILABLE", "Custom $type has no runtime provider/data source; capability flags cannot enable placeholders.")
             if (zone.optInt("schemaVersion", 0) != 1) return invalid("UNSUPPORTED_WIDGET_SCHEMA", "Widget $id uses an unsupported schema version.")
             if (listOf(x, y, width, height).any { !it.isFinite() } || x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > 1.0 + 1e-9 || y + height > 1.0 + 1e-9) return invalid("ZONE_OUT_OF_BOUNDS", "Zone $id must remain inside the normalized screen bounds.")
             val fit = zone.optString("fit", "FIT")
             if (fit !in setOf("FIT", "CENTER_CROP")) return invalid("INVALID_FIT", "Zone $id has an unsupported fit mode.")
-            if (fit == "CENTER_CROP" && type !in setOf("IMAGE", "VIDEO", "LOGO", "SPONSORED_AD", "BACKGROUND_IMAGE")) return invalid("INVALID_FIT", "Crop is not valid for $type.")
+            if (fit == "CENTER_CROP" && type !in setOf("MAIN_AD", "IMAGE", "VIDEO", "LOGO", "SPONSORED_AD", "BACKGROUND_IMAGE")) return invalid("INVALID_FIT", "Crop is not valid for $type.")
             if (type == "VIDEO") videoCount++
             if (type == "MAIN_AD") mainAdCount++
             if (type == "SPONSORED_AD") sponsorCount++
@@ -119,6 +126,7 @@ object LayoutStudioInterpreter {
             if (targetRect.width < 1 || targetRect.height < 1) return invalid("ZONE_TOO_SMALL", "Zone $id rounds to zero pixels at its declared target resolution.")
             zones += parsedZone
         }
+        if (profileId == MboxLayoutProfile.ID && (zones.size > 2 || zones.count { it.type == "IMAGE" } > 1 || zones.any { it.type !in MboxLayoutProfile.candidateWidgets || it.rotationItems.isNotEmpty() })) return invalid("PROFILE_RESOURCE_LIMIT_EXCEEDED", "MBOX candidate envelope is one Image plus one static Text, with no rotation or video.")
         if (zones.none { it.visible }) return invalid("NO_VISIBLE_ZONES", "At least one zone must be visible.")
         // Keep Auto Lite at one concurrent video decoder; this matches the existing single-player path.
         if (videoCount > 1 || videoCount + mainAdCount > 1) return invalid("VIDEO_DECODER_BUDGET_EXCEEDED", "At most one possible video playback slot may exist across MAIN_AD and VIDEO zones.")
@@ -132,7 +140,7 @@ object LayoutStudioInterpreter {
             if (a.type == "BACKGROUND_IMAGE" || b.type == "BACKGROUND_IMAGE" || a.type in overlays || b.type in overlays) continue
             if (a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y) return invalid("ZONE_OVERLAP", "Zones ${a.id} and ${b.id} overlap.")
         }
-        LayoutParseResult.Valid(LayoutStudioContract(1, targetWidth, targetHeight, zones.sortedWith(compareBy<LayoutStudioZone> { it.zIndex }.thenBy { it.id })))
+        LayoutParseResult.Valid(LayoutStudioContract(1, targetWidth, targetHeight, zones.sortedWith(compareBy<LayoutStudioZone> { it.zIndex }.thenBy { it.id }), profileId, profileVersion))
     } catch (_: Exception) {
         invalid("MALFORMED_CONTRACT", "Layout contract could not be parsed safely.")
       }
