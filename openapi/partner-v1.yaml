@@ -1,0 +1,250 @@
+openapi: 3.1.0
+info:
+  title: OORO Partner API
+  version: 1.0.0
+  description: >-
+    Contract for separately authorized mobility and service partners. Sandbox uses
+    synthetic fixtures and credentials separate from staging/production. No Rapido
+    or aggregator endpoint is implied by this contract.
+servers:
+  - url: https://sandbox-api.theooro.com
+    description: Synthetic sandbox only; deployment and hostname require operator provisioning.
+security:
+  - clientCredentials: [mobility.events:write]
+tags:
+  - name: Mobility Events
+    description: Consent-based ingestion of minimized normalized lifecycle events.
+  - name: Campaigns
+    description: Partner campaign submissions and status; approval and activation remain Admin controlled.
+  - name: Inventory
+    description: Coarse aggregate summaries of eligible OORO inventory.
+  - name: Delivery
+    description: Aggregate delivery summaries for a partner's linked campaigns.
+  - name: Analytics
+    description: Aggregate QR analytics for a partner's linked campaigns.
+  - name: Webhooks
+    description: Partner-owned webhook subscriptions and delivery status.
+paths:
+  /oauth/token:
+    post:
+      summary: Issue a partner client-credentials token
+      operationId: issuePartnerToken
+      security: [{basicClientAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, required: [grant_type], properties: {grant_type: {const: client_credentials}, scope: {type: string}}}
+      responses:
+        '200': {description: Short-lived environment-bound bearer token.}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+  /partner/v1/mobility/events:
+    post:
+      summary: Ingest a consented normalized mobility event
+      tags: [Mobility Events]
+      operationId: ingestMobilityEvent
+      description: Requires explicit user consent; accepts minimized context only, never passenger identity or precise trip routes.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MobilityEvent'}
+      responses:
+        '202': {description: Event accepted; safe to retry with the same eventId and body.}
+        '200': {description: Exact duplicate was acknowledged without duplicate processing.}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+        '429': {$ref: '#/components/responses/Error'}
+  /partner/v1/campaign-submissions:
+    post:
+      summary: Submit a campaign for Admin review
+      tags: [Campaigns]
+      operationId: submitCampaign
+      security: [{clientCredentials: [campaigns:submit]}]
+      description: Creates a partner-owned draft/submission only; Admin approval, funding and activation remain required.
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CampaignSubmission'}
+      responses:
+        '202': {description: Submitted for review; approval and activation remain Admin controlled.}
+        '200': {description: Idempotent retry returned the existing submission.}
+        '403': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+  /partner/v1/campaigns/{submissionId}:
+    get:
+      summary: Read the status of an owned campaign submission
+      tags: [Campaigns]
+      operationId: getPartnerCampaignSubmission
+      security: [{clientCredentials: [campaigns:read]}]
+      parameters: [{$ref: '#/components/parameters/SubmissionId'}]
+      responses:
+        '200': {description: Status for this partner's own submission.}
+        '404': {$ref: '#/components/responses/Error'}
+  /partner/v1/inventory/summary:
+    get:
+      summary: Read aggregate eligible inventory
+      tags: [Inventory]
+      operationId: eligibleInventorySummary
+      security: [{clientCredentials: [inventory:read]}]
+      responses:
+        '200': {description: Coarse global slot totals; no screen identifiers or precise locations.}
+        '403': {$ref: '#/components/responses/Error'}
+  /partner/v1/delivery/summary:
+    get:
+      summary: Read aggregate delivery for owned campaigns
+      tags: [Delivery]
+      operationId: deliverySummary
+      security: [{clientCredentials: [delivery:read]}]
+      responses:
+        '200': {description: Aggregate proof counts for linked partner submissions only.}
+        '403': {$ref: '#/components/responses/Error'}
+  /partner/v1/analytics/qr:
+    get:
+      summary: Read aggregate QR scans for owned campaigns
+      tags: [Analytics]
+      operationId: qrAnalytics
+      security: [{clientCredentials: [analytics.qr:read]}]
+      responses:
+        '200': {description: Aggregate scan counts for linked partner submissions only.}
+        '403': {$ref: '#/components/responses/Error'}
+  /partner/v1/webhook-subscriptions:
+    get:
+      summary: List webhook subscriptions
+      tags: [Webhooks]
+      operationId: listWebhookSubscriptions
+      security: [{clientCredentials: [webhooks:manage]}]
+      responses:
+        '200': {description: Partner environment subscriptions; secrets are excluded.}
+        '403': {$ref: '#/components/responses/Error'}
+    post:
+      summary: Create a webhook subscription
+      tags: [Webhooks]
+      operationId: createWebhookSubscription
+      security: [{clientCredentials: [webhooks:manage]}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WebhookSubscription'}
+      responses:
+        '201': {description: Created; signing secret is revealed once.}
+        '422': {$ref: '#/components/responses/Error'}
+  /partner/v1/webhook-subscriptions/{subscriptionId}:
+    delete:
+      summary: Deactivate a webhook subscription
+      tags: [Webhooks]
+      operationId: deactivateWebhookSubscription
+      security: [{clientCredentials: [webhooks:manage]}]
+      parameters: [{$ref: '#/components/parameters/SubscriptionId'}]
+      responses:
+        '200': {description: Subscription deactivated.}
+        '404': {$ref: '#/components/responses/Error'}
+  /partner/v1/webhook-deliveries:
+    get:
+      summary: List recent webhook delivery attempts
+      tags: [Webhooks]
+      operationId: listWebhookDeliveries
+      security: [{clientCredentials: [webhooks:manage]}]
+      parameters: [{$ref: '#/components/parameters/PageSize'}]
+      responses:
+        '200': {description: Recent delivery statuses for this partner only.}
+        '403': {$ref: '#/components/responses/Error'}
+  /partner/v1/webhook-deliveries/{eventId}/retry:
+    post:
+      summary: Replay a failed webhook delivery
+      tags: [Webhooks]
+      operationId: retryFailedWebhook
+      security: [{clientCredentials: [webhooks:manage]}]
+      parameters: [{$ref: '#/components/parameters/EventId'}]
+      responses:
+        '202': {description: Failed delivery queued for another bounded attempt.}
+        '404': {$ref: '#/components/responses/Error'}
+components:
+  securitySchemes:
+    basicClientAuth:
+      type: http
+      scheme: basic
+    clientCredentials:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://sandbox-api.theooro.com/oauth/token
+          scopes:
+            mobility.events:write: Submit consented normalized mobility events.
+            campaigns:submit: Submit partner-owned campaign drafts.
+            campaigns:read: Read own campaign status.
+            inventory:read: Read coarse eligible inventory summaries.
+            delivery:read: Read own aggregate delivery summaries.
+            analytics.qr:read: Read own aggregate QR analytics.
+            webhooks:manage: Manage own webhook subscriptions and deliveries.
+  parameters:
+    RequestId: {name: X-Request-ID, in: header, required: false, schema: {type: string, maxLength: 96}}
+    IdempotencyKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
+    PageSize: {name: pageSize, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 25}}
+    EventId: {name: eventId, in: path, required: true, schema: {type: string, format: uuid}}
+    SubmissionId: {name: submissionId, in: path, required: true, schema: {type: string, format: uuid}}
+    SubscriptionId: {name: subscriptionId, in: path, required: true, schema: {type: string, format: uuid}}
+  responses:
+    Error:
+      description: Stable partner API error envelope.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error, requestId]
+            properties:
+              error:
+                type: object
+                required: [code, message]
+                properties:
+                  code: {type: string}
+                  message: {type: string}
+                  details: {type: object}
+              requestId: {type: string}
+  schemas:
+    MobilityEvent:
+      type: object
+      additionalProperties: false
+      required: [eventId, eventType, occurredAt, consent]
+      properties:
+        eventId: {type: string, format: uuid}
+        eventType: {type: string, enum: [RIDE_REQUESTED, RIDE_ACCEPTED, RIDE_ACTIVE, RIDE_CANCELLED, RIDE_COMPLETED]}
+        occurredAt: {type: string, format: date-time}
+        consent: {type: boolean, const: true}
+        context:
+          type: object
+          additionalProperties: false
+          properties:
+            serviceArea: {type: string, maxLength: 80}
+            vehicleClass: {type: string, enum: [AUTO, CAB, TWO_WHEELER]}
+            aggregateTripBand: {type: string, enum: [SHORT, MEDIUM, LONG]}
+            feature: {type: string, enum: [MOBILITY_VERIFICATION, SERVICEABILITY]}
+    CampaignSubmission:
+      type: object
+      additionalProperties: false
+      required: [name, budgetCents, serviceArea, startsAt, endsAt, creativeIds]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 120}
+        objective: {type: string, maxLength: 1000}
+        budgetCents: {type: integer, minimum: 1, maximum: 100000000}
+        serviceArea: {type: string, minLength: 1, maxLength: 80}
+        startsAt: {type: string, format: date-time}
+        endsAt: {type: string, format: date-time}
+        creativeIds: {type: array, minItems: 1, maxItems: 20, items: {type: string, format: uuid, description: Must identify an approved active creative.}}
+    WebhookSubscription:
+      type: object
+      additionalProperties: false
+      required: [endpointUrl, eventTypes]
+      properties:
+        endpointUrl: {type: string, format: uri, description: Must use HTTPS and resolve only to public addresses.}
+        eventTypes: {type: array, minItems: 1, maxItems: 6, items: {type: string, enum: [RIDE_REQUESTED, RIDE_ACCEPTED, RIDE_ACTIVE, RIDE_CANCELLED, RIDE_COMPLETED, campaign.submission.updated]}}

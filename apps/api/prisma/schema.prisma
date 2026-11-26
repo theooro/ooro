@@ -1885,3 +1885,96 @@ model AssetEvent {
   asset            CompanyAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
   @@index([assetId, createdAt])
 }
+
+
+model PartnerOrganization {
+  id String @id @default(uuid()) @db.Uuid
+  name String
+  status String @default("ACTIVE")
+  createdAt DateTime @default(now())
+  clients PartnerClientCredential[]
+  events PartnerEventReceipt[]
+  subscriptions PartnerWebhookSubscription[]
+  deliveries PartnerWebhookDelivery[]
+  campaigns PartnerCampaignSubmission[]
+  @@index([status, createdAt])
+}
+model PartnerClientCredential {
+  id String @id @default(uuid()) @db.Uuid
+  clientId String @unique
+  partnerId String @db.Uuid
+  environment String
+  secretHash String
+  scopes String[]
+  expiresAt DateTime?
+  revokedAt DateTime?
+  rotatedFromId String? @db.Uuid
+  createdAt DateTime @default(now())
+  partner PartnerOrganization @relation(fields:[partnerId], references:[id], onDelete:Restrict)
+  @@index([partnerId, environment, revokedAt])
+}
+model PartnerEventReceipt {
+  id String @id @default(uuid()) @db.Uuid
+  partnerId String @db.Uuid
+  environment String
+  eventId String
+  payloadHash String
+  eventType String
+  occurredAt DateTime
+  requestId String
+  receivedAt DateTime @default(now())
+  partner PartnerOrganization @relation(fields:[partnerId], references:[id], onDelete:Restrict)
+  @@unique([partnerId, environment, eventId])
+  @@index([partnerId, environment, receivedAt])
+}
+model PartnerWebhookSubscription {
+  id String @id @default(uuid()) @db.Uuid
+  partnerId String @db.Uuid
+  environment String
+  endpointUrl String
+  encryptedSecret String
+  eventTypes String[]
+  active Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  partner PartnerOrganization @relation(fields:[partnerId], references:[id], onDelete:Restrict)
+  deliveries PartnerWebhookDelivery[]
+  @@index([partnerId, environment, active])
+}
+model PartnerWebhookDelivery {
+  id String @id @default(uuid()) @db.Uuid
+  partnerId String @db.Uuid
+  subscriptionId String @db.Uuid
+  environment String
+  eventId String
+  eventType String
+  body Json
+  status String @default("PENDING")
+  attempts Int @default(0)
+  replayCount Int @default(0)
+  nextAttemptAt DateTime @default(now())
+  claimedAt DateTime?
+  lastStatusCode Int?
+  lastErrorCode String?
+  deliveredAt DateTime?
+  createdAt DateTime @default(now())
+  partner PartnerOrganization @relation(fields:[partnerId], references:[id], onDelete:Restrict)
+  subscription PartnerWebhookSubscription @relation(fields:[subscriptionId], references:[id], onDelete:Restrict)
+  @@unique([subscriptionId, environment, eventId])
+  @@index([status, nextAttemptAt])
+  @@index([partnerId, environment, createdAt])
+}
+model PartnerCampaignSubmission {
+  id String @id @default(uuid()) @db.Uuid
+  partnerId String @db.Uuid
+  environment String
+  idempotencyKey String
+  campaignId String? @db.Uuid
+  status String @default("DRAFT")
+  payload Json
+  createdAt DateTime @default(now())
+  partner PartnerOrganization @relation(fields:[partnerId], references:[id], onDelete:Restrict)
+  @@unique([campaignId])
+  @@unique([partnerId, environment, idempotencyKey])
+  @@index([partnerId, environment, status, createdAt])
+}
