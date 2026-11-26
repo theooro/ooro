@@ -9,6 +9,14 @@ import org.junit.Assert.fail
 import org.junit.Test
 
 class ManifestCodecTest {
+    @Test fun splitLayoutSurvivesStringObjectAndRoundTripWithoutChangingCreativeFit() {
+        for (layout in listOf("\"SPLIT_50_25_25\"", "{\"type\":\"SPLIT_50_25_25\"}")) {
+            val manifest = ManifestCodec.parse("""{"version":1,"screenId":"screen","timezone":"UTC","layout":$layout,"items":[]}""")
+            assertEquals(DisplayLayout.SPLIT_50_25_25, manifest.layout)
+            assertEquals(DisplayLayout.SPLIT_50_25_25, ManifestCodec.parse(ManifestCodec.encode(manifest)).layout)
+        }
+    }
+
     private val payload = """{"version":42,"screenId":"screen-1","timezone":"Asia/Kolkata","layout":{"type":"FOUR_ZONE","primaryWidthPercent":67,"adHeightPercent":86,"qrHeightPercent":47,"newsScrollSpeed":42},"news":{"scrollSpeed":42,"announcements":[{"id":"news-a","text":"Service update","priority":5}]},"items":[{"id":"item-a","campaignId":"campaign-a","creativeId":"creative-a","assetId":"asset-a","type":"IMAGE","url":"https://cdn.example/a.png","checksum":"aaa","durationSeconds":10,"priority":2,"playsPerLoop":1,"daysOfWeek":[1,2],"fitMode":"FIT","offer":{"brandName":"Brand A","promotionalText":"10% OFF","offerTitle":"Offer A","ctaUrl":"https://example.com/a","qrUrl":"https://theooro.com/go/token-a"}},{"id":"item-b","campaignId":"campaign-b","creativeId":"creative-b","assetId":"asset-b","type":"VIDEO","url":"https://cdn.example/b.mp4","checksum":"bbb","durationSeconds":15,"priority":1,"playsPerLoop":2,"offer":{"brandName":"Brand B","offerTitle":"Offer B","qrUrl":"https://theooro.com/go/token-b"}}]}"""
 
     @Test fun parsesImageVideoOfferAndQrAtomically() {

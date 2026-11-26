@@ -7,7 +7,7 @@ plugins {
 kapt { correctErrorTypes = true }
 
 android { namespace = "com.ooro.screenplayer"; compileSdk = 35
-    defaultConfig { applicationId = "com.ooro.screenplayer"; minSdk = 26; targetSdk = 35; versionCode = 2; versionName = "0.2.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+    defaultConfig { applicationId = "com.ooro.screenplayer"; minSdk = 26; targetSdk = 35; versionCode = 4; versionName = "0.2.2-staging.split"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true; buildConfig = true }
@@ -73,6 +73,8 @@ dependencies {
     testImplementation("androidx.room:room-testing:2.6.1")
     testImplementation("androidx.work:work-testing:2.10.0")
     testImplementation("org.robolectric:robolectric:4.14.1")
+    androidTestImplementation(platform("androidx.compose:compose-bom:2024.12.01"))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:core:1.6.1")
