@@ -43,6 +43,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -416,9 +417,10 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
                 Box(Modifier.weight((100 - sidebarSplit).toFloat()).fillMaxWidth().clipToBounds().then(if (preview == null) Modifier else Modifier.semantics { contentDescription = "OoroV3Region:navigation" }.onSizeChanged { Log.i("OoroRenderTest", "region=navigation boundsPx=${it.width}x${it.height}") })) { NavigationPanel(vm, preview, Modifier.fillMaxSize()) }
             }
         } else if (manifest.layout == DisplayLayout.SPLIT_50_25_25) Row(Modifier.fillMaxSize().clipToBounds()) {
-            Box(Modifier.weight(2f).fillMaxHeight().clipToBounds()) { PrimaryAdRegion(vm, Modifier.fillMaxSize(), item, playbackOffset, preview, emptyPlaybackMessage) }
-            Box(Modifier.weight(1f).fillMaxHeight().clipToBounds()) { NavigationPanel(vm, preview, Modifier.fillMaxSize()) }
-            Box(Modifier.weight(1f).fillMaxHeight().clipToBounds()) { OfferPanel(displayedOffer, Modifier.fillMaxSize()) }
+            Box(Modifier.weight(2f).fillMaxHeight().clipToBounds().testTag("split-main")) { PrimaryAdRegion(vm, Modifier.fillMaxSize(), item, playbackOffset, preview, emptyPlaybackMessage) }
+            Box(Modifier.weight(1f).fillMaxHeight().clipToBounds().testTag("split-navigation")) { NavigationPanel(vm, preview, Modifier.fillMaxSize()) }
+            // This is a tall quarter-width column, not the legacy short horizontal offer strip.
+            Box(Modifier.weight(1f).fillMaxHeight().clipToBounds().testTag("split-offer")) { OfferPanel(displayedOffer, Modifier.fillMaxSize(), verticalV3 = true) }
         } else PrimaryAdRegion(vm, Modifier.fillMaxSize().clipToBounds(), item, playbackOffset, preview, emptyPlaybackMessage)
     }
 }
@@ -953,15 +955,23 @@ private fun distanceMeters(start: LatLng, end: LatLng): Double {
             contentDescription = if (hasAuthorizedOffer) "OoroOfferState:brand" else "OoroOfferState:fallback"
         }
     ) {
-        val compact = maxWidth < 190.dp || maxHeight < 270.dp
+        val compact = maxWidth < 200.dp || maxHeight < 300.dp
         val contentPadding = if (compact) 7.dp else 10.dp
-        val qrSize = minOf(maxWidth - contentPadding * 2, maxHeight * if (compact) 0.37f else 0.42f)
-            .coerceAtLeast(minOf(64.dp, maxWidth - contentPadding * 2))
         val density = androidx.compose.ui.platform.LocalDensity.current
-        val qrPixels = with(density) { qrSize.roundToPx().coerceIn(64, 512) }
+        val brandLine = if (compact) 18 else 22
+        val copyLine = if (compact) 14 else 18
+        val ctaLine = if (compact) 12 else 14
+        val copyLines = if (compact) 2 else 3
+        // Reserve the maximum text height (including font scaling) before sizing the QR.
+        // A fraction of panel height alone overflows short four-zone panels with long copy.
+        val textHeight = ((brandLine * 2 + (if (offerCopy != null) copyLine * copyLines else 0) + ctaLine * 2) * density.fontScale).dp
+        val gaps = (if (offerCopy != null) (if (compact) 3 else 5) else 0).dp + (if (compact) 9 else 15).dp
+        val qrSize = minOf(maxWidth - contentPadding * 2, maxHeight - contentPadding * 2 - textHeight - gaps).coerceAtLeast(0.dp)
+        val quietPadding = minOf(if (compact) 5.dp else 8.dp, qrSize / 8)
+        val qrPixels = with(density) { (qrSize - quietPadding * 2).roundToPx().coerceIn(1, 512) }
         val qrState = produceState<Bitmap?>(null, if (hasAuthorizedOffer) qrUrl else null, qrPixels) {
             value = null
-            if (hasAuthorizedOffer && qrUrl != null) value = withContext(Dispatchers.IO) { qrBitmap(qrUrl, qrPixels) }
+            if (hasAuthorizedOffer && qrUrl != null && qrPixels >= 64) value = withContext(Dispatchers.IO) { qrBitmap(qrUrl, qrPixels) }
         }
         val qr = qrState.value
         val qrImage = remember(qr) { qr?.asImageBitmap() }
@@ -975,7 +985,8 @@ private fun distanceMeters(start: LatLng, end: LatLng): Double {
                 Text(
                     brandName.orEmpty(), color = Yellow,
                     fontSize = if (compact) 15.sp else 18.sp,
-                    fontWeight = FontWeight.Bold, maxLines = 2,
+                    fontWeight = FontWeight.Bold, maxLines = 2, lineHeight = brandLine.sp,
+                    modifier = Modifier.testTag("offer-brand"),
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
@@ -984,7 +995,8 @@ private fun distanceMeters(start: LatLng, end: LatLng): Double {
                     Text(
                         offerCopy, color = Color.White,
                         fontSize = if (compact) 11.sp else 14.sp,
-                        fontWeight = FontWeight.Medium, maxLines = if (compact) 2 else 3,
+                        fontWeight = FontWeight.Medium, maxLines = copyLines, lineHeight = copyLine.sp,
+                        modifier = Modifier.testTag("offer-copy"),
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
@@ -994,8 +1006,9 @@ private fun distanceMeters(start: LatLng, end: LatLng): Double {
                     Image(
                         bitmap = qrImage,
                         contentDescription = "Brand offer QR code",
-                        modifier = Modifier.size(qrSize).background(Color.White).padding(if (compact) 5.dp else 8.dp),
-                        contentScale = ContentScale.Fit
+                        modifier = Modifier.size(qrSize).testTag("offer-qr").background(Color.White).padding(quietPadding),
+                        contentScale = ContentScale.Fit,
+                        filterQuality = androidx.compose.ui.graphics.FilterQuality.None
                     )
                 } else {
                     Text("QR unavailable", color = Color(0xFFD7DDE3), fontSize = if (compact) 9.sp else 11.sp, modifier = Modifier.size(qrSize).background(Color.White), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
@@ -1004,7 +1017,8 @@ private fun distanceMeters(start: LatLng, end: LatLng): Double {
                 if (qrImage != null) Text(
                     offer?.ctaLabel?.trim()?.takeIf(String::isNotBlank) ?: "SCAN FOR DETAILS",
                     color = Color(0xFFD7DDE3), fontSize = if (compact) 9.sp else 11.sp,
-                    fontWeight = FontWeight.SemiBold, maxLines = 2,
+                    fontWeight = FontWeight.SemiBold, maxLines = 2, lineHeight = ctaLine.sp,
+                    modifier = Modifier.testTag("offer-cta"),
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )

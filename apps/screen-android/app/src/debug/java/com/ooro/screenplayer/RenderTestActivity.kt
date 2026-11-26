@@ -199,6 +199,7 @@ private fun RenderTestScreen(
             val offer = when (scenario) {
                 "OFFER_LONG_BRAND" -> OfferMetadata(brandName = "THE EXTRAORDINARILY LONG SYNTHETIC BRAND NAME", promotionalText = "Sample message for layout verification", ctaLabel = "TEST LINK", qrUrl = "https://example.invalid/long-brand")
                 "OFFER_LONG_TITLE" -> OfferMetadata(brandName = "OORO TEST PARTNER", offerTitle = "A deliberately long synthetic promotional title that must truncate safely in the offer panel", ctaLabel = "TEST LINK", qrUrl = "https://example.invalid/long-title")
+                "OFFER_LONG_CTA" -> OfferMetadata(brandName = "SYNTHETIC TEST BRAND", promotionalText = "Synthetic offer message", ctaLabel = "SCAN THIS SYNTHETIC TEST LINK FOR MORE DETAILS AND INFORMATION", qrUrl = "https://example.invalid/long-cta")
                 "OFFER_BRAND_ONLY" -> OfferMetadata(brandName = "SYNTHETIC BRAND ONLY", ctaLabel = "VISIT BRAND", qrUrl = "https://example.invalid/brand-only")
                 "OFFER_MISSING_QR" -> OfferMetadata(brandName = "SYNTHETIC BRAND", promotionalText = "No authorized destination", ctaLabel = "TEST ONLY")
                 "OFFER_INVALID_QR" -> OfferMetadata(brandName = "SYNTHETIC BRAND", promotionalText = "Invalid destination fixture", qrUrl = "javascript:alert(1)")
