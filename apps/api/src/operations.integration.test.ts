@@ -31,7 +31,9 @@ test('state-based delivery: unmetered manifest grant, idempotent proofs, pause a
   assert.deepEqual(manifest.items[0].deliveryQuota,{id:`${campaign.id}:${screen.id}`,revision:assignment.offlineQuotaRevision,remainingPlays:null,unlimited:true})
   assert.equal('startsAt' in manifest.items[0],false)
   assert.equal('endsAt' in manifest.items[0],false)
-  assert.deepEqual((manifest.layoutStudioContract?.zones as Array<{rotation?:{items:Array<{referenceId:string;durationSeconds:number}>}}>)?.[0]?.rotation?.items,[{referenceId:campaign.creatives[0]!.id,durationSeconds:10}])
+  // A manually seeded PUBLISHED row cannot substitute for Custom profile certification.
+  assert.equal(manifest.layoutStudioContract, undefined)
+  assert.equal('layoutStudioContract' in manifestData, false)
   const legacy=await prisma.campaign.create({data:{name:'Legacy scheduled audit campaign',status:'SCHEDULED',commercialFundingStatus:'PAID',startsAt:new Date('2020-01-01'),endsAt:new Date('2020-01-02'),creatives:{create:{name:'Legacy image',status:'APPROVED',type:'IMAGE',asset:{create:{fileName:'legacy.png',storageKey:`audit/${randomUUID()}.png`,url:'https://example.com/legacy.png',checksum:'b'.repeat(64),mimeType:'image/png'}}}}},include:{creatives:true}})
   await prisma.displayCampaignAssignment.create({data:{campaignId:legacy.id,displayId:screen.id,active:true,offlinePlaysAuthorized:10}})
   assert.equal((await buildDisplayManifest(screen.id)).manifest.items.some(item=>item.campaignId===legacy.id),false)

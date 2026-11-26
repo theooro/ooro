@@ -1,5 +1,76 @@
 import { z } from 'zod'
 
+export const layoutProfileIds = ['OORO_AUTO_LITE', 'OORO_PREMIUM', 'OORO_RETAIL_EVENT', 'MBOX_ANDROID10_1280_720_V1'] as const
+export const MBOX_PROFILE_ID = 'MBOX_ANDROID10_1280_720_V1' as const
+export const certificationChecks = ['renderer', 'resources', 'offlineFallback', 'playback', 'proofIsolation'] as const
+export type CertificationCheck = typeof certificationChecks[number]
+export type WidgetCertification = { provider: string | null; reason: string; checks: Record<CertificationCheck, boolean>; evidence: string[] }
+
+const pending = (provider: string | null, reason: string): WidgetCertification => ({
+  provider, reason, checks: { renderer: false, resources: false, offlineFallback: false, playback: false, proofIsolation: false }, evidence: [],
+})
+
+/** Reviewed source registry, never supplied by a browser, draft or environment override. */
+export const mboxProfile = {
+  id: MBOX_PROFILE_ID, revision: 1, label: 'MBOX · Android 10 · 1280×720 · acceptance pending',
+  hardware: { model: 'MBOX', apiLevel: 29, abi: 'armeabi-v7a', densityDpi: 213, memoryKiB: 3891432, hardware: 'sun50iw9p1', boardPlatform: 'cupid', firmwareFingerprintSha256: '10c10aab9b732bfa48740800d877da2a3bb27d9b141b70fffae9dbb946df5cab' },
+  player: { packageName: 'com.ooro.screenplayer', observedVersionCode: 4, candidateVersionCode: 5, rendererContractVersion: 1 },
+  target: { width: 1280, height: 720 }, screenType: 'AUTO_SCREEN' as const,
+  // Proposed first acceptance envelope; these are not measured/certified limits.
+  proposedLimits: { zones: 2, imageZones: 1, videoDecoders: 0, rotationItems: 0 },
+  acceptance: pending('Versioned MBOX Custom renderer/resource envelope', 'Resource envelope acceptance is pending.'),
+  widgets: {
+    IMAGE: pending('Manifest-backed verified local image decoder', 'Custom Image renderer, resource, offline and proof-isolation acceptance has not passed on this profile.'),
+    TEXT: pending('Persisted zone label rendered by Compose Text', 'Custom static Text clipping, resource and offline acceptance has not passed on this profile.'),
+    LOGO: pending('Manifest-backed verified local image decoder', 'Logo bounds and resource acceptance is pending.'),
+    BACKGROUND_IMAGE: pending('Manifest-backed verified local image decoder', 'Background image decode/memory and layering acceptance is pending.'),
+    VIDEO: pending('Media3 with a manifest-backed verified local asset', 'Custom Video decoder count, sustained playback, offline recovery and proof isolation are not certified.'),
+    MAIN_AD: pending('Separately authorized primary campaign pipeline', 'Custom main-slot playback and paid-proof attribution are not certified.'),
+    SPONSORED_AD: pending('Separately authorized sponsored image pipeline', 'Custom sponsor-slot playback and proof attribution are not certified.'),
+    QR_OFFER: pending('Manifest-authorized destination and native QR encoder', 'Preset QR tests do not certify Custom QR bindings or resource limits.'),
+    CLOCK: pending(null, 'No Custom clock provider is implemented; a static label is not a clock.'),
+    WEATHER: pending(null, 'No authenticated weather data source or Custom weather provider exists.'),
+    TICKER: pending(null, 'The preset news ticker is not connected to a Custom widget data source or runtime.'),
+    NAVIGATION_MAP: pending(null, 'The preset navigation path is not connected to a certified Custom map provider/data source.'),
+    STATIC_QR: pending(null, 'No Custom static-QR runtime and authorized destination adapter exists.'),
+    EXTERNAL_DESTINATION: pending(null, 'No Custom external-destination runtime exists.'),
+  } satisfies Record<WidgetType, WidgetCertification>,
+}
+
+export function widgetCertified(certification: WidgetCertification): boolean {
+  return certification.provider !== null && certification.evidence.length > 0 && certificationChecks.every(check => certification.checks[check])
+}
+
+export const profileOptions = [
+  { id: 'OORO_AUTO_LITE', label: 'OORO Auto Lite · unverified Custom runtime', target: { width: 1280, height: 720 }, screenType: 'AUTO_SCREEN' },
+  { id: 'OORO_PREMIUM', label: 'OORO Premium · unverified Custom runtime', target: { width: 1280, height: 720 }, screenType: 'PREMIUM_DISPLAY' },
+  { id: 'OORO_RETAIL_EVENT', label: 'OORO Retail / Event · unverified Custom runtime', target: { width: 1080, height: 1920 }, screenType: 'RETAIL_EVENT' },
+  { id: MBOX_PROFILE_ID, label: mboxProfile.label, target: mboxProfile.target, screenType: mboxProfile.screenType },
+] as const
+
+export const publicationIssueCodes = new Set(['NO_VISIBLE_ZONES', 'CAPABILITY_PROFILE_UNVERIFIED', 'WIDGET_CERTIFICATION_REQUIRED', 'WIDGET_PROVIDER_UNAVAILABLE', 'PROFILE_RESOURCE_BUDGET_UNVERIFIED', 'PROFILE_RESOURCE_LIMIT_EXCEEDED', 'PROFILE_WIDGET_UNSUPPORTED'])
+
+export function layoutCapabilityIssues(draft: LayoutDraft): LayoutIssue[] {
+  if (draft.mode !== 'CUSTOM') return []
+  const declaredProfile = profileOptions.find(profile => profile.id === draft.profileId)
+  if (draft.screenType && draft.screenType !== declaredProfile?.screenType) return [{ code: 'PROFILE_TARGET_MISMATCH', message: 'Screen type must match the selected hardware profile.' }]
+  if (draft.profileId !== MBOX_PROFILE_ID && draft.capabilityProfileVersion !== undefined) return [{ code: 'PROFILE_VERSION_MISMATCH', message: 'Only versioned hardware profiles accept a capabilityProfileVersion.' }]
+  if (draft.profileId !== MBOX_PROFILE_ID) return [{ code: 'CAPABILITY_PROFILE_UNVERIFIED', message: `Custom layouts cannot be published for ${draft.profileId} until its runtime capabilities and resource budget are certified.` }]
+  const issues: LayoutIssue[] = []
+  if (draft.capabilityProfileVersion !== mboxProfile.revision) issues.push({ code: 'PROFILE_VERSION_MISMATCH', message: 'MBOX requires capability profile revision 1.' })
+  if (draft.target.width !== mboxProfile.target.width || draft.target.height !== mboxProfile.target.height || draft.screenType !== mboxProfile.screenType) issues.push({ code: 'PROFILE_TARGET_MISMATCH', message: 'MBOX revision 1 requires AUTO_SCREEN at native landscape 1280×720.' })
+  for (const zone of draft.zones.filter(zone => zone.visible)) {
+    const certification = mboxProfile.widgets[zone.type]
+    if (!['IMAGE', 'TEXT'].includes(zone.type)) issues.push({ code: 'PROFILE_WIDGET_UNSUPPORTED', zoneId: zone.id, message: `${zone.type} is outside the MBOX revision 1 candidate envelope (one Image plus static Text only).` })
+    if (!widgetCertified(certification)) issues.push({ code: certification.provider ? 'WIDGET_CERTIFICATION_REQUIRED' : 'WIDGET_PROVIDER_UNAVAILABLE', zoneId: zone.id, message: `${zone.label}: ${certification.reason}` })
+  }
+  // Do not turn proposed budgets into certified limits just because a widget has a renderer.
+  if (!widgetCertified(mboxProfile.acceptance)) issues.push({ code: 'PROFILE_RESOURCE_BUDGET_UNVERIFIED', message: 'The MBOX Custom resource envelope has not passed device-profile acceptance; publication remains blocked.' })
+  if (draft.zones.length > mboxProfile.proposedLimits.zones || draft.zones.filter(zone => ['IMAGE', 'LOGO', 'BACKGROUND_IMAGE'].includes(zone.type)).length > mboxProfile.proposedLimits.imageZones || draft.zones.some(zone => zone.rotation)) issues.push({ code: 'PROFILE_RESOURCE_LIMIT_EXCEEDED', message: 'The initial MBOX candidate envelope is one image plus one static text zone, without rotation or video. It is not yet certified.' })
+  return issues
+}
+
+
 export const layoutModes = ['STANDARD', 'CUSTOM'] as const
 export const layoutPresets = ['OORO_STANDARD_V3', '65_35', '50_50', 'FULLSCREEN', 'MAIN_SIDEBAR', 'GRID', 'CUSTOM_CANVAS'] as const
 export const widgetTypes = ['MAIN_AD', 'SPONSORED_AD', 'IMAGE', 'VIDEO', 'QR_OFFER', 'LOGO', 'TEXT', 'BACKGROUND_IMAGE', 'CLOCK', 'WEATHER', 'TICKER', 'NAVIGATION_MAP', 'STATIC_QR', 'EXTERNAL_DESTINATION'] as const
@@ -11,7 +82,7 @@ export const layoutZoneSchema = z.object({
   id: z.string().min(1).max(80),
   type: z.enum(widgetTypes),
   label: z.string().trim().min(1).max(80),
-  schemaVersion: z.number().int().positive().max(10),
+  schemaVersion: z.literal(1),
   geometry: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).strict(),
   zIndex: z.number().int().min(0).max(100),
   fit: z.enum(['FIT', 'CENTER_CROP']).default('FIT'),
@@ -24,7 +95,9 @@ export const layoutDraftSchema = z.object({
   contractVersion: z.literal(1),
   mode: z.enum(layoutModes),
   preset: z.enum(layoutPresets),
-  profileId: z.enum(['OORO_AUTO_LITE', 'OORO_PREMIUM', 'OORO_RETAIL_EVENT']),
+  profileId: z.enum(layoutProfileIds),
+  capabilityProfileVersion: z.number().int().positive().optional(),
+  screenType: z.enum(['AUTO_SCREEN', 'PREMIUM_DISPLAY', 'RETAIL_EVENT']).optional(),
   target: z.object({ width: z.number().int().min(320).max(7680), height: z.number().int().min(240).max(4320) }).strict(),
   zones: z.array(layoutZoneSchema).max(24),
 }).strict()
@@ -54,7 +127,7 @@ const standardGeometry = [
 export function standardV3Draft(): LayoutDraft {
   return {
     contractVersion: 1, mode: 'STANDARD', preset: 'OORO_STANDARD_V3', profileId: 'OORO_AUTO_LITE', target: { width: 1280, height: 720 },
-    zones: standardGeometry.map((zone, index) => ({ id: `standard-${index + 1}`, type: zone.type, label: zone.type.replaceAll('_', ' '), schemaVersion: 1, geometry: { x: zone.x, y: zone.y, width: zone.width, height: zone.height }, zIndex: index, fit: 'FIT' as const, contentBinding: { kind: 'NONE' as const }, visible: true })),
+    zones: standardGeometry.map((zone, index) => ({ id: `standard-${index + 1}`, type: zone.type, label: zone.type.replaceAll('_', ' '), schemaVersion: 1 as const, geometry: { x: zone.x, y: zone.y, width: zone.width, height: zone.height }, zIndex: index, fit: 'FIT' as const, contentBinding: { kind: 'NONE' as const }, visible: true })),
   }
 }
 
@@ -63,6 +136,7 @@ export function validateLayoutDraft(input: unknown): { draft?: LayoutDraft; issu
   if (!parsed.success) return { issues: parsed.error.issues.map(issue => ({ code: 'SCHEMA_INVALID', message: `${issue.path.join('.') || 'layout'}: ${issue.message}` })) }
   const draft = parsed.data
   const issues: LayoutIssue[] = []
+  if (!draft.zones.some(zone => zone.visible)) issues.push({ code: 'NO_VISIBLE_ZONES', message: 'A layout requires at least one visible widget.' })
   const ids = new Set<string>()
   let videoZones = 0
   let mainAdZones = 0
@@ -72,10 +146,10 @@ export function validateLayoutDraft(input: unknown): { draft?: LayoutDraft; issu
     if (ids.has(zone.id)) issues.push({ code: 'DUPLICATE_ZONE_ID', zoneId: zone.id, message: 'Zone IDs must be unique.' })
     ids.add(zone.id)
     const { x, y, width, height } = zone.geometry
-    if (![x, y, width, height].every(Number.isFinite) || x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > 1.000001 || y + height > 1.000001) {
+    if (![x, y, width, height].every(Number.isFinite) || x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > 1 + 1e-9 || y + height > 1 + 1e-9) {
       issues.push({ code: 'ZONE_OUT_OF_BOUNDS', zoneId: zone.id, message: `${zone.label} must remain within the screen with a positive size.` })
     }
-    if (zone.fit === 'CENTER_CROP' && !['MAIN_AD', 'SPONSORED_AD', 'IMAGE', 'VIDEO', 'BACKGROUND_IMAGE'].includes(zone.type)) issues.push({ code: 'INVALID_FIT', zoneId: zone.id, message: 'Crop fitting is supported only for media zones.' })
+    if (zone.fit === 'CENTER_CROP' && !['MAIN_AD', 'SPONSORED_AD', 'IMAGE', 'VIDEO', 'LOGO', 'BACKGROUND_IMAGE'].includes(zone.type)) issues.push({ code: 'INVALID_FIT', zoneId: zone.id, message: 'Crop fitting is supported only for media zones.' })
     if (zone.contentBinding.kind !== 'NONE' && !zone.contentBinding.referenceId) issues.push({ code: 'BINDING_REFERENCE_REQUIRED', zoneId: zone.id, message: 'A bound content reference is required.' })
     if (zone.rotation) {
       if (zone.type !== 'IMAGE') issues.push({ code: 'ROTATION_UNSUPPORTED_ZONE', zoneId: zone.id, message: 'Sequential rotation is currently supported only for IMAGE zones.' })
@@ -103,12 +177,12 @@ export function validateLayoutDraft(input: unknown): { draft?: LayoutDraft; issu
   }
   if (draft.mode === 'STANDARD') {
     const canonical = standardV3Draft()
-    if (draft.preset !== 'OORO_STANDARD_V3' || draft.profileId !== 'OORO_AUTO_LITE' || draft.target.width <= draft.target.height || draft.zones.length !== canonical.zones.length || draft.zones.some((zone, i) => {
+    if (draft.preset !== 'OORO_STANDARD_V3' || draft.profileId !== 'OORO_AUTO_LITE' || (draft.screenType !== undefined && draft.screenType !== 'AUTO_SCREEN') || draft.capabilityProfileVersion !== undefined || draft.target.width <= draft.target.height || draft.zones.length !== canonical.zones.length || draft.zones.some((zone, i) => {
       const expected = canonical.zones[i]
       return !expected || zone.type !== expected.type || JSON.stringify(zone.geometry) !== JSON.stringify(expected.geometry) || !zone.visible || zone.fit !== 'FIT'
     })) issues.push({ code: 'STANDARD_LOCKED', message: 'OORO Standard V3 geometry is locked and cannot be resized or rearranged.' })
   }
-  if (draft.mode === 'CUSTOM') issues.push({ code: 'CAPABILITY_PROFILE_UNVERIFIED', message: `Custom layouts cannot be published for ${draft.profileId} until its runtime capabilities and resource budget are certified.` })
+  issues.push(...layoutCapabilityIssues(draft))
   return { draft, issues }
 }
 

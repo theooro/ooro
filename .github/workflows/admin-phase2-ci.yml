@@ -4,6 +4,10 @@ on:
     paths:
       - "app/**"
       - "components/**"
+      - "tests/layout-studio/**"
+      - "tests/fixtures/layout-studio-entry.tsx"
+      - "scripts/layout-studio-test-server.mjs"
+      - "playwright.layout-studio.config.ts"
       - "lib/**"
       - "public/**"
       - "apps/api/**"
@@ -46,6 +50,7 @@ jobs:
       ADMIN_WEB_BASE_URL: http://localhost:3000
       NEXT_PUBLIC_API_URL: http://localhost:3001
       OORO_ADMIN_AUTH_INTEGRATION_TESTS: "true"
+      OORO_LAYOUT_STUDIO_INTEGRATION_TESTS: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -71,6 +76,11 @@ jobs:
         run: pnpm --filter @ooro/api test
       - name: DeviceOS deployment form validation tests
         run: pnpm --filter @ooro/api exec node --test --import tsx ../../lib/admin/deviceos-deployment-form.test.ts
+      - name: Layout Studio model and browser workflows (local fixtures only)
+        run: |
+          pnpm --filter @ooro/api exec node --test --import tsx ../../lib/admin/layout-studio-model.test.ts
+          pnpm exec playwright install --with-deps chromium
+          pnpm exec playwright test --config playwright.layout-studio.config.ts
       - name: Production builds
         run: pnpm build
       - name: Separate disposable operations database

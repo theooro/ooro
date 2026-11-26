@@ -18,7 +18,8 @@ import { createDisplayRecoveryCode, decryptDisplayRecoveryCode, encryptDisplayRe
 import { assertRideTransition, stateForEvent } from './domain/ride-state.js'
 import { verifyRide } from './domain/verification.js'
 import { calculateEarnings } from './domain/earnings.js'
-import { buildDisplayManifest } from './domain/campaign-eligibility.js'
+import { mboxProfile, profileOptions, publicationIssueCodes } from './domain/layout-studio.js'
+import { buildDisplayManifest, hasVerifiedAssetMetadata } from './domain/campaign-eligibility.js'
 import { campaignPackages } from './domain/campaign-packages.js'
 import { guestOrderInput, normalizePhone, createRazorpayOrder, verifyCheckoutSignature, verifyWebhookSignature, markOrderPaid, packageFor, createGuestOrder, attachRazorpayOrder, findGuestOrder, findGuestOrderByRazorpayOrder, listGuestOrders, markOrderFailed, updateGuestOrder, isMongoError } from './domain/guest-orders.js'
 import { RazorpayWebhookEventModel } from './models/razorpay-webhook-event.js'
@@ -97,17 +98,20 @@ const bodyOf = <T>(request: any, schema: z.ZodType<T>) => {
   if (!parsed.success) throw new ApiError('VALIDATION_ERROR', parsed.error.issues.map((issue) => issue.message).join('; '), 422)
   return parsed.data
 }
-const validateLayoutBindings = async (draft: LayoutDraft, db: typeof prisma | Prisma.TransactionClient = prisma) => {
+const validateLayoutBindings = async (draft: LayoutDraft, db: typeof prisma | Prisma.TransactionClient = prisma, requireComplete = false) => {
   const issues: Array<{ code: string; message: string; zoneId?: string }> = []
   for (const zone of draft.zones) {
     if (zone.rotation) for (const item of zone.rotation.items) {
-      const creative = await db.creative.findUnique({ where: { id: item.referenceId }, select: { status: true, type: true, campaign: { select: { deliverySlot: true } }, asset: { select: { active: true, url: true } } } })
-      if (zone.type !== 'IMAGE' || creative?.status !== 'APPROVED' || creative.type.toUpperCase() !== 'IMAGE' || creative.campaign.deliverySlot === 'SPONSORED' || !creative.asset?.active || !creative.asset.url) {
+      const creative = await db.creative.findUnique({ where: { id: item.referenceId }, select: { status: true, type: true, campaign: { select: { deliverySlot: true } }, asset: { select: { active: true, url: true, checksum: true } } } })
+      if (zone.type !== 'IMAGE' || creative?.status !== 'APPROVED' || creative.type.toUpperCase() !== 'IMAGE' || creative.campaign.deliverySlot === 'SPONSORED' || !hasVerifiedAssetMetadata(creative.asset)) {
         issues.push({ code: 'ROTATION_CONTENT_INELIGIBLE', zoneId: zone.id, message: `${zone.label} rotation items must reference approved, available, non-sponsored image creatives.` })
       }
     }
     const binding = zone.contentBinding
-    if (binding.kind === 'NONE') continue
+    if (binding.kind === 'NONE') {
+      if (requireComplete && draft.mode === 'CUSTOM' && !zone.rotation && ['IMAGE', 'VIDEO', 'LOGO', 'BACKGROUND_IMAGE', 'SPONSORED_AD', 'QR_OFFER'].includes(zone.type)) issues.push({ code: 'BINDING_REFERENCE_REQUIRED', zoneId: zone.id, message: `${zone.label} requires an approved media or authorized destination binding before publication.` })
+      continue
+    }
     if (!binding.referenceId) { issues.push({ code: 'BINDING_REFERENCE_REQUIRED', zoneId: zone.id, message: `${zone.label} needs a valid existing content reference.` }); continue }
     if ((binding.kind === 'APPROVED_SPONSOR' && zone.type !== 'SPONSORED_AD') || (zone.type === 'SPONSORED_AD' && binding.kind !== 'APPROVED_SPONSOR') || (binding.kind === 'AUTHORIZED_DESTINATION' && !['QR_OFFER', 'STATIC_QR', 'EXTERNAL_DESTINATION'].includes(zone.type))) {
       issues.push({ code: 'CONTENT_SLOT_MISMATCH', zoneId: zone.id, message: `${zone.label} must use a content binding that matches its independent delivery slot.` }); continue
@@ -118,8 +122,8 @@ const validateLayoutBindings = async (draft: LayoutDraft, db: typeof prisma | Pr
       if (!link?.active || (link.expiresAt && link.expiresAt <= new Date())) issues.push({ code: 'DESTINATION_NOT_AUTHORIZED', zoneId: zone.id, message: `${zone.label} must reference an active, unexpired authorized destination.` })
       continue
     }
-    const creative = await db.creative.findUnique({ where: { id: binding.referenceId }, select: { status: true, type: true, campaign: { select: { deliverySlot: true } }, asset: { select: { active: true, url: true } } } })
-    const approvedAndAvailable = creative?.status === 'APPROVED' && creative.asset?.active && Boolean(creative.asset.url)
+    const creative = await db.creative.findUnique({ where: { id: binding.referenceId }, select: { status: true, type: true, campaign: { select: { deliverySlot: true } }, asset: { select: { active: true, url: true, checksum: true } } } })
+    const approvedAndAvailable = creative?.status === 'APPROVED' && hasVerifiedAssetMetadata(creative.asset)
     const sponsorSlot = creative?.campaign.deliverySlot === 'SPONSORED'
     const creativeType = creative?.type ?? ''
     const slotMatches = binding.kind === 'APPROVED_SPONSOR' ? sponsorSlot : !sponsorSlot
@@ -133,7 +137,7 @@ const validateLayoutBindings = async (draft: LayoutDraft, db: typeof prisma | Pr
 // the compatibility review is pending; all structural and binding checks stay
 // enforced on every save.
 const layoutDraftSaveIssues = (draft: LayoutDraft) =>
-  validateLayoutDraft(draft).issues.filter((issue) => issue.code !== 'CAPABILITY_PROFILE_UNVERIFIED')
+  validateLayoutDraft(draft).issues.filter((issue) => !publicationIssueCodes.has(issue.code))
 const asJson = (value: unknown): any => JSON.parse(JSON.stringify(value, (_, item) => typeof item === 'bigint' ? item.toString() : item))
 const driverFrom = async (auth: { driverId?: string }) => {
   if (!auth.driverId) throw forbidden('Driver account required')
@@ -216,15 +220,15 @@ app.get('/api/health/db', async (request, reply) => {
 app.get('/api/admin/layout-studio', async (request, reply) => {
   await requirePermission(request, 'device:read')
   const layouts = await prisma.layoutTemplate.findMany({ orderBy: { updatedAt: 'desc' }, include: { revisions: { orderBy: { revision: 'desc' }, take: 1, select: { id: true, revision: true, contractHash: true, publishedAt: true } } } })
-  return ok(request, { templates: [{ key: 'OORO_STANDARD_V3', name: 'OORO Standard V3', mode: 'STANDARD', locked: true, contract: standardV3Draft() }], layouts: asJson(layouts), liveAssignmentEnabled: false }, reply)
+  return ok(request, { templates: [{ key: 'OORO_STANDARD_V3', name: 'OORO Standard V3', mode: 'STANDARD', locked: true, contract: standardV3Draft() }], layouts: asJson(layouts), liveAssignmentEnabled: false, profiles: profileOptions, mboxProfile }, reply)
 })
 app.get('/api/admin/layout-studio/content', async (request, reply) => {
   await requirePermission(request, 'campaign:read')
   const [creatives, destinations] = await Promise.all([
-    prisma.creative.findMany({ where: { status: 'APPROVED', asset: { is: { active: true, url: { not: '' } } } }, orderBy: [{ campaign: { name: 'asc' } }, { displayOrder: 'asc' }], take: 500, select: { id: true, name: true, type: true, campaign: { select: { id: true, name: true, deliverySlot: true } } } }),
+    prisma.creative.findMany({ where: { status: 'APPROVED' }, orderBy: [{ campaign: { name: 'asc' } }, { displayOrder: 'asc' }], take: 500, select: { id: true, name: true, type: true, asset: { select: { active: true, url: true, checksum: true, mimeType: true } }, campaign: { select: { id: true, name: true, deliverySlot: true } } } }),
     prisma.campaignTrackingLink.findMany({ where: { active: true, OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] }, orderBy: { createdAt: 'desc' }, take: 200, select: { id: true, ctaType: true, campaign: { select: { name: true } } } }),
   ])
-  return ok(request, { creatives: asJson(creatives), destinations: asJson(destinations), note: 'Approval, active assets, campaign state, screen assignment, and explicit delivery quota are required for selection. Layout binding does not itself authorize delivery.' }, reply)
+  return ok(request, { creatives: asJson(creatives.filter(creative => hasVerifiedAssetMetadata(creative.asset)).map(({ asset, ...creative }) => ({ ...creative, previewUrl: asset?.url, mimeType: asset?.mimeType }))), unavailableCreatives: creatives.filter(creative => !hasVerifiedAssetMetadata(creative.asset)).map(creative => ({ id: creative.id, name: creative.name, reason: 'Approved creative lacks an active asset URL and valid SHA-256 checksum.' })), destinations: asJson(destinations), note: 'Approval, active assets, campaign state, screen assignment, and explicit delivery quota are required for selection. Layout binding does not itself authorize delivery.' }, reply)
 })
 app.post('/api/admin/layout-studio', async (request, reply) => {
   const auth = await requirePermission(request, 'device:write')
@@ -271,7 +275,7 @@ app.post('/api/admin/layout-studio/:layoutId/validate', async (request, reply) =
   if (!layout) throw notFound('Layout not found')
   if (layout.state === 'PUBLISHED' || layout.state === 'ARCHIVED') throw new ApiError('LAYOUT_REVISION_CONFLICT', 'Published layouts are immutable. Save a new draft revision before validating again.', 409)
   const result = validateLayoutDraft(layout.draftContract)
-  const issues = [...result.issues, ...await validateLayoutBindings(layout.draftContract as LayoutDraft)]
+  const issues = [...result.issues, ...await validateLayoutBindings(layout.draftContract as LayoutDraft, prisma, true)]
   if (layout.rowVersion !== input.expectedRowVersion) throw new ApiError('LAYOUT_REVISION_CONFLICT', 'This draft changed during validation. Reload it before continuing.', 409)
   if (issues.length) return ok(request, { valid: false, issues, rowVersion: layout.rowVersion, warnings: ['Publishing a layout does not approve or authorize advertising media. Live screen assignment is disabled by default.'] }, reply)
   if (layout.state === 'VALIDATED') return ok(request, { valid: true, issues: [], rowVersion: layout.rowVersion, state: layout.state, warnings: ['Publishing a layout does not approve or authorize advertising media. Live screen assignment is disabled by default.'] }, reply)
@@ -293,7 +297,7 @@ app.post('/api/admin/layout-studio/:layoutId/publish', async (request, reply) =>
     if (!layout) throw notFound('Layout not found')
     if (layout.rowVersion !== input.expectedRowVersion || layout.state !== 'VALIDATED') throw new ApiError('LAYOUT_REVISION_CONFLICT', 'Validate the current draft before Super Admin approval and publication.', 409)
     const result = validateLayoutDraft(layout.draftContract)
-    const issues = [...result.issues, ...await validateLayoutBindings(layout.draftContract as LayoutDraft, tx)]
+    const issues = [...result.issues, ...await validateLayoutBindings(layout.draftContract as LayoutDraft, tx, true)]
     if (issues.length) throw new ApiError('LAYOUT_VALIDATION_FAILED', issues.map(issue => issue.message).join(' '), 422)
     const contract = JSON.stringify(layout.draftContract)
     const contractHash = createHash('sha256').update(contract).digest('hex')
