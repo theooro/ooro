@@ -42,6 +42,7 @@ This follow-up starts at PR #126 (`d03f4a2`) and preserves its editor feedback. 
 ## Checks
 
 - API suite with the Layout Studio disposable-database integration enabled: 177 passed, 11 intentionally skipped, zero failures (188 total). The workflow tests create/bind/save/read/validate, check blocked publication and manifest eligibility, reject wrong media/checksum/profile, and verify no proof rows are created.
+- Separate disposable operations integration: 1 passed; an uncertified directly seeded layout is withheld while normal unmetered campaign delivery and proof idempotency remain intact.
 - Layout Studio model tests: 7 passed, including response errors, typed bindings, coherent profile selection, certification evidence requirements and fail-closed manifests.
 - Browser workflows: 3 passed against a loopback-only fixture using the real editor and Tailwind styles. Tests cover add/bind/profile/save/validate, publication eligibility, template/profile preservation, portrait preview, authorization error/retry and unavailable Weather. No production authentication is relaxed or mocked; the fixture is outside all deployed Next routes.
 - Android unit suite: 195 passed, 1 skipped, zero failures/errors (196 total). Lint, app build and instrumentation compilation pass locally. See PR/CI checks for the exact tested SHA. No connected MBOX instrumentation, APK installation or device mutation is performed in this task.
@@ -52,7 +53,7 @@ Synthetic editor capture: [approved Image with selected MBOX profile](../../evid
 
 ## Database and staging release
 
-No Prisma schema or migration files change. The new fields fit existing JSON contracts and the existing string profile column. Only a fresh loopback disposable database was initialized for tests; no staging or production migration ran. Before any staging rollout, inspect the staging migration status through its authorized resource; do not reapply migrations blindly.
+No Prisma schema or migration files change. The new fields fit existing JSON contracts and the existing string profile column. Only fresh loopback disposable test databases were initialized for tests; no staging or production migration ran. Before any staging rollout, inspect the staging migration status through its authorized resource; do not reapply migrations blindly.
 
 The only approved live API is `https://api-staging.theooro.com`. The operator confirmed the credential/session prerequisite, but browser discovery still returned no connected browser and the staging Admin/Coolify resource URLs have not been supplied. No deployment or deployed commit is inferred from a same-origin portal request or a health response.
 
