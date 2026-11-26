@@ -33,6 +33,36 @@ export interface MobilityPartnerAdapter {
   normalize(input: unknown, context: PartnerAdapterContext): Promise<NormalizedRideEvent>
 }
 
+// Sandbox-only fixture adapter; it never contacts a provider or causes downstream delivery effects.
+export class SyntheticMobilityAdapter implements MobilityPartnerAdapter {
+  readonly providerId = 'synthetic-fixture'
+  async normalize(input: unknown, context: PartnerAdapterContext): Promise<NormalizedRideEvent> {
+    if (context.environment !== 'SANDBOX') throw Object.assign(new Error('Synthetic fixtures are sandbox-only.'), { code: 'SYNTHETIC_ENVIRONMENT_DENIED' })
+    const fixture = z.object({
+      fixtureId: z.string().uuid(),
+      lifecycle: z.enum(['REQUESTED','ACCEPTED','ACTIVE','CANCELLED','COMPLETED']),
+      occurredAt: z.string().datetime({ offset: true }),
+      consent: z.literal(true),
+      serviceArea: z.string().trim().min(1).max(80).optional(),
+      vehicleClass: z.enum(['AUTO','CAB','TWO_WHEELER']).optional(),
+      aggregateTripBand: z.enum(['SHORT','MEDIUM','LONG']).optional(),
+      feature: z.enum(['MOBILITY_VERIFICATION','SERVICEABILITY']).optional(),
+    }).strict().parse(input)
+    return normalizedRideEventSchema.parse({
+      eventId: fixture.fixtureId,
+      eventType: `RIDE_${fixture.lifecycle}`,
+      occurredAt: fixture.occurredAt,
+      consent: fixture.consent,
+      context: {
+        ...(fixture.serviceArea ? { serviceArea: fixture.serviceArea } : {}),
+        ...(fixture.vehicleClass ? { vehicleClass: fixture.vehicleClass } : {}),
+        ...(fixture.aggregateTripBand ? { aggregateTripBand: fixture.aggregateTripBand } : {}),
+        ...(fixture.feature ? { feature: fixture.feature } : {}),
+      },
+    })
+  }
+}
+
 export type PartnerCredential = { partnerId: string; clientId: string; environment: PartnerEnvironment; scopes: PartnerScope[]; secretHash: string; revokedAt: number | null; expiresAt: number | null }
 export type PartnerPrincipal = Pick<PartnerCredential, 'partnerId' | 'clientId' | 'environment' | 'scopes'>
 export function hashPartnerSecret(secret: string): string { return createHash('sha256').update(secret).digest('hex') }

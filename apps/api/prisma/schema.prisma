@@ -1951,7 +1951,9 @@ model PartnerWebhookDelivery {
   body Json
   status String @default("PENDING")
   attempts Int @default(0)
+  replayCount Int @default(0)
   nextAttemptAt DateTime @default(now())
+  claimedAt DateTime?
   lastStatusCode Int?
   lastErrorCode String?
   deliveredAt DateTime?
@@ -1972,6 +1974,7 @@ model PartnerCampaignSubmission {
   payload Json
   createdAt DateTime @default(now())
   partner PartnerOrganization @relation(fields:[partnerId], references:[id], onDelete:Restrict)
+  @@unique([campaignId])
   @@unique([partnerId, environment, idempotencyKey])
   @@index([partnerId, environment, status, createdAt])
 }

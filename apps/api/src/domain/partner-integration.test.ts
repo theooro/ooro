@@ -4,6 +4,7 @@ import {
   authenticatePartner, hashPartnerSecret, issuePartnerCredential, normalizedRideEventSchema,
   PartnerEventInbox, PartnerRateLimiter, partnerTenantWhere, requirePartnerScope,
   signPartnerWebhook, verifyPartnerWebhook, type PartnerPrincipal,
+  SyntheticMobilityAdapter,
 } from './partner-integration.js'
 
 const principal: PartnerPrincipal = { partnerId: 'partner-a', clientId: 'client-a', environment: 'SANDBOX', scopes: ['mobility.events:write','campaigns:read'] }
@@ -36,13 +37,13 @@ test('scope denial and tenant filter are explicit', () => {
 })
 
 test('event inbox is partner/environment scoped, idempotent and rejects event ID payload changes', () => {
-  const inbox = new PartnerEventInbox(); const receivedAt = new Date('2026-01-01T00:00:00Z')
-  const first = inbox.ingest(principal, 'req-1', event(), receivedAt)
+  const inbox = new PartnerEventInbox(); const receivedAt = new Date('2026-01-01T00:00:00Z'), input = event()
+  const first = inbox.ingest(principal, 'req-1', input, receivedAt)
   assert.equal(first.status, 'ACCEPTED')
-  assert.equal(inbox.ingest(principal, 'req-2', event(), receivedAt).status, 'DUPLICATE')
-  assert.equal(inbox.ingest({ ...principal, partnerId: 'partner-b' }, 'req-3', event(), receivedAt).status, 'ACCEPTED')
-  assert.equal(inbox.ingest({ ...principal, environment: 'STAGING' }, 'req-4', event(), receivedAt).status, 'ACCEPTED')
-  assert.throws(() => inbox.ingest(principal, 'req-5', { ...event(), eventType: 'RIDE_ACTIVE' }, receivedAt), (error: unknown) => (error as {code?: string}).code === 'EVENT_ID_REUSE')
+  assert.equal(inbox.ingest(principal, 'req-2', input, receivedAt).status, 'DUPLICATE')
+  assert.equal(inbox.ingest({ ...principal, partnerId: 'partner-b' }, 'req-3', input, receivedAt).status, 'ACCEPTED')
+  assert.equal(inbox.ingest({ ...principal, environment: 'STAGING' }, 'req-4', input, receivedAt).status, 'ACCEPTED')
+  assert.throws(() => inbox.ingest(principal, 'req-5', { ...input, eventType: 'RIDE_ACTIVE' }, receivedAt), (error: unknown) => (error as {code?: string}).code === 'EVENT_ID_REUSE')
 })
 
 test('partner rate limits are isolated by partner and environment', () => {
@@ -62,4 +63,19 @@ test('webhook signatures verify with timestamp tolerance and reject tampering/re
   assert.equal(verifyPartnerWebhook('sandbox-secret', 1000, body+' ', signature, 1000), false)
   assert.equal(verifyPartnerWebhook('sandbox-secret', 1000, body, signature, 1401), false)
   assert.equal(verifyPartnerWebhook('wrong-secret', 1000, body, signature, 1000), false)
+})
+
+test('synthetic provider adapter normalizes only consented sandbox fixtures', async () => {
+  const adapter = new SyntheticMobilityAdapter()
+  const fixture = { fixtureId: 'f89c0e09-4667-46f8-beb0-c7d4220686cb', lifecycle: 'COMPLETED', occurredAt: new Date().toISOString(), consent: true, serviceArea: 'Fixture Area', feature: 'SERVICEABILITY' }
+  assert.deepEqual(await adapter.normalize(fixture, { partnerId: 'synthetic', environment: 'SANDBOX', requestId: 'fixture-request' }), {eventId:fixture.fixtureId,eventType:'RIDE_COMPLETED',occurredAt:fixture.occurredAt,consent:true,context:{serviceArea:'Fixture Area',feature:'SERVICEABILITY'}})
+  await assert.rejects(adapter.normalize(fixture, { partnerId: 'synthetic', environment: 'STAGING', requestId: 'fixture-request' }), { code: 'SYNTHETIC_ENVIRONMENT_DENIED' })
+  await assert.rejects(adapter.normalize({ ...fixture, consent: false }, { partnerId: 'synthetic', environment: 'SANDBOX', requestId: 'fixture-request' }))
+})
+
+test('webhook destination policy blocks special IPv4 and IPv6 address ranges', async () => {
+  const { isPartnerWebhookAddressAllowed } = await import('../partner-runtime.js')
+  for (const address of ['127.0.0.1','10.1.2.3','169.254.169.254','172.16.0.1','192.168.0.1','100.100.100.200','168.63.129.16','::1','fc00::1','fd00:ec2::254','fe80::1','ff02::1','::ffff:127.0.0.1']) assert.equal(isPartnerWebhookAddressAllowed(address), false, address)
+  assert.equal(isPartnerWebhookAddressAllowed('8.8.8.8'), true)
+  assert.equal(isPartnerWebhookAddressAllowed('2606:4700:4700::1111'), true)
 })
