@@ -12,6 +12,7 @@ import { z } from 'zod'
 import { createHash, createHmac, randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto'
 import { config } from './config.js'
 import { prisma } from './prisma.js'
+import { registerPartnerRuntime } from './partner-runtime.js'
 import { ApiError, forbidden, notFound, unauthorized } from './errors.js'
 import { authenticateDeviceOs, authenticateDisplay, hashSecret, issueTokens, randomSecret, requireAuth, requirePermission, requireRoles, response } from './http.js'
 import { createDisplayRecoveryCode, decryptDisplayRecoveryCode, encryptDisplayRecoveryCode } from './domain/display-recovery-code.js'
@@ -1995,6 +1996,7 @@ registerOperations(app)
 registerAdminManagement(app)
 registerAssetRoutes(app)
 registerNetworkOperations(app)
+app.register(registerPartnerRuntime)
 
 app.setErrorHandler((error, request, reply) => {
   const mongoFailure = isMongoError(error)
