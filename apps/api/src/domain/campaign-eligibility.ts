@@ -113,7 +113,18 @@ export async function buildDisplayManifest(displayId: string, now = new Date()):
   const configured = display.zoneConfig
   const contractVersion = configured?.layoutContractVersion ?? 2
   const v3 = contractVersion >= 3
-  const layout = { type: 'FOUR_ZONE', contractVersion, primaryWidthPercent: v3 ? 80 : configured?.primaryWidthPercent ?? 67, adHeightPercent: v3 ? 85 : configured?.adHeightPercent ?? 86, qrHeightPercent: v3 ? 50 : configured?.qrHeightPercent ?? 47, newsScrollSpeed: configured?.newsScrollSpeed ?? 42 }
+  const assignedLayout = { type: 'FOUR_ZONE', contractVersion, primaryWidthPercent: v3 ? 80 : configured?.primaryWidthPercent ?? 67, adHeightPercent: v3 ? 85 : configured?.adHeightPercent ?? 86, qrHeightPercent: v3 ? 50 : configured?.qrHeightPercent ?? 47, newsScrollSpeed: configured?.newsScrollSpeed ?? 42 }
+  const leadCampaignId = deliveryItems[0]?.campaignId
+  const leadCampaign = leadCampaignId ? eligible.find(({ campaign }) => campaign.id === leadCampaignId)?.campaign : undefined
+  const metadata = leadCampaign?.metadata && typeof leadCampaign.metadata === 'object' && !Array.isArray(leadCampaign.metadata) ? leadCampaign.metadata as Record<string, unknown> : {}
+  const requestedLayout = metadata.presentationLayout
+  const layout = requestedLayout === 'FULLSCREEN_AD' || requestedLayout === 'SPLIT_50_25_25'
+    ? requestedLayout
+    : requestedLayout === 'FOUR_ZONE'
+      ? { ...assignedLayout, type: 'FOUR_ZONE', contractVersion: 2 }
+      : requestedLayout === 'FOUR_ZONE_V3' && v3
+        ? { ...assignedLayout, type: 'FOUR_ZONE', contractVersion: 3 }
+      : assignedLayout
   const city = display.vehicle?.city
   const announcements = v3 ? [] : await prisma.newsAnnouncement.findMany({ where: { active: true, AND: [{ OR: [{ startsAt: null }, { startsAt: { lte: now } }] }, { OR: [{ endsAt: null }, { endsAt: { gt: now } }] }, display.vehicleId ? { OR: [{ vehicleId: null }, { vehicleId: display.vehicleId }] } : { vehicleId: null }, city ? { OR: [{ city: null }, { city }] } : { city: null }] }, orderBy: [{ priority: 'desc' }, { createdAt: 'desc' }], take: 12, select: { id: true, text: true, priority: true } })
   const { mainItems, sponsoredItem } = selectManifestDeliverySlots(deliveryItems, eligible.map(({ campaign }) => ({ id: campaign.id, deliverySlot: campaign.deliverySlot })), v3)
@@ -124,8 +135,8 @@ export async function buildDisplayManifest(displayId: string, now = new Date()):
   const rotationMediaIsEligible = rotationReferences.every(referenceId => mainItems.some(item => item.creativeId === referenceId && item.type === 'IMAGE' && item.checksum))
   const layoutStudioContract = parsedLayout?.draft && rotationMediaIsEligible && !parsedLayout.issues.some(issue => issue.code !== 'CAPABILITY_PROFILE_UNVERIFIED') ? candidateLayout : null
   const versionItems = mainItems.map((item) => ({ ...item, offer: Object.fromEntries(Object.entries(item.offer).filter(([key]) => key !== 'scanCount')) }))
-  const news = { scrollSpeed: layout.newsScrollSpeed, announcements }
-  const digest = createHash('sha256').update(JSON.stringify({ displayId, layout, layoutStudioContract, news, deliveryReasons: reasons, items: versionItems, ...(v3 ? { sponsoredItem } : {}) })).digest('hex')
+  const news = { scrollSpeed: configured?.newsScrollSpeed ?? 42, announcements }
+  const digest = createHash('sha256').update(JSON.stringify({ displayId, layout, leadCampaignId, layoutStudioContract, news, deliveryReasons: reasons, items: versionItems, ...(v3 ? { sponsoredItem } : {}) })).digest('hex')
   return { manifest: { manifestId: `manifest-${digest.slice(0, 24)}`, version: manifestVersionFromDigest(digest), generatedAt: now.toISOString(), expiresAt: manifestValidUntil(now).toISOString(), deliveryReasons: reasons, layout, ...(layoutStudioContract ? { layoutStudioContract } : {}), news, items: mainItems, ...(v3 ? { sponsoredItem } : {}) }, reasons }
 }
 const emptyManifest = (now: Date): DisplayManifest => ({ manifestId: 'manifest-empty', version: 0, generatedAt: now.toISOString(), expiresAt: manifestValidUntil(now).toISOString(), deliveryReasons: [], layout: { type: 'FOUR_ZONE', contractVersion: 2, primaryWidthPercent: 67, adHeightPercent: 86, qrHeightPercent: 47, newsScrollSpeed: 42 }, news: { scrollSpeed: 42, announcements: [] }, items: [] })

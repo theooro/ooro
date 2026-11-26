@@ -5,12 +5,28 @@ const list = (value: string | undefined) => value?.split(',').map((item) => item
 
 const defaultCorsOrigins = ['https://theooro.com', 'https://www.theooro.com']
 const developmentCorsOrigins = ['http://localhost:3000', 'http://127.0.0.1:3000']
+const trackingBaseUrl = (() => {
+  const isPublicWebUrl = (value: string | undefined): string | null => {
+    if (!value) return null
+    try {
+      const url = new URL(value)
+      if (url.protocol !== 'https:' || /^(localhost|127\.0\.0\.1)$/.test(url.hostname) || /^api(?:[-.]|$)/i.test(url.hostname)) return null
+      return url.toString().replace(/\/$/, '')
+    } catch { return null }
+  }
+  const publicBase = isPublicWebUrl(process.env.ADMIN_WEB_BASE_URL) ?? 'https://theooro.com'
+  // Keep API hosts out of scanned QR URLs. The public web route proxies the
+  // opaque token to this environment's API and returns its safe redirect.
+  return isPublicWebUrl(process.env.OORO_TRACKING_PUBLIC_BASE_URL)
+    ?? isPublicWebUrl(process.env.TRACKING_BASE_URL)
+    ?? publicBase
+})()
 
 export const config = {
   nodeEnv: process.env.NODE_ENV ?? 'development',
   deploymentEnvironment: process.env.OORO_DEPLOYMENT_ENV ?? process.env.NODE_ENV ?? 'development',
   port: Number(process.env.PORT ?? process.env.API_PORT ?? 8080),
-  trackingBaseUrl: (process.env.TRACKING_BASE_URL ?? 'https://theooro.com').replace(/\/$/, ''),
+  trackingBaseUrl,
   databaseUrl: process.env.DATABASE_URL ?? 'postgresql://ooro:ooro@localhost:5432/ooro',
   mongodbUri: process.env.MONGODB_URI ?? '',
   jwtSecret: process.env.JWT_SECRET ?? 'development-only-change-me',
