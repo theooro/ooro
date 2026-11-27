@@ -35,45 +35,44 @@ class CustomLayoutContentBindingTest {
         fitMode = FitMode.FIT, offer = offer,
         deliveryQuota = DeliveryQuota("campaign-$id:screen-a", 1, 10, false),
     )
-    private fun zone(type: String, binding: String = "APPROVED_CREATIVE", reference: String? = "creative-main") = LayoutStudioZone(
+    private fun zone(type: String, binding: String = "NONE", reference: String? = null) = LayoutStudioZone(
         id = "zone-$type", type = type, label = "Test $type", x = 0.0, y = 0.0,
         width = 1.0, height = 1.0, zIndex = 0, fit = "FIT", bindingKind = binding,
         referenceId = reference, visible = true,
     )
     private val verified = setOf("main", "decor", "video", "sponsor")
 
-    @Test fun `main slot binds only the current verified eligible creative and owns main proof attribution`() {
+    @Test fun `main slot uses scheduler-selected verified creative and owns main proof attribution`() {
         val resolved = resolveCustomWidgetContent(zone("MAIN_AD"), manifest, "screen-a", verified, main, now)
         assertEquals(CustomWidgetContent.MainAd(main), resolved)
         assertEquals("MAIN", resolved.proofSlot)
-        assertTrue(resolveCustomWidgetContent(zone("MAIN_AD", reference = "wrong"), manifest, "screen-a", verified, main, now) is CustomWidgetContent.Fallback)
+        assertTrue(resolveCustomWidgetContent(zone("MAIN_AD"), manifest, "screen-a", verified - "main", main, now) is CustomWidgetContent.Fallback)
     }
 
     @Test fun `decorative media requires a verified active manifest creative and never owns paid proof`() {
-        val resolved = resolveCustomWidgetContent(zone("IMAGE", reference = "creative-decor"), manifest, "screen-a", verified, main, now)
-        assertEquals(CustomWidgetContent.DecorativeMedia(decorative), resolved)
+        val resolved = resolveCustomWidgetContent(zone("IMAGE"), manifest, "screen-a", verified, main, now)
+        assertEquals(CustomWidgetContent.DecorativeMedia(main), resolved)
         assertNull(resolved.proofSlot)
-        assertTrue(resolveCustomWidgetContent(zone("VIDEO", reference = "creative-decor"), manifest, "screen-a", verified, main, now) is CustomWidgetContent.Fallback)
-        assertTrue(resolveCustomWidgetContent(zone("IMAGE", reference = "creative-decor"), manifest, "screen-a", verified - "decor", main, now) is CustomWidgetContent.Fallback)
+        assertTrue(resolveCustomWidgetContent(zone("VIDEO"), manifest, "screen-a", verified - "video", main, now) is CustomWidgetContent.Fallback)
+        assertTrue(resolveCustomWidgetContent(zone("IMAGE"), manifest, "screen-a", verified - "main", main, now) is CustomWidgetContent.Fallback)
     }
 
     @Test fun `sponsor is independently manifest authorized and attributed only to sponsor slot`() {
-        val resolved = resolveCustomWidgetContent(zone("SPONSORED_AD", "APPROVED_SPONSOR", "creative-sponsor"), manifest, "screen-a", verified, main, now)
+        val resolved = resolveCustomWidgetContent(zone("SPONSORED_AD"), manifest, "screen-a", verified, main, now)
         assertEquals(CustomWidgetContent.Sponsor(sponsor), resolved)
         assertEquals("SPONSORED", resolved.proofSlot)
-        assertTrue(resolveCustomWidgetContent(zone("SPONSORED_AD", "APPROVED_SPONSOR", "creative-main"), manifest, "screen-a", verified, main, now) is CustomWidgetContent.Fallback)
-        assertTrue(resolveCustomWidgetContent(zone("SPONSORED_AD", "APPROVED_SPONSOR", "creative-sponsor"), manifest.copy(layoutContractVersion = 2), "screen-a", verified, main, now) is CustomWidgetContent.Fallback)
+        assertTrue(resolveCustomWidgetContent(zone("SPONSORED_AD"), manifest.copy(sponsoredItem = null), "screen-a", verified, main, now) is CustomWidgetContent.Fallback)
+        assertTrue(resolveCustomWidgetContent(zone("SPONSORED_AD"), manifest.copy(layoutContractVersion = 2), "screen-a", verified, main, now) is CustomWidgetContent.Fallback)
     }
 
     @Test fun `QR requires matching authorized destination metadata and verified active manifest content`() {
-        val offer = item("offer", "creative-offer", CreativeType.IMAGE, OfferMetadata(qrUrl = "https://theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF", qrEnabled = true, authorizedDestinationId = "destination-1"))
-        val withOffer = manifest.copy(items = manifest.items + offer)
-        val resolved = resolveCustomWidgetContent(zone("QR_OFFER", "AUTHORIZED_DESTINATION", "destination-1"), withOffer, "screen-a", verified + "offer", main, now)
-        assertEquals(CustomWidgetContent.Offer(offer), resolved)
+        val offer = main.copy(offer = OfferMetadata(qrUrl = "https://theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF", qrEnabled = true, authorizedDestinationId = "destination-1"))
+        val withOffer = manifest.copy(items = listOf(offer, decorative, video),)
+        val resolved = resolveCustomWidgetContent(zone("QR_OFFER"), withOffer, "screen-a", verified, offer, now)
         assertNull(resolved.proofSlot)
-        assertTrue(resolveCustomWidgetContent(zone("QR_OFFER", "AUTHORIZED_DESTINATION", "destination-2"), withOffer, "screen-a", verified + "offer", main, now) is CustomWidgetContent.Fallback)
+        assertEquals(CustomWidgetContent.Offer(offer), resolved)
         val ctaOnly = item("cta-only", "creative-cta", CreativeType.IMAGE, OfferMetadata(ctaUrl = "https://theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF", authorizedDestinationId = "destination-3"))
-        assertTrue(resolveCustomWidgetContent(zone("QR_OFFER", "AUTHORIZED_DESTINATION", "destination-3"), withOffer.copy(items = withOffer.items + ctaOnly), "screen-a", verified + "cta-only", main, now) is CustomWidgetContent.Fallback)
+        assertTrue(resolveCustomWidgetContent(zone("QR_OFFER"), withOffer.copy(items = withOffer.items + ctaOnly), "screen-a", verified + "cta-only", ctaOnly, now) is CustomWidgetContent.Fallback)
     }
 
     @Test fun `expired manifest and screen mismatch fail closed`() {
@@ -83,10 +82,10 @@ class CustomLayoutContentBindingTest {
     }
 
     @Test fun `verified cached binding resolves identically after a process-like resolver recreation`() {
-        val bound = zone("IMAGE", reference = "creative-decor")
-        val first = resolveCustomWidgetContent(bound, manifest, "screen-a", verified, main, now)
-        val afterRecreation = resolveCustomWidgetContent(bound, manifest, "screen-a", verified, main, now)
-        assertEquals(CustomWidgetContent.DecorativeMedia(decorative), first)
+        val unbound = zone("IMAGE")
+        val first = resolveCustomWidgetContent(unbound, manifest, "screen-a", verified, main, now)
+        val afterRecreation = resolveCustomWidgetContent(unbound, manifest, "screen-a", verified, main, now)
+        assertEquals(CustomWidgetContent.DecorativeMedia(main), first)
         assertEquals(first, afterRecreation)
         assertNull(afterRecreation.proofSlot)
     }

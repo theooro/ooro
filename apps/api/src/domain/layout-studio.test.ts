@@ -77,17 +77,17 @@ test('Standard V3 cannot hide or crop a zone or target portrait dimensions', () 
   assert.ok(validateLayoutDraft(portrait).issues.some(issue => issue.code === 'STANDARD_LOCKED'))
 })
 
-test('custom zone geometry must be normalized and bound media needs a reference', () => {
+test('custom zone geometry is normalized and creative references stay Scheduler-owned', () => {
   const draft = standardV3Draft()
   draft.mode = 'CUSTOM'
   draft.preset = 'CUSTOM_CANVAS'
   draft.zones = [{ ...draft.zones[0], geometry: { x: .8, y: 0, width: .3, height: 1 }, contentBinding: { kind: 'APPROVED_CREATIVE' } }]
   const issues = validateLayoutDraft(draft).issues
   assert.ok(issues.some(issue => issue.code === 'ZONE_OUT_OF_BOUNDS'))
-  assert.ok(issues.some(issue => issue.code === 'BINDING_REFERENCE_REQUIRED'))
+  assert.ok(issues.some(issue => issue.code === 'SCHEDULER_OWNS_SLOT_CONTENT'))
 })
 
-test('versioned sequential image rotations keep ordered bounded durations and do not alter Standard V3', () => {
+test('Layout Studio rejects creative rotation references and does not alter Standard V3', () => {
   const standard = standardV3Draft()
   const unchanged = structuredClone(standard)
   const custom = structuredClone(standard)
@@ -98,8 +98,7 @@ test('versioned sequential image rotations keep ordered bounded durations and do
   ] } }]
   const valid = validateLayoutDraft(custom)
   assert.ok(valid.draft)
-  assert.equal(valid.issues.some(issue => issue.code.startsWith('ROTATION_')), false)
-  assert.deepEqual(valid.draft.zones[0]?.rotation?.items.map(item => item.durationSeconds), [3, 3600])
+  assert.ok(valid.issues.some(issue => issue.code === 'SCHEDULER_OWNS_SLOT_CONTENT'))
   const invalidDuration = structuredClone(custom)
   invalidDuration.zones[0]!.rotation!.items[0]!.durationSeconds = 2
   assert.ok(validateLayoutDraft(invalidDuration).issues.some(issue => issue.code === 'SCHEMA_INVALID'))

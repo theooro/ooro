@@ -10,9 +10,9 @@ test('profile/type selection persists a coherent target and version; switching c
   assert.deepEqual(retail.target, { width: 1080, height: 1920 }); assert.equal(retail.profileId, 'OORO_RETAIL_EVENT'); assert.equal(retail.capabilityProfileVersion, undefined)
 })
 
-test('widget type changes reset incompatible references and media choices match the widget type/slot', () => {
+test('widget type changes preserve only geometry/widget type and never bind catalog media', () => {
   const zone = changeLayoutWidgetType(standardV3Draft().zones[0]!, 'IMAGE')
-  assert.deepEqual(zone.contentBinding, { kind: 'APPROVED_CREATIVE' }); assert.equal(zone.fit, 'FIT')
+  assert.deepEqual(zone.contentBinding, { kind: 'NONE' }); assert.equal(zone.fit, 'FIT')
   const campaign = { id: '11111111-1111-4111-8111-111111111111', name: 'Approved catalog', deliverySlot: 'MAIN' }
   const catalog = layoutCatalogSchema.parse({ creatives: [
     { id: '22222222-2222-4222-8222-222222222222', name: 'Image', type: 'IMAGE', campaign },
@@ -20,6 +20,7 @@ test('widget type changes reset incompatible references and media choices match 
   ], destinations: [] })
   assert.deepEqual(matchingLayoutCreatives(catalog, zone).map(item => item.name), ['Image'])
   assert.deepEqual(matchingLayoutCreatives(catalog, changeLayoutWidgetType(zone, 'VIDEO')).map(item => item.name), ['Video'])
+  assert.equal(zone.contentBinding.referenceId, undefined)
   assert.deepEqual(changeLayoutWidgetType(zone, 'TEXT').contentBinding, { kind: 'NONE' })
 })
 

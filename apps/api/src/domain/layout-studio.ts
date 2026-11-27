@@ -107,7 +107,7 @@ export type WidgetType = typeof widgetTypes[number]
 export type LayoutDraft = z.infer<typeof layoutDraftSchema>
 export type LayoutIssue = { code: string; message: string; zoneId?: string }
 
-/** Creative media bindings are type checked; layout references never make an item eligible. */
+/** Kept for legacy callers only; delivery slots are Scheduler-owned. */
 export function creativeTypeMatchesWidget(widgetType: WidgetType, creativeType: string): boolean {
   const mediaType = creativeType.toUpperCase()
   if (widgetType === 'MAIN_AD') return mediaType === 'IMAGE' || mediaType === 'VIDEO'
@@ -150,7 +150,7 @@ export function validateLayoutDraft(input: unknown): { draft?: LayoutDraft; issu
       issues.push({ code: 'ZONE_OUT_OF_BOUNDS', zoneId: zone.id, message: `${zone.label} must remain within the screen with a positive size.` })
     }
     if (zone.fit === 'CENTER_CROP' && !['MAIN_AD', 'SPONSORED_AD', 'IMAGE', 'VIDEO', 'LOGO', 'BACKGROUND_IMAGE'].includes(zone.type)) issues.push({ code: 'INVALID_FIT', zoneId: zone.id, message: 'Crop fitting is supported only for media zones.' })
-    if (zone.contentBinding.kind !== 'NONE' && !zone.contentBinding.referenceId) issues.push({ code: 'BINDING_REFERENCE_REQUIRED', zoneId: zone.id, message: 'A bound content reference is required.' })
+    if (zone.contentBinding.kind !== 'NONE' || zone.contentBinding.referenceId || zone.rotation) issues.push({ code: 'SCHEDULER_OWNS_SLOT_CONTENT', zoneId: zone.id, message: `${zone.label} defines layout geometry only. Remove creative, destination, and rotation references; Scheduler supplies eligible content at playback.` })
     if (zone.rotation) {
       if (zone.type !== 'IMAGE') issues.push({ code: 'ROTATION_UNSUPPORTED_ZONE', zoneId: zone.id, message: 'Sequential rotation is currently supported only for IMAGE zones.' })
       const refs = zone.rotation.items.map(item => item.referenceId)

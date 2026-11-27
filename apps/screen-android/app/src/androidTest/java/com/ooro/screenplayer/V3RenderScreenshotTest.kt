@@ -37,7 +37,7 @@ class V3RenderScreenshotTest {
             .putExtra("scenario", scenarioName)
             .putExtra("layout", "FOUR_ZONE")
             .putExtra("controls", false)
-            .putExtra("map", false)
+            .putExtra("map", scenarioName == "V3_SPONSORED")
             .putExtra("ticker", false)
             .putExtra("qr", true)
         ActivityScenario.launch<RenderTestActivity>(intent).use {

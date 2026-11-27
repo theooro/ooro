@@ -7,10 +7,11 @@ import { AdminAuthError, getAuthenticatedAdmin } from "@/lib/auth/backend-sessio
 import { webPrisma } from "@/lib/web-prisma";
 import { withoutCampaignDeliveryDates } from "@/lib/campaign-delivery-presentation";
 import { campaignDateWindow, DEFAULT_CAMPAIGN_TIMEZONE } from "@/apps/api/src/domain/campaign-date-window";
+import { THREE_ZONE_AD_SPONSOR_QR_V1 } from "@/apps/api/src/domain/presentation-layout";
 
 export const dynamic = "force-dynamic";
 const offerSchema = z.object({ brandName: z.string().trim().max(120).optional(), offerTitle: z.string().trim().max(160).optional(), offerSubtitle: z.string().trim().max(240).optional(), offerValue: z.string().trim().max(120).optional(), ctaType: z.string().trim().max(40).optional(), ctaLabel: z.string().trim().max(80).optional(), ctaUrl: z.string().trim().max(2048).optional() }).strict();
-const createSchema = z.object({ name: z.string().trim().min(1).max(160), advertiser: z.string().trim().max(160).optional(), campaignType: z.literal("INTERNAL_TEST").default("INTERNAL_TEST"), deliverySlot: z.enum(["MAIN", "SPONSORED"]).default("MAIN"), startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), timezone: z.literal(DEFAULT_CAMPAIGN_TIMEZONE).default(DEFAULT_CAMPAIGN_TIMEZONE), layout: z.enum(["FULLSCREEN_AD", "FOUR_ZONE", "FOUR_ZONE_V3", "SPLIT_50_25_25"]).optional(), offer: offerSchema.optional() }).strict();
+const createSchema = z.object({ name: z.string().trim().min(1).max(160), advertiser: z.string().trim().max(160).optional(), campaignType: z.literal("INTERNAL_TEST").default("INTERNAL_TEST"), deliverySlot: z.enum(["MAIN", "SPONSORED"]).default("MAIN"), startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), timezone: z.literal(DEFAULT_CAMPAIGN_TIMEZONE).default(DEFAULT_CAMPAIGN_TIMEZONE), layout: z.enum(["FULLSCREEN_AD", "FOUR_ZONE", "FOUR_ZONE_V3", "SPLIT_50_25_25", THREE_ZONE_AD_SPONSOR_QR_V1]).optional(), offer: offerSchema.optional() }).strict();
 const safe = (value: unknown) => JSON.parse(JSON.stringify(value, (_key, item) => typeof item === "bigint" ? Number(item) : item));
 function errorResponse(error: unknown, requestId = randomUUID()) {
   const authError = error instanceof AdminAuthError;

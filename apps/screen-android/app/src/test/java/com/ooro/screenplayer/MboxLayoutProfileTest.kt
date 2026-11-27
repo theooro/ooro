@@ -10,7 +10,7 @@ class MboxLayoutProfileTest {
       "capabilityProfileVersion":$version,"screenType":"AUTO_SCREEN","target":{"width":$width,"height":720},
       "zones":[{"id":"image","type":"$type","label":"Approved binding","schemaVersion":1,
       "geometry":{"x":0,"y":0,"width":1,"height":1},"zIndex":0,"fit":"FIT",
-      "contentBinding":{"kind":"APPROVED_CREATIVE","referenceId":"approved-image"},"visible":true}]}
+      "contentBinding":{"kind":"NONE"},"visible":true}]}
     """
 
     @Test fun candidateProfileRoundTripsMetadataAndMatchesOnlyItsActualRuntime() {

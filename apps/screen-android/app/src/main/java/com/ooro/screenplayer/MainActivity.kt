@@ -83,6 +83,7 @@ import com.ooro.screenplayer.player.fittedContentBounds
 import com.ooro.screenplayer.player.usesSidebar80
 import com.ooro.screenplayer.player.usesSponsoredLayout
 import com.ooro.screenplayer.player.shouldRenderNewsTicker
+import com.ooro.screenplayer.player.threeZoneQrSupported
 import com.ooro.screenplayer.player.PresentationPreference
 import com.ooro.screenplayer.player.PresentationPreferenceStore
 import com.ooro.screenplayer.player.geometryContractVersion
@@ -395,6 +396,7 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     // Production rendering requires the contract to arrive inside a device-authenticated,
     // screen-bound manifest. Preview-only callers are isolated and proof-suppressed.
     val runtimeMetrics = LocalContext.current.resources.displayMetrics
+    val threeZoneFitsResolution = threeZoneQrSupported(runtimeMetrics.widthPixels, runtimeMetrics.heightPixels, manifest.layoutConfig.minWidthPx.takeIf { it > 0 } ?: 1280, manifest.layoutConfig.minHeightPx.takeIf { it > 0 } ?: 720)
     val runtimeFirmwareHash = remember { com.ooro.screenplayer.layoutstudio.MboxLayoutProfile.fingerprintHash(android.os.Build.FINGERPRINT) }
     val customLayout = parsedCustomLayout?.takeIf { contract ->
         com.ooro.screenplayer.layoutstudio.MboxLayoutProfile.matchesRuntime(contract, android.os.Build.MODEL, android.os.Build.VERSION.SDK_INT, android.os.Build.SUPPORTED_ABIS.toList(), runtimeMetrics.widthPixels, runtimeMetrics.heightPixels, android.os.Build.HARDWARE, runtimeFirmwareHash) &&
@@ -409,6 +411,18 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     Box(rootModifier) {
         if (customLayout != null) {
             CustomLayoutPlayer(vm, manifest, customLayout, item, playbackOffset, verifiedAssetIds, pairedScreenId, preview, manifestExpired, cachedPlaybackAllowed, scheduleClock, emptyPlaybackMessage)
+        } else if (manifest.layout == DisplayLayout.THREE_ZONE_AD_SPONSOR_QR_V1) {
+            if (!threeZoneFitsResolution) {
+                Box(Modifier.fillMaxSize().background(Color(0xFF101613)).testTag("three-zone-unsupported"), contentAlignment = Alignment.Center) {
+                    Text("Three-zone QR layout unavailable at ${runtimeMetrics.widthPixels}×${runtimeMetrics.heightPixels}. This layout requires at least ${manifest.layoutConfig.minWidthPx}×${manifest.layoutConfig.minHeightPx}; select map-enabled four-zone or another supported layout.", color = Color.White, fontSize = 20.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.padding(32.dp))
+                }
+            } else Row(Modifier.fillMaxSize().clipToBounds()) {
+                Box(Modifier.weight(65f).fillMaxHeight().clipToBounds().testTag("three-zone-main")) { PrimaryAdRegion(vm, Modifier.fillMaxSize(), item, playbackOffset, preview, emptyPlaybackMessage) }
+                Column(Modifier.weight(35f).fillMaxHeight().clipToBounds()) {
+                    Box(Modifier.weight(manifest.layoutConfig.qrHeightPercent.coerceIn(70, 80).toFloat()).fillMaxWidth().clipToBounds().testTag("three-zone-qr")) { OfferPanel(displayedOffer, Modifier.fillMaxSize()) }
+                    Box(Modifier.weight(manifest.layoutConfig.sponsoredHeightPercent.coerceIn(20, 30).toFloat()).fillMaxWidth().clipToBounds().testTag("three-zone-sponsored")) { SponsoredAdRegion(vm, sponsoredItem, Modifier.fillMaxSize(), preview?.sponsoredAssetPath) }
+                }
+            }
         } else if (manifest.layout == DisplayLayout.FOUR_ZONE || manifest.layout == DisplayLayout.AD_NAV_OFFER) Row(Modifier.fillMaxSize().clipToBounds()) {
             val adWidth = if (usesSidebar80(manifest.layout, geometryVersion)) 80 else manifest.layoutConfig.safePrimaryWidth
             val sidebarSplit = if (usesSidebar80(manifest.layout, geometryVersion)) 50 else manifest.layoutConfig.safeQrHeight
@@ -884,7 +898,7 @@ private fun creativeDuration(item: ManifestItem) = item.durationSeconds * 1000L
                             mapLoaded = true
                             mapError = null
                             onMapHealth(true, null)
-                            Log.i("OoroScreen", "MAP_TILE_LOADED operation=$operation provider=MapLibre source=OpenStreetMap")
+                            Log.i("OoroScreen", "MAP_TILE_LOADED operation=$operation provider=MapLibre configuredStyle=true")
                         }
                         TileOperation.Error -> {
                             mapLoaded = false
@@ -921,8 +935,8 @@ private fun creativeDuration(item: ManifestItem) = item.durationSeconds * 1000L
                 vehicleMarker = null
             }
         )
-        if (latitude == null || longitude == null) Text("Locating…", color = Color.White, fontSize = 18.sp, modifier = Modifier.align(Alignment.Center))
-        else if (!mapLoaded && mapError != null) Text("Map tiles unavailable · GPS active", color = Color.LightGray, fontSize = 13.sp, modifier = Modifier.align(Alignment.BottomStart).background(Color(0xAA121820)).padding(6.dp))
+        if (latitude == null || longitude == null) Text("Map ready · location unavailable", color = Color.White, fontSize = 14.sp, modifier = Modifier.align(Alignment.Center).background(Color(0xAA121820)).padding(8.dp))
+        else if (!mapLoaded && mapError != null) Text("Map tiles unavailable", color = Color.LightGray, fontSize = 13.sp, modifier = Modifier.align(Alignment.BottomStart).background(Color(0xAA121820)).padding(6.dp))
     }
 }
 

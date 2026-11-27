@@ -14,15 +14,15 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class CustomLayoutBoundMediaScreenshotTest {
-    @Test fun productionPlayerRendersAuthorizedSyntheticImageBindingWithoutNetworkOrProof() {
-        captureBoundLayout("landscape", "custom-bound-image.png")
+    @Test fun legacyCustomCreativeIdBindingsAreWithheldAndBuiltInFallbackRendersWithoutProof() {
+        captureLegacyBindingFallback("landscape", "legacy-bound-image-withheld.png")
     }
 
-    @Test fun productionMedia3PathRendersSyntheticVideoBindingWithoutNetworkOrProof() {
-        captureBoundLayout("video-landscape-720p", "custom-bound-video.png")
+    @Test fun legacyCustomVideoBindingIsWithheldAndBuiltInFallbackRendersWithoutProof() {
+        captureLegacyBindingFallback("video-landscape-720p", "legacy-bound-video-withheld.png")
     }
 
-    private fun captureBoundLayout(asset: String, filename: String) {
+    private fun captureLegacyBindingFallback(asset: String, filename: String) {
         assumeDisposableEmulator()
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
@@ -34,9 +34,9 @@ class CustomLayoutBoundMediaScreenshotTest {
             .putExtra("controls", false)
             .putExtra("qr", true)
         ActivityScenario.launch<RenderTestActivity>(intent).use {
-            assertTrue("Main bound slot not rendered", device.wait(Until.hasObject(By.desc("LayoutStudioZone:custom-main")), 10_000))
-            assertTrue("Sponsor slot not rendered", device.wait(Until.hasObject(By.desc("LayoutStudioZone:custom-sponsor")), 10_000))
-            assertTrue("Authorized QR offer slot not rendered", device.wait(Until.hasObject(By.desc("LayoutStudioZone:custom-offer")), 10_000))
+            assertTrue("custom creative-ID contract must fall back to the built-in V3 main region", device.wait(Until.hasObject(By.desc("OoroV3Region:main-ad")), 10_000))
+            assertTrue("custom creative-ID contract must not render custom-bound regions", device.findObject(By.desc("LayoutStudioZone:custom-main")) == null)
+            assertTrue("built-in V3 sponsor slot remains independently rendered", device.wait(Until.hasObject(By.desc("Sponsored test advertisement")), 10_000))
             device.waitForIdle()
             val outputDir = File(context.getExternalFilesDir(null), "layout-studio-bound-media")
             assertTrue(outputDir.mkdirs() || outputDir.isDirectory)

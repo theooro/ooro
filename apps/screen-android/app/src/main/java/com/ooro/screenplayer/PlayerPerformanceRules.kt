@@ -18,4 +18,5 @@ internal fun tickerNeedsScroll(
 /** Avoid rebinding an Android view when it already owns the requested player instance. */
 internal fun <T : Any> needsIdentityBinding(current: T?, desired: T?): Boolean = current !== desired
 
-internal fun navigationMapIsVisible(active: Boolean): Boolean = active
+/** Map zones are fixed widgets; guidance overlays still depend on runtime navigation state. */
+internal fun navigationMapIsVisible(@Suppress("UNUSED_PARAMETER") active: Boolean): Boolean = true

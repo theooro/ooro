@@ -10,7 +10,7 @@ import org.junit.Test
 
 class LayoutStudioInterpreterTest {
     private fun contract(zones: String = """
-        [{"id":"hero","type":"IMAGE","label":"Hero","schemaVersion":1,"geometry":{"x":0,"y":0,"width":0.8,"height":1},"zIndex":0,"fit":"FIT","contentBinding":{"kind":"APPROVED_CREATIVE","referenceId":"asset-1"},"visible":true},
+        [{"id":"hero","type":"IMAGE","label":"Hero","schemaVersion":1,"geometry":{"x":0,"y":0,"width":0.8,"height":1},"zIndex":0,"fit":"FIT","contentBinding":{"kind":"NONE"},"visible":true},
          {"id":"copy","type":"TEXT","label":"Offer","schemaVersion":1,"geometry":{"x":0.8,"y":0,"width":0.2,"height":1},"zIndex":1,"fit":"FIT","contentBinding":{"kind":"NONE"},"visible":true}]
     """.trimIndent()) = """{"contractVersion":1,"mode":"CUSTOM","preset":"CUSTOM_CANVAS","profileId":"OORO_PREMIUM","target":{"width":1280,"height":720},"zones":$zones}"""
 
@@ -22,13 +22,9 @@ class LayoutStudioInterpreterTest {
         assertEquals(1536, LayoutStudioInterpreter.toPixelRect(hero, 1920, 1080).width)
     }
 
-    @Test fun `parses ordered version one image rotation and duration bounds`() {
+    @Test fun `rejects creative rotation references because Scheduler owns ordering`() {
         val rotating = """[{"id":"hero","type":"IMAGE","label":"Hero","schemaVersion":1,"geometry":{"x":0,"y":0,"width":0.8,"height":1},"zIndex":0,"fit":"FIT","contentBinding":{"kind":"NONE"},"rotation":{"version":1,"mode":"SEQUENTIAL","items":[{"referenceId":"creative-a","durationSeconds":3},{"referenceId":"creative-b","durationSeconds":3600}]},"visible":true}]"""
-        val parsed = LayoutStudioInterpreter.parse(contract(rotating)) as LayoutParseResult.Valid
-        assertEquals(listOf("creative-a", "creative-b"), parsed.contract.zones.single().rotationItems.map { it.referenceId })
-        assertEquals(listOf(3, 3600), parsed.contract.zones.single().rotationItems.map { it.durationSeconds })
-        val invalid = rotating.replace("\"durationSeconds\":3", "\"durationSeconds\":2")
-        assertEquals("INVALID_ROTATION", (LayoutStudioInterpreter.parse(contract(invalid)) as LayoutParseResult.Invalid).code)
+        assertEquals("SCHEDULER_OWNS_SLOT_CONTENT", (LayoutStudioInterpreter.parse(contract(rotating)) as LayoutParseResult.Invalid).code)
     }
 
     @Test fun `sequential rotation wraps indices and empty rotation stays safe`() {
@@ -37,12 +33,12 @@ class LayoutStudioInterpreterTest {
         assertEquals(0, nextLayoutRotationIndex(0, 0))
     }
 
-    @Test fun `main campaign ad is a supported slot but does not grant eligibility`() {
-        val mainAd = """[{"id":"main","type":"MAIN_AD","label":"Main ad","schemaVersion":1,"geometry":{"x":0,"y":0,"width":1,"height":1},"zIndex":0,"fit":"FIT","contentBinding":{"kind":"APPROVED_CREATIVE","referenceId":"creative-ref"},"visible":true}]"""
+    @Test fun `main campaign ad is a geometry-only slot and creative identifiers are rejected`() {
+        val mainAd = """[{"id":"main","type":"MAIN_AD","label":"Main ad","schemaVersion":1,"geometry":{"x":0,"y":0,"width":1,"height":1},"zIndex":0,"fit":"FIT","contentBinding":{"kind":"NONE"},"visible":true}]"""
         val parsed = LayoutStudioInterpreter.parse(contract(mainAd))
         assertTrue(parsed is LayoutParseResult.Valid)
-        // The interpreter only carries the binding reference; campaign eligibility remains outside layout parsing.
-        assertEquals("APPROVED_CREATIVE", (parsed as LayoutParseResult.Valid).contract.zones.single().bindingKind)
+        val pinned = mainAd.replace("\"kind\":\"NONE\"", "\"kind\":\"APPROVED_CREATIVE\",\"referenceId\":\"creative-ref\"")
+        assertEquals("SCHEDULER_OWNS_SLOT_CONTENT", (LayoutStudioInterpreter.parse(contract(pinned)) as LayoutParseResult.Invalid).code)
     }
 
     @Test fun `schema widgets without a native implementation fail closed`() {
@@ -79,22 +75,22 @@ class LayoutStudioInterpreterTest {
         assertEquals("VIDEO_DECODER_BUDGET_EXCEEDED", (LayoutStudioInterpreter.parse(contract(video)) as LayoutParseResult.Invalid).code)
     }
 
-    @Test fun `unbound sponsor never passes validation`() {
+    @Test fun `sponsor geometry does not require a pinned creative identifier`() {
         val sponsor = """[{"id":"s","type":"SPONSORED_AD","label":"Sponsor","schemaVersion":1,"geometry":{"x":0,"y":0,"width":1,"height":1},"zIndex":0,"fit":"FIT","contentBinding":{"kind":"NONE"},"visible":true}]"""
-        assertEquals("SPONSOR_AUTHORIZATION_REQUIRED", (LayoutStudioInterpreter.parse(contract(sponsor)) as LayoutParseResult.Invalid).code)
+        assertTrue(LayoutStudioInterpreter.parse(contract(sponsor)) is LayoutParseResult.Valid)
     }
 
     @Test fun `main ad plus a video widget is rejected because runtime main media may itself be video`() {
-        val zones = """[{"id":"main","type":"MAIN_AD","label":"Main","schemaVersion":1,"geometry":{"x":0,"y":0,"width":0.6,"height":1},"zIndex":0,"fit":"FIT","contentBinding":{"kind":"NONE"},"visible":true},{"id":"video","type":"VIDEO","label":"Video","schemaVersion":1,"geometry":{"x":0.6,"y":0,"width":0.4,"height":1},"zIndex":1,"fit":"FIT","contentBinding":{"kind":"APPROVED_CREATIVE","referenceId":"creative"},"visible":true}]"""
+        val zones = """[{"id":"main","type":"MAIN_AD","label":"Main","schemaVersion":1,"geometry":{"x":0,"y":0,"width":0.6,"height":1},"zIndex":0,"fit":"FIT","contentBinding":{"kind":"NONE"},"visible":true},{"id":"video","type":"VIDEO","label":"Video","schemaVersion":1,"geometry":{"x":0.6,"y":0,"width":0.4,"height":1},"zIndex":1,"fit":"FIT","contentBinding":{"kind":"NONE"},"visible":true}]"""
         val result = LayoutStudioInterpreter.parse(contract(zones)) as LayoutParseResult.Invalid
         assertEquals("VIDEO_DECODER_BUDGET_EXCEEDED", result.code)
     }
 
-    @Test fun `destination and creative bindings are restricted to compatible widget types`() {
+    @Test fun `creative and destination identifiers are rejected for every widget type`() {
         val textCreative = """[{"id":"copy","type":"TEXT","label":"Copy","schemaVersion":1,"geometry":{"x":0,"y":0,"width":1,"height":1},"zIndex":0,"fit":"FIT","contentBinding":{"kind":"APPROVED_CREATIVE","referenceId":"creative"},"visible":true}]"""
-        assertEquals("CREATIVE_SLOT_MISMATCH", (LayoutStudioInterpreter.parse(contract(textCreative)) as LayoutParseResult.Invalid).code)
+        assertEquals("SCHEDULER_OWNS_SLOT_CONTENT", (LayoutStudioInterpreter.parse(contract(textCreative)) as LayoutParseResult.Invalid).code)
         val imageDestination = """[{"id":"image","type":"IMAGE","label":"Image","schemaVersion":1,"geometry":{"x":0,"y":0,"width":1,"height":1},"zIndex":0,"fit":"FIT","contentBinding":{"kind":"AUTHORIZED_DESTINATION","referenceId":"destination"},"visible":true}]"""
-        assertEquals("DESTINATION_SLOT_MISMATCH", (LayoutStudioInterpreter.parse(contract(imageDestination)) as LayoutParseResult.Invalid).code)
+        assertEquals("SCHEDULER_OWNS_SLOT_CONTENT", (LayoutStudioInterpreter.parse(contract(imageDestination)) as LayoutParseResult.Invalid).code)
     }
 
     @Test fun `malformed JSON returns safe error`() {

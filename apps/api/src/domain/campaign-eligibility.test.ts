@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { campaignDeliveryQuota, deliveryAssetUrl, hasVerifiedAssetMetadata, manifestDeliveryReasons, manifestValidUntil, MANIFEST_AUTHORIZATION_LEASE_MS, manifestVersionFor, manifestVersionFromDigest, resolveQrConfiguration, selectManifestDeliverySlots } from './campaign-eligibility.js'
+import { campaignDeliveryQuota, defaultFourZoneLayout, deliveryAssetUrl, hasVerifiedAssetMetadata, manifestDeliveryReasons, manifestValidUntil, MANIFEST_AUTHORIZATION_LEASE_MS, manifestVersionFor, manifestVersionFromDigest, resolveQrConfiguration, selectManifestDeliverySlots, sponsoredSlotDiagnostic } from './campaign-eligibility.js'
+import { THREE_ZONE_AD_SPONSOR_QR_CONTRACT_V1, THREE_ZONE_AD_SPONSOR_QR_V1 } from './presentation-layout.js'
 import { safeDestination } from './qr-destination.js'
 
 test('manifest versions fit persisted signed INT4 fields', () => {
@@ -11,10 +12,11 @@ test('manifest versions fit persisted signed INT4 fields', () => {
 
 test('manifest QR requires explicit creative enablement and a valid authorized HTTPS destination', () => {
   assert.deepEqual(resolveQrConfiguration({ qrEnabled: true, qrTargetUrl: 'https://merchant.example/offer' }), { enabled: true, destination: 'https://merchant.example/offer' })
-  assert.deepEqual(resolveQrConfiguration({ qrEnabled: false, qrTargetUrl: 'https://merchant.example/offer', legacyTarget: 'https://merchant.example/offer' }), { enabled: false, destination: null })
-  assert.deepEqual(resolveQrConfiguration({ qrEnabled: true, legacyTarget: null }), { enabled: true, destination: null })
+  assert.deepEqual(resolveQrConfiguration({ qrEnabled: false, qrTargetUrl: 'https://merchant.example/offer' }), { enabled: false, destination: null })
+  assert.deepEqual(resolveQrConfiguration({ qrEnabled: true }), { enabled: true, destination: null })
   assert.deepEqual(resolveQrConfiguration({ qrEnabled: true, qrTargetUrl: 'https://staging.theooro.com/offer' }), { enabled: true, destination: null })
   assert.deepEqual(resolveQrConfiguration({ qrEnabled: true, qrTargetUrl: 'https://api-staging.theooro.com/offer' }), { enabled: true, destination: null })
+  assert.deepEqual(resolveQrConfiguration({ qrEnabled: true, qrTargetUrl: 'http://merchant.example/offer' }), { enabled: true, destination: null })
 })
 
 test('sponsored creative is selected independently and never promoted from a main slot', () => {
@@ -30,6 +32,36 @@ test('sponsored creative is selected independently and never promoted from a mai
   const v2 = selectManifestDeliverySlots(items, campaigns, false)
   assert.deepEqual(v2.mainItems.map(item => item.id), ['main-a'])
   assert.equal(v2.sponsoredItem, null)
+  const inheritedSlot = selectManifestDeliverySlots([{ id: 'inherited-sponsor', campaignId: 'campaign-sponsor', type: 'IMAGE', priority: 4, deliverySlot: 'MAIN' }], [{ id: 'campaign-sponsor', deliverySlot: 'SPONSORED' }], true)
+  assert.deepEqual(inheritedSlot.mainItems, [])
+  assert.equal(inheritedSlot.sponsoredItem?.id, 'inherited-sponsor')
+  const ordered = selectManifestDeliverySlots([{ id: 'second', campaignId: 'ordered', type: 'IMAGE', priority: 4, sequence: 2 }, { id: 'first', campaignId: 'ordered', type: 'IMAGE', priority: 4, sequence: 1 }], [{ id: 'ordered', deliverySlot: 'MAIN' }], false)
+  assert.deepEqual(ordered.mainItems.map(item => item.id), ['first', 'second'])
+})
+
+test('sponsored slot diagnostics name the authorization gate without weakening it', () => {
+  assert.equal(sponsoredSlotDiagnostic({ contractVersion: 2, playerSupportsSponsoredSlot: true, eligibleSponsorCount: 0, assignedApprovedSponsorCount: 1 }).code, 'SCREEN_LAYOUT_V2')
+  assert.equal(sponsoredSlotDiagnostic({ contractVersion: 3, playerSupportsSponsoredSlot: false, eligibleSponsorCount: 0, assignedApprovedSponsorCount: 1 }).code, 'PLAYER_CAPABILITY_UNCONFIRMED')
+  assert.deepEqual(sponsoredSlotDiagnostic({ contractVersion: 3, playerSupportsSponsoredSlot: true, eligibleSponsorCount: 0, assignedApprovedSponsorCount: 1, exclusion: { code: 'SPONSOR_FUNDING_REQUIRED', message: 'Funding required.' } }), { code: 'SPONSOR_FUNDING_REQUIRED', message: 'Funding required.' })
+  assert.equal(sponsoredSlotDiagnostic({ contractVersion: 3, playerSupportsSponsoredSlot: true, eligibleSponsorCount: 1, assignedApprovedSponsorCount: 1 }).code, 'READY')
+})
+
+test('three-zone first-party preset has a versioned 65/35 geometry and no map slot', () => {
+  assert.equal(THREE_ZONE_AD_SPONSOR_QR_V1, 'THREE_ZONE_AD_SPONSOR_QR_V1')
+  assert.deepEqual(THREE_ZONE_AD_SPONSOR_QR_CONTRACT_V1, { type: THREE_ZONE_AD_SPONSOR_QR_V1, contractVersion: 1, layoutVersion: 1, primaryWidthPercent: 65, qrHeightPercent: 75, sponsoredHeightPercent: 25, minWidthPx: 1280, minHeightPx: 720 })
+  assert.ok(!Object.keys(THREE_ZONE_AD_SPONSOR_QR_CONTRACT_V1).some(key => /map|widget|creativeId/i.test(key)))
+})
+
+test('FOUR_ZONE v2/v3 manifest geometry matches the Android renderer while v1 config stays compatible', () => {
+  assert.deepEqual(defaultFourZoneLayout({ primaryWidthPercent: 67, adHeightPercent: 86, qrHeightPercent: 47 }, 2), {
+    type: 'FOUR_ZONE', contractVersion: 2, primaryWidthPercent: 80, adHeightPercent: 88, qrHeightPercent: 50, newsScrollSpeed: 42,
+  })
+  assert.deepEqual(defaultFourZoneLayout({ primaryWidthPercent: 67, adHeightPercent: 86, qrHeightPercent: 47 }, 3), {
+    type: 'FOUR_ZONE', contractVersion: 3, primaryWidthPercent: 80, adHeightPercent: 85, qrHeightPercent: 50, newsScrollSpeed: 42,
+  })
+  assert.deepEqual(defaultFourZoneLayout({ primaryWidthPercent: 67, adHeightPercent: 86, qrHeightPercent: 32 }, 1), {
+    type: 'FOUR_ZONE', contractVersion: 1, primaryWidthPercent: 67, adHeightPercent: 86, qrHeightPercent: 32, newsScrollSpeed: 42,
+  })
 })
 
 test('manifest expiry is refresh metadata, not campaign delivery eligibility', () => {

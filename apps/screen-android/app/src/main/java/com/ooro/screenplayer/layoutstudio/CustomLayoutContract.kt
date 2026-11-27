@@ -96,28 +96,9 @@ object LayoutStudioInterpreter {
             val bindingKind = binding.optString("kind", "NONE")
             val referenceId = binding.optString("referenceId").takeIf { it.isNotBlank() && it != "null" }
             if (bindingKind !in setOf("NONE", "APPROVED_CREATIVE", "APPROVED_SPONSOR", "AUTHORIZED_DESTINATION")) return invalid("INVALID_BINDING", "Zone $id has an unsupported content binding.")
-            if (bindingKind != "NONE" && referenceId == null) return invalid("INVALID_BINDING", "Zone $id is missing its authorized reference.")
-            if (type == "SPONSORED_AD" && bindingKind != "APPROVED_SPONSOR") return invalid("SPONSOR_AUTHORIZATION_REQUIRED", "Sponsored zones require a separately authorized sponsor binding.")
-            if (type != "SPONSORED_AD" && bindingKind == "APPROVED_SPONSOR") return invalid("SPONSOR_SLOT_MISMATCH", "Sponsor content cannot be bound to a non-sponsor zone.")
-            if (bindingKind == "APPROVED_CREATIVE" && type !in setOf("MAIN_AD", "IMAGE", "VIDEO", "LOGO", "BACKGROUND_IMAGE")) return invalid("CREATIVE_SLOT_MISMATCH", "Approved creative references cannot be attached to $type widgets.")
-            if (bindingKind == "AUTHORIZED_DESTINATION" && type != "QR_OFFER") return invalid("DESTINATION_SLOT_MISMATCH", "Authorized destinations can only be attached to QR_OFFER widgets.")
-            val rotationItems = zone.optJSONObject("rotation")?.let { rotation ->
-                if (rotation.optInt("version", -1) != 1 || rotation.optString("mode") != "SEQUENTIAL") return invalid("UNSUPPORTED_ROTATION", "Zone $id uses an unsupported rotation contract.")
-                if (type != "IMAGE" || bindingKind != "NONE") return invalid("ROTATION_UNSUPPORTED_ZONE", "Sequential rotation is supported only on unbound IMAGE zones.")
-                val items = rotation.optJSONArray("items") ?: return invalid("INVALID_ROTATION", "Zone $id rotation items are missing.")
-                if (items.length() !in 1..12) return invalid("INVALID_ROTATION", "Zone $id must contain 1–12 ordered rotation items.")
-                val seen = HashSet<String>()
-                buildList {
-                    for (itemIndex in 0 until items.length()) {
-                        val item = items.optJSONObject(itemIndex) ?: return invalid("INVALID_ROTATION", "Zone $id has a malformed rotation item.")
-                        val reference = item.optString("referenceId")
-                        val duration = item.optInt("durationSeconds", -1)
-                        if (reference.isBlank() || !seen.add(reference)) return invalid("INVALID_ROTATION", "Zone $id rotation references must be present and unique.")
-                        if (duration !in 3..3600) return invalid("INVALID_ROTATION", "Zone $id rotation duration must be 3–3600 seconds.")
-                        add(LayoutStudioRotationItem(reference, duration))
-                    }
-                }
-            } ?: emptyList()
+            if (bindingKind != "NONE" || referenceId != null) return invalid("SCHEDULER_OWNS_SLOT_CONTENT", "Layout Studio contracts describe geometry and widget types only. Creative and QR assignment is resolved by Scheduler.")
+            if (zone.has("rotation")) return invalid("SCHEDULER_OWNS_SLOT_CONTENT", "Layout Studio cannot store creative rotation lists. Scheduler owns slot selection and ordering.")
+            val rotationItems = emptyList<LayoutStudioRotationItem>()
             val zIndex = zone.optInt("zIndex", index)
             if (zIndex !in 0..100) return invalid("INVALID_Z_ORDER", "Zone $id has an unsupported layer order.")
             val visible = zone.optBoolean("visible", true)

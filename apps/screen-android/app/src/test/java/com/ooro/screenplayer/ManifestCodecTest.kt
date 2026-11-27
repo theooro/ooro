@@ -64,6 +64,21 @@ class ManifestCodecTest {
         assertEquals(2, ManifestCodec.parse(ManifestCodec.encode(v2)).layoutContractVersion)
     }
 
+    @Test fun threeZonePresetContractAndResolvedSponsoredCreativeSurviveCacheRoundTrip() {
+        val body = """{"version":44,"screenId":"screen-1","timezone":"UTC","layout":{"type":"THREE_ZONE_AD_SPONSOR_QR_V1","contractVersion":3,"layoutVersion":1,"primaryWidthPercent":65,"qrHeightPercent":75,"sponsoredHeightPercent":25,"minWidthPx":1280,"minHeightPx":720},"items":[{"id":"main","campaignId":"main-campaign","creativeId":"main-creative","type":"IMAGE","url":"https://cdn.example/main.png","sequence":3,"deliverySlot":"MAIN","qrEnabled":true,"offer":{"qrUrl":"https://theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF"}}],"sponsoredItem":{"id":"sponsor","campaignId":"sponsor-campaign","creativeId":"sponsor-creative","type":"IMAGE","url":"https://cdn.example/sponsor.png","sequence":1,"deliverySlot":"SPONSORED"}}"""
+        val parsed = ManifestCodec.parse(body)
+        assertEquals(DisplayLayout.THREE_ZONE_AD_SPONSOR_QR_V1, parsed.layout)
+        assertEquals(3, parsed.layoutContractVersion)
+        assertEquals(1, parsed.layoutConfig.layoutVersion)
+        assertEquals(1280, parsed.layoutConfig.minWidthPx)
+        assertEquals("SPONSORED", parsed.sponsoredItem?.deliverySlot)
+        assertEquals("main", parsed.items.single().id)
+        val cached = ManifestCodec.parse(ManifestCodec.encode(parsed))
+        assertEquals(DisplayLayout.THREE_ZONE_AD_SPONSOR_QR_V1, cached.layout)
+        assertEquals("SPONSORED", cached.sponsoredItem?.deliverySlot)
+        assertEquals("https://theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF", cached.items.single().offer.consumerQrUrl)
+    }
+
     @Test fun v3SponsoredImageIsSeparateAndSurvivesCachedManifestEncoding() {
         val body = """{"version":43,"screenId":"screen-1","timezone":"UTC","validUntil":"2030-01-01T00:00:00Z","layout":{"type":"FOUR_ZONE","contractVersion":3,"primaryWidthPercent":80,"adHeightPercent":85,"qrHeightPercent":50},"news":{"announcements":[]},"items":[{"id":"main","campaignId":"main-campaign","creativeId":"main-creative","type":"VIDEO","url":"https://cdn.example/main.mp4","durationSeconds":15}],"sponsoredItem":{"id":"sponsor","campaignId":"sponsor-campaign","creativeId":"sponsor-creative","assetId":"asset-s","type":"IMAGE","url":"https://cdn.example/sponsor.png","checksum":"sha256-value","durationSeconds":10,"fitMode":"FIT"}}"""
         val parsed = ManifestCodec.parse(body)

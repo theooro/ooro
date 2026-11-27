@@ -329,7 +329,7 @@ internal fun deliveryReasonMessage(reason: String): String = when (reason) {
 }
 
 internal fun eligibleSponsoredItem(manifest: DeviceManifest, now: Instant, verifiedItemIds: Set<String>): ManifestItem? {
-    if (manifest.layoutContractVersion < 3 || manifest.layout !in setOf(DisplayLayout.FOUR_ZONE, DisplayLayout.AD_NAV_OFFER)) return null
+    if (manifest.layoutContractVersion < 3 || manifest.layout !in setOf(DisplayLayout.FOUR_ZONE, DisplayLayout.AD_NAV_OFFER, DisplayLayout.THREE_ZONE_AD_SPONSOR_QR_V1)) return null
     val item = manifest.sponsoredItem ?: return null
     if (item.type != CreativeType.IMAGE || item.id !in verifiedItemIds) return null
     return item.takeIf { it.hasAuthorizedDeliveryQuota && it.isCampaignDateEligibleAt(now) }

@@ -8,10 +8,11 @@ import { withoutCampaignDeliveryDates } from "@/lib/campaign-delivery-presentati
 import { safeDestination } from "@/apps/api/src/domain/qr-destination";
 import { getDisplayConnectivity } from "@/apps/api/src/domain/display-health";
 import { campaignDateInTimezone, campaignDateWindow, DEFAULT_CAMPAIGN_TIMEZONE } from "@/apps/api/src/domain/campaign-date-window";
+import { THREE_ZONE_AD_SPONSOR_QR_V1 } from "@/apps/api/src/domain/presentation-layout";
 
 export const dynamic = "force-dynamic";
 const offerSchema = z.object({ brandName: z.string().trim().max(120).optional(), offerTitle: z.string().trim().max(160).optional(), offerSubtitle: z.string().trim().max(240).optional(), offerValue: z.string().trim().max(120).optional(), ctaType: z.string().trim().max(40).optional(), ctaLabel: z.string().trim().max(80).optional(), ctaUrl: z.string().trim().max(2048).optional() }).strict();
-const updateSchema = z.object({ status: z.enum(["DRAFT", "APPROVED", "REJECTED", "ACTIVE", "PAUSED", "STOPPED", "COMPLETED"]).optional(), deliverySlot: z.enum(["MAIN", "SPONSORED"]).optional(), layout: z.enum(["FULLSCREEN_AD", "FOUR_ZONE", "FOUR_ZONE_V3", "SPLIT_50_25_25"]).nullable().optional(), screenIds: z.array(z.string().uuid()).max(1000).optional(), startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), timezone: z.literal(DEFAULT_CAMPAIGN_TIMEZONE).optional(), offer: offerSchema.optional() }).strict();
+const updateSchema = z.object({ status: z.enum(["DRAFT", "APPROVED", "REJECTED", "ACTIVE", "PAUSED", "STOPPED", "COMPLETED"]).optional(), deliverySlot: z.enum(["MAIN", "SPONSORED"]).optional(), layout: z.enum(["FULLSCREEN_AD", "FOUR_ZONE", "FOUR_ZONE_V3", "SPLIT_50_25_25", THREE_ZONE_AD_SPONSOR_QR_V1]).nullable().optional(), screenIds: z.array(z.string().uuid()).max(1000).optional(), startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), timezone: z.literal(DEFAULT_CAMPAIGN_TIMEZONE).optional(), offer: offerSchema.optional() }).strict();
 const safe = (value: unknown) => JSON.parse(JSON.stringify(value, (_key, item) => typeof item === "bigint" ? Number(item) : item));
 function errorResponse(error: unknown) { const status = error instanceof AdminAuthError ? error.status : 500; return NextResponse.json({ error: { message: status === 500 ? "Admin campaign service unavailable" : "Admin access required" } }, { status }); }
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {

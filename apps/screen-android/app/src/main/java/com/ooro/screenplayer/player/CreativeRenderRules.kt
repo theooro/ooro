@@ -21,6 +21,8 @@ data class Sidebar80Geometry(val adWidth: Int, val sidebarWidth: Int, val offerH
 data class SponsoredLayoutGeometry(val mainAdWidth: Int, val sidebarWidth: Int, val mainAdHeight: Int, val sponsoredHeight: Int, val qrHeight: Int, val mapHeight: Int)
 fun usesSidebar80(layout: DisplayLayout, version: Int) = version >= 2 && (layout == DisplayLayout.FOUR_ZONE || layout == DisplayLayout.AD_NAV_OFFER)
 fun usesSponsoredLayout(layout: DisplayLayout, version: Int) = version >= 3 && (layout == DisplayLayout.FOUR_ZONE || layout == DisplayLayout.AD_NAV_OFFER)
+fun threeZoneQrSupported(widthPx: Int, heightPx: Int, minWidthPx: Int = 1280, minHeightPx: Int = 720): Boolean =
+    widthPx >= minWidthPx && heightPx >= minHeightPx
 fun shouldRenderNewsTicker(layout: DisplayLayout, version: Int) =
     layout in setOf(DisplayLayout.FOUR_ZONE, DisplayLayout.AD_NAV_OFFER) && !usesSponsoredLayout(layout, version)
 fun sponsoredLayoutGeometry(width: Int, height: Int): SponsoredLayoutGeometry {
@@ -48,6 +50,7 @@ fun fittedContentBounds(sourceWidth: Int, sourceHeight: Int, regionWidth: Int, r
 }
 
 fun adRegionFraction(layout: DisplayLayout, config: LayoutConfig, contractVersion: Int = 1): AdRegionFraction = when {
+    layout == DisplayLayout.THREE_ZONE_AD_SPONSOR_QR_V1 -> AdRegionFraction(0.65f, 1f)
     usesSponsoredLayout(layout, contractVersion) -> AdRegionFraction(0.8f, 0.85f)
     usesSidebar80(layout, contractVersion) -> AdRegionFraction(0.8f, config.safeAdHeight / 100f)
     layout == DisplayLayout.FOUR_ZONE || layout == DisplayLayout.AD_NAV_OFFER -> AdRegionFraction(config.safePrimaryWidth / 100f, config.safeAdHeight / 100f)
