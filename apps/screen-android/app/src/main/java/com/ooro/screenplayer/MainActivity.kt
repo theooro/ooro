@@ -345,8 +345,10 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     val playerDiagnostic by diagnosticFlow.collectAsState(initial = "")
     val pairedScreenIdFlow = vm?.pairedScreenId ?: remember(preview, manifest.screenId) { flowOf(manifest.screenId.takeIf { preview != null }) }
     val pairedScreenId by pairedScreenIdFlow.collectAsState(initial = manifest.screenId.takeIf { preview != null })
-    val scheduleClockFlow = vm?.scheduleClock ?: remember { flowOf(Instant.EPOCH) }
-    val scheduleClock by scheduleClockFlow.collectAsState(initial = Instant.EPOCH)
+    // Local editor/render previews have no authenticated server clock. Use current local
+    // time for synthetic preview fixtures; production playback still uses the trusted VM clock.
+    val scheduleClockFlow = vm?.scheduleClock ?: remember(preview) { flowOf(if (preview != null) Instant.now() else Instant.EPOCH) }
+    val scheduleClock by scheduleClockFlow.collectAsState(initial = if (preview != null) Instant.now() else Instant.EPOCH)
     val syncFailureFlow = vm?.manifestSyncFailure ?: remember { flowOf<String?>(null) }
     val syncFailure by syncFailureFlow.collectAsState(initial = null)
     val validatedInternetFlow = vm?.validatedInternet ?: remember { flowOf(false) }
@@ -377,7 +379,12 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
         playerDiagnostic.takeIf { it.startsWith("Trusted time unavailable:") }
             ?: fallbackPlaybackMessage
     } else fallbackPlaybackMessage
-    val displayedOffer = if (preview != null) item else if (manifestExpired) null else presentationItem ?: item
+    val displayedOffer = if (preview != null) {
+        item?.takeIf { candidate ->
+            (candidate.startAt == null || !scheduleClock.isBefore(candidate.startAt)) &&
+                (candidate.endAt == null || scheduleClock.isBefore(candidate.endAt))
+        }
+    } else if (manifestExpired) null else presentationItem ?: item
     val customLayoutParseResult = remember(manifest.layoutStudioContract) {
         manifest.layoutStudioContract?.let { LayoutStudioInterpreter.parse(it) }
     }

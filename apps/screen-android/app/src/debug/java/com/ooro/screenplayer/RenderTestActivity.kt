@@ -41,6 +41,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.ooro.screenplayer.model.CreativeType
+import com.ooro.screenplayer.model.DeliveryQuota
 import com.ooro.screenplayer.model.DeviceManifest
 import com.ooro.screenplayer.model.DisplayLayout
 import com.ooro.screenplayer.model.FitMode
@@ -231,7 +232,8 @@ private fun RenderTestScreen(
         endAt = if (scenario == "V3_EXPIRED_SPONSOR") Instant.now().minusSeconds(1) else Instant.now().plusSeconds(15 * 60),
         daysOfWeek = emptySet(), startTime = null, endTime = null, assetId = "local-sponsored-asset",
         fitMode = FitMode.FIT,
-        offer = OfferMetadata(brandName = "OORO SPONSOR TEST", promotionalText = "Separate fixed sponsor fixture")
+        offer = OfferMetadata(brandName = "OORO SPONSOR TEST", promotionalText = "Separate fixed sponsor fixture"),
+        deliveryQuota = DeliveryQuota("local-sponsored:LOCAL_RENDER_TEST", 1, null, true)
     ) else null
     val manifest = DeviceManifest(
         version = 0, screenId = "LOCAL_RENDER_TEST", timezone = "UTC", items = if (idleOnly || offerFallback) emptyList() else itemList,

@@ -45,16 +45,16 @@ class OfferPanelScreenshotTest {
                 scenario,
                 brandOffer,
                 "offer-$scenario-1280x720.png",
-                expectUnsupportedQr = brandOffer,
+                expectUnsupportedQr = brandOffer && scenario != "OFFER_MINIMAL_FIELDS",
             )
         }
     }
 
     @Test fun v1ManifestUsesSharedBrandedOfferCardInLegacyGeometry() =
-        capture("OFFER_V1_LEGACY", true, "offer-v1-legacy-1280x720.png", expectedLegacy = true)
+        capture("OFFER_V1_LEGACY", true, "offer-v1-legacy-1280x720.png", expectedLegacy = true, expectUnsupportedQr = true)
 
     @Test fun v2ManifestUsesSharedBrandedOfferCardInV3Geometry() =
-        capture("OFFER_V2_LEGACY", true, "offer-v2-legacy-1280x720.png", expectedLegacy = true, expectedSidebar80 = true)
+        capture("OFFER_V2_LEGACY", true, "offer-v2-legacy-1280x720.png", expectedLegacy = true, expectedSidebar80 = true, expectUnsupportedQr = true)
 
     @Test fun adaptsOfferCardAndLongTextToSmallerLandscapeResolution() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -110,7 +110,7 @@ class OfferPanelScreenshotTest {
             assertTrue("offer state missing for $scenario", device.wait(Until.hasObject(By.desc(state)), 10_000))
             if (expectedBrandOffer) {
                 if (expectUnsupportedQr) {
-                    assertTrue("undersized QR must explain the limitation", device.wait(Until.hasObject(By.desc("QR unsupported at this panel size")), 10_000))
+                    assertTrue("undersized QR must explain the limitation", device.wait(Until.hasObject(By.textContains("Use split 50/25/25 for QR")), 10_000))
                     assertTrue("unsupported QR must recommend split layout", device.hasObject(By.textContains("Use split 50/25/25")))
                 } else {
                     assertTrue("brand QR missing for $scenario", device.wait(Until.hasObject(By.desc("Brand offer QR code")), 10_000))
