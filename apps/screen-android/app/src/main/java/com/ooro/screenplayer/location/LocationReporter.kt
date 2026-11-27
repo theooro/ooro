@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationManager
 import android.location.LocationListener
+import android.os.Bundle
 import android.os.Looper
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -23,7 +24,7 @@ object LocationCadence { fun heartbeatIntervalMs(speedMps: Double?): Long = if (
 class LocationReporter(private val context: Context) {
     @Volatile private var cached: LocationSnapshot? = null
     @Volatile private var started = false
-    private val listener = LocationListener { value ->
+    private val listener = createLocationListener { value ->
         Log.d("OoroScreen", "LOCATION_CALLBACK_RECEIVED accuracyBucket=${accuracyBucket(value.accuracy)}")
         LocationSnapshots.fromLocation(value)?.let { snapshot ->
             cached = snapshot
@@ -60,4 +61,15 @@ class LocationReporter(private val context: Context) {
     }
     private fun accuracyBucket(value: Float) = when { !value.isFinite() || value < 0f -> "invalid"; value < 20f -> "<20m"; value < 100f -> "20-100m"; else -> ">=100m" }
     private fun ageSeconds(occurredAt: Long) = ((System.currentTimeMillis() - occurredAt).coerceAtLeast(0L) / 1000L)
+}
+
+/** Android 10 still invokes these callbacks as abstract interface methods. A Kotlin SAM
+ * lambda only implements onLocationChanged and can crash the whole player with
+ * AbstractMethodError when a provider is disabled during boot or network loss. */
+internal fun createLocationListener(onLocation: (Location) -> Unit): LocationListener = object : LocationListener {
+    override fun onLocationChanged(location: Location) = onLocation(location)
+    @Suppress("DEPRECATION")
+    override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
+    override fun onProviderEnabled(provider: String) = Unit
+    override fun onProviderDisabled(provider: String) = Unit
 }

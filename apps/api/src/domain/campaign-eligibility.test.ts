@@ -1,12 +1,20 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { campaignDeliveryQuota, deliveryAssetUrl, hasVerifiedAssetMetadata, manifestDeliveryReasons, manifestValidUntil, MANIFEST_AUTHORIZATION_LEASE_MS, manifestVersionFor, manifestVersionFromDigest, selectManifestDeliverySlots } from './campaign-eligibility.js'
+import { campaignDeliveryQuota, deliveryAssetUrl, hasVerifiedAssetMetadata, manifestDeliveryReasons, manifestValidUntil, MANIFEST_AUTHORIZATION_LEASE_MS, manifestVersionFor, manifestVersionFromDigest, resolveQrConfiguration, selectManifestDeliverySlots } from './campaign-eligibility.js'
 import { safeDestination } from './qr-destination.js'
 
 test('manifest versions fit persisted signed INT4 fields', () => {
   const version = manifestVersionFromDigest('ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff')
   assert.equal(version, 268435455)
   assert.ok(version > 0 && version <= 2_147_483_647)
+})
+
+test('manifest QR requires explicit creative enablement and a valid authorized HTTPS destination', () => {
+  assert.deepEqual(resolveQrConfiguration({ qrEnabled: true, qrTargetUrl: 'https://merchant.example/offer' }), { enabled: true, destination: 'https://merchant.example/offer' })
+  assert.deepEqual(resolveQrConfiguration({ qrEnabled: false, qrTargetUrl: 'https://merchant.example/offer', legacyTarget: 'https://merchant.example/offer' }), { enabled: false, destination: null })
+  assert.deepEqual(resolveQrConfiguration({ qrEnabled: true, legacyTarget: null }), { enabled: true, destination: null })
+  assert.deepEqual(resolveQrConfiguration({ qrEnabled: true, qrTargetUrl: 'https://staging.theooro.com/offer' }), { enabled: true, destination: null })
+  assert.deepEqual(resolveQrConfiguration({ qrEnabled: true, qrTargetUrl: 'https://api-staging.theooro.com/offer' }), { enabled: true, destination: null })
 })
 
 test('sponsored creative is selected independently and never promoted from a main slot', () => {

@@ -44,4 +44,24 @@ class OfflineCachedStartupScreenshotTest {
             })
         }
     }
+
+    @Test fun missingOfflineCacheShowsSafeVisibleStateInsteadOfBlankPlayer() {
+        assumeDisposableEmulator()
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val device = UiDevice.getInstance(instrumentation)
+        prepareDisposableEmulatorUi(device)
+        val intent = Intent(context, RenderTestActivity::class.java)
+            .putExtra("scenario", "OFFLINE_MISSING_CACHE")
+            .putExtra("controls", false)
+            .putExtra("map", false)
+            .putExtra("ticker", false)
+            .putExtra("qr", false)
+
+        ActivityScenario.launch<RenderTestActivity>(intent).use {
+            device.wait(Until.findObject(By.text("Got it")), 1_000)?.click()
+            assertTrue("missing cache must show an actionable safe state", device.wait(Until.hasObject(By.text("Verifying cached creative…")), 10_000))
+            assertTrue("fallback should remain in the foreground", device.currentPackageName == context.packageName)
+        }
+    }
 }

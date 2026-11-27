@@ -22,6 +22,8 @@ data class OfferMetadata(
     val ctaLabel: String? = null,
     val ctaUrl: String? = null,
     val qrUrl: String? = null,
+    /** Explicit manifest flag; false must suppress QR even when a CTA URL exists. */
+    val qrEnabled: Boolean? = null,
     val secondaryCtaLabel: String? = null,
     val secondaryCtaUrl: String? = null,
     val contactPhone: String? = null,
@@ -32,10 +34,11 @@ data class OfferMetadata(
     /** OORO tracking-link record ID; used to match an explicitly authorized Layout Studio destination. */
     val authorizedDestinationId: String? = null
 ) {
-    /** Explicit server-issued tracking destination; required by Layout Studio QR bindings. */
-    val authorizedQrUrl: String? get() = normalizedWebUrl(qrUrl)
-    /** Legacy offer UI may use a CTA URL; custom bound QR zones require authorizedQrUrl. */
-    val validQrUrl: String? get() = authorizedQrUrl ?: normalizedWebUrl(ctaUrl)
+    /** Explicit server-issued tracking destination; CTA destinations are never QR authorization. */
+    val authorizedQrUrl: String? get() = qrUrl.takeIf { qrEnabled == true }?.let(::normalizedConsumerTrackingUrl)
+    val validQrUrl: String? get() = authorizedQrUrl
+    /** The API only issues canonical public tracking URLs. Never turn a CTA link into a QR implicitly. */
+    val consumerQrUrl: String? get() = authorizedQrUrl
     val hasOffer: Boolean get() = listOf(brandName, offerTitle, offerValue, offerSubtitle, ctaLabel).any { !it.isNullOrBlank() }
 }
 
@@ -49,12 +52,21 @@ private fun normalizedWebUrl(value: String?): String? {
     }.getOrNull()
 }
 
+private fun normalizedConsumerTrackingUrl(value: String?): String? {
+    val normalized = normalizedWebUrl(value) ?: return null
+    return runCatching { URI(normalized) }.getOrNull()?.takeIf { uri ->
+        uri.scheme.equals("https", ignoreCase = true) &&
+            uri.host.equals("theooro.com", ignoreCase = true) &&
+            uri.port == -1 && uri.path.matches(Regex("/go/[A-Za-z0-9_-]{32}"))
+    }?.toString()
+}
+
 data class DeviceCredentials(val deviceId: String, val screenId: String, val workspaceId: String, val token: String, val name: String)
 data class PairRequest(val pairingCode: String, val deviceId: String, val manufacturer: String, val model: String, val androidVersion: String, val appVersion: String)
 data class PairResponse(val credentials: DeviceCredentials)
 data class DeliveryQuota(val id: String, val revision: Int, val remainingPlays: Int?, val unlimited: Boolean)
 data class ManifestItem(val id: String, val campaignId: String, val creativeId: String, val type: CreativeType, val url: String, val checksum: String?, val durationSeconds: Int, val priority: Int, val startAt: Instant?, val endAt: Instant?, val daysOfWeek: Set<DayOfWeek>, val startTime: LocalTime?, val endTime: LocalTime?, val assetId: String? = null, val fitMode: FitMode = FitMode.FIT, val offer: OfferMetadata = OfferMetadata(), val playsPerLoop: Int = 1, val exclusive: Boolean = false, val sequence: Int = 0, val intervalSeconds: Double = 0.0, val scheduleId: String? = null, val deliveryQuota: DeliveryQuota? = null) {
-    val qrEnabled: Boolean get() = offer.validQrUrl != null
+    val qrEnabled: Boolean get() = offer.qrEnabled == true && offer.consumerQrUrl != null
     /** Server-issued UTC half-open window for inclusive campaign calendar dates. */
     fun isCampaignDateEligibleAt(now: Instant): Boolean = startAt != null && endAt != null && !now.isBefore(startAt) && now.isBefore(endAt)
     /** Legacy day/hour fields are parsed for compatibility and never control delivery. */

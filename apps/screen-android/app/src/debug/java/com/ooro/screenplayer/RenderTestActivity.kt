@@ -41,6 +41,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.ooro.screenplayer.model.CreativeType
+import com.ooro.screenplayer.model.DeliveryQuota
 import com.ooro.screenplayer.model.DeviceManifest
 import com.ooro.screenplayer.model.DisplayLayout
 import com.ooro.screenplayer.model.FitMode
@@ -197,14 +198,17 @@ private fun RenderTestScreen(
         assets.map { asset ->
             val fileName = asset.name + when { asset.video -> ".mp4"; asset.name == "jpeg-exif-rotated" -> ".jpg"; else -> ".png" }
             val offer = when (scenario) {
-                "OFFER_LONG_BRAND" -> OfferMetadata(brandName = "THE EXTRAORDINARILY LONG SYNTHETIC BRAND NAME", promotionalText = "Sample message for layout verification", ctaLabel = "TEST LINK", qrUrl = "https://example.invalid/long-brand")
-                "OFFER_LONG_TITLE" -> OfferMetadata(brandName = "OORO TEST PARTNER", offerTitle = "A deliberately long synthetic promotional title that must truncate safely in the offer panel", ctaLabel = "TEST LINK", qrUrl = "https://example.invalid/long-title")
-                "OFFER_LONG_CTA" -> OfferMetadata(brandName = "SYNTHETIC TEST BRAND", promotionalText = "Synthetic offer message", ctaLabel = "SCAN THIS SYNTHETIC TEST LINK FOR MORE DETAILS AND INFORMATION", qrUrl = "https://example.invalid/long-cta")
-                "OFFER_BRAND_ONLY" -> OfferMetadata(brandName = "SYNTHETIC BRAND ONLY", ctaLabel = "VISIT BRAND", qrUrl = "https://example.invalid/brand-only")
+                "OFFER_LONG_BRAND" -> OfferMetadata(brandName = "THE EXTRAORDINARILY LONG SYNTHETIC BRAND NAME", offerTitle = "Find your next favourite", promotionalText = "Sample message for layout verification", offerValue = "10% OFF", ctaLabel = "SCAN TO GET 10% OFF", qrUrl = "https://theooro.com/go/bcdefghijklmnopqrstuvwxyzABCDEFG", qrEnabled = true)
+                "OFFER_LONG_TITLE" -> OfferMetadata(brandName = "OORO TEST PARTNER", offerTitle = "A deliberately long synthetic promotional title that must truncate safely in the offer panel", promotionalText = "A small supporting line for layout verification", offerValue = "15% OFF", ctaLabel = "SCAN TO GET 15% OFF", qrUrl = "https://theooro.com/go/cdefghijklmnopqrstuvwxyzABCDEFGH", qrEnabled = true)
+                "OFFER_LONG_CTA" -> OfferMetadata(brandName = "OORO TEST PARTNER", offerTitle = "Find your next favourite", promotionalText = "Synthetic offer for the CTA fit check", offerValue = "10% OFF", ctaLabel = "SCAN TO GET TEN PERCENT OFF TODAY", qrUrl = "https://theooro.com/go/defghijklmnopqrstuvwxyzABCDEFGHI", qrEnabled = true)
+                "OFFER_BRAND_ONLY" -> OfferMetadata(brandName = "SYNTHETIC BRAND ONLY", offerTitle = "Find your next favourite", offerValue = "20% OFF", ctaLabel = "VISIT BRAND", qrUrl = "https://theooro.com/go/efghijklmnopqrstuvwxyzABCDEFGHIJ", qrEnabled = true)
+                "OFFER_MINIMAL_FIELDS" -> OfferMetadata(qrUrl = "https://theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF", qrEnabled = true)
                 "OFFER_MISSING_QR" -> OfferMetadata(brandName = "SYNTHETIC BRAND", promotionalText = "No authorized destination", ctaLabel = "TEST ONLY")
-                "OFFER_INVALID_QR" -> OfferMetadata(brandName = "SYNTHETIC BRAND", promotionalText = "Invalid destination fixture", qrUrl = "javascript:alert(1)")
+                "OFFER_INVALID_QR" -> OfferMetadata(brandName = "SYNTHETIC BRAND", promotionalText = "Invalid destination fixture", qrUrl = "javascript:alert(1)", qrEnabled = true)
+                "OFFER_STALE_QR" -> OfferMetadata(brandName = "SYNTHETIC BRAND", promotionalText = "Stale destination fixture", qrUrl = "https://staging.theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF", qrEnabled = true, ctaUrl = "https://theooro.com/offer")
+                "OFFER_DISABLED_QR" -> OfferMetadata(brandName = "SYNTHETIC BRAND", promotionalText = "QR explicitly disabled", qrUrl = "https://theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF", qrEnabled = false, ctaUrl = "https://merchant.example/offer")
                 "OFFER_EXPIRED" -> OfferMetadata(brandName = "EXPIRED TEST BRAND", promotionalText = "This offer must not be shown", qrUrl = "https://example.invalid/expired")
-                else -> OfferMetadata(brandName = "SYNTHETIC TEST BRAND", promotionalText = "Synthetic offer message", offerTitle = "Synthetic offer", ctaLabel = "TEST LINK", qrUrl = if (qrEnabled) "https://example.invalid/offer" else null, authorizedDestinationId = if (customBoundMedia) "local-authorized-destination" else null)
+                else -> OfferMetadata(brandName = "SYNTHETIC TEST BRAND", promotionalText = "Try something made for you", offerTitle = "Find your next favourite", offerValue = "10% OFF", ctaLabel = "SCAN TO GET 10% OFF", qrUrl = if (qrEnabled) "https://theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF" else null, qrEnabled = qrEnabled, authorizedDestinationId = if (customBoundMedia) "local-authorized-destination" else null)
             }
             ManifestItem(
                 id = "render-test-${asset.name}", campaignId = "local-render-test", creativeId = "local-${asset.name}",
@@ -228,7 +232,8 @@ private fun RenderTestScreen(
         endAt = if (scenario == "V3_EXPIRED_SPONSOR") Instant.now().minusSeconds(1) else Instant.now().plusSeconds(15 * 60),
         daysOfWeek = emptySet(), startTime = null, endTime = null, assetId = "local-sponsored-asset",
         fitMode = FitMode.FIT,
-        offer = OfferMetadata(brandName = "OORO SPONSOR TEST", promotionalText = "Separate fixed sponsor fixture")
+        offer = OfferMetadata(brandName = "OORO SPONSOR TEST", promotionalText = "Separate fixed sponsor fixture"),
+        deliveryQuota = DeliveryQuota("local-sponsored:LOCAL_RENDER_TEST", 1, null, true)
     ) else null
     val manifest = DeviceManifest(
         version = 0, screenId = "LOCAL_RENDER_TEST", timezone = "UTC", items = if (idleOnly || offerFallback) emptyList() else itemList,
@@ -242,7 +247,8 @@ private fun RenderTestScreen(
         sponsoredItem = sponsorItem,
         layoutStudioContract = if (customBoundMedia) customBoundContract(selectedAsset.name) else null,
     )
-    val paths = remember(assetDirectory, assets) {
+    val paths = remember(assetDirectory, assets, scenario) {
+        if (scenario == "OFFLINE_MISSING_CACHE") return@remember emptyMap()
         (assets + SponsoredPreviewAsset).associate { asset ->
             val fileName = asset.name + when { asset.video -> ".mp4"; asset.name == "jpeg-exif-rotated" -> ".jpg"; else -> ".png" }
             "render-test-${asset.name}" to File(assetDirectory, fileName).absolutePath

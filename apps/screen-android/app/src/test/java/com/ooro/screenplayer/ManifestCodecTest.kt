@@ -2,6 +2,7 @@ package com.ooro.screenplayer
 
 import com.ooro.screenplayer.api.ManifestCodec
 import com.ooro.screenplayer.model.CreativeType
+import com.ooro.screenplayer.model.DeviceManifest
 import com.ooro.screenplayer.model.DisplayLayout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -17,7 +18,7 @@ class ManifestCodecTest {
         }
     }
 
-    private val payload = """{"version":42,"screenId":"screen-1","timezone":"Asia/Kolkata","layout":{"type":"FOUR_ZONE","primaryWidthPercent":67,"adHeightPercent":86,"qrHeightPercent":47,"newsScrollSpeed":42},"news":{"scrollSpeed":42,"announcements":[{"id":"news-a","text":"Service update","priority":5}]},"items":[{"id":"item-a","campaignId":"campaign-a","creativeId":"creative-a","assetId":"asset-a","type":"IMAGE","url":"https://cdn.example/a.png","checksum":"aaa","durationSeconds":10,"priority":2,"playsPerLoop":1,"daysOfWeek":[1,2],"fitMode":"FIT","offer":{"brandName":"Brand A","promotionalText":"10% OFF","offerTitle":"Offer A","ctaUrl":"https://example.com/a","qrUrl":"https://theooro.com/go/token-a"}},{"id":"item-b","campaignId":"campaign-b","creativeId":"creative-b","assetId":"asset-b","type":"VIDEO","url":"https://cdn.example/b.mp4","checksum":"bbb","durationSeconds":15,"priority":1,"playsPerLoop":2,"offer":{"brandName":"Brand B","offerTitle":"Offer B","qrUrl":"https://theooro.com/go/token-b"}}]}"""
+    private val payload = """{"version":42,"screenId":"screen-1","timezone":"Asia/Kolkata","layout":{"type":"FOUR_ZONE","primaryWidthPercent":67,"adHeightPercent":86,"qrHeightPercent":47,"newsScrollSpeed":42},"news":{"scrollSpeed":42,"announcements":[{"id":"news-a","text":"Service update","priority":5}]},"items":[{"id":"item-a","campaignId":"campaign-a","creativeId":"creative-a","assetId":"asset-a","type":"IMAGE","url":"https://cdn.example/a.png","checksum":"aaa","durationSeconds":10,"priority":2,"playsPerLoop":1,"daysOfWeek":[1,2],"fitMode":"FIT","qrEnabled":true,"offer":{"brandName":"Brand A","promotionalText":"10% OFF","offerTitle":"Offer A","ctaUrl":"https://example.com/a","qrUrl":"https://theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF"}},{"id":"item-b","campaignId":"campaign-b","creativeId":"creative-b","assetId":"asset-b","type":"VIDEO","url":"https://cdn.example/b.mp4","checksum":"bbb","durationSeconds":15,"priority":1,"playsPerLoop":2,"qrEnabled":true,"offer":{"brandName":"Brand B","offerTitle":"Offer B","qrUrl":"https://theooro.com/go/bcdefghijklmnopqrstuvwxyzABCDEFG"}}]}"""
 
     @Test fun parsesImageVideoOfferAndQrAtomically() {
         val manifest = ManifestCodec.parse(payload)
@@ -28,11 +29,31 @@ class ManifestCodecTest {
         assertEquals("creative-a", manifest.items[0].creativeId)
         assertEquals("Offer A", manifest.items[0].offer.offerTitle)
         assertEquals("10% OFF", manifest.items[0].offer.promotionalText)
-        assertEquals("https://theooro.com/go/token-a", manifest.items[0].offer.qrUrl)
+        assertEquals("https://theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF", manifest.items[0].offer.qrUrl)
         assertEquals("creative-b", manifest.items[1].creativeId)
         assertEquals("Offer B", manifest.items[1].offer.offerTitle)
         assertEquals(null, manifest.items[1].offer.promotionalText)
-        assertEquals("https://theooro.com/go/token-b", manifest.items[1].offer.qrUrl)
+        assertEquals("https://theooro.com/go/bcdefghijklmnopqrstuvwxyzABCDEFG", manifest.items[1].offer.qrUrl)
+    }
+
+    @Test fun manifestQrFlagSurvivesCacheRoundTripAndFalseCannotBeOverriddenByCta() {
+        val trackingUrl = "https://theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF"
+        val body = """{"version":1,"screenId":"screen","items":[{"id":"enabled","campaignId":"c","creativeId":"cr","type":"IMAGE","url":"https://cdn.example/a.png","qrEnabled":true,"offer":{"qrUrl":"$trackingUrl"}},{"id":"disabled","campaignId":"c","creativeId":"cr2","type":"IMAGE","url":"https://cdn.example/b.png","qrEnabled":false,"offer":{"qrUrl":"$trackingUrl","ctaUrl":"https://merchant.example/offer"}}]}"""
+        val manifest = ManifestCodec.parse(body)
+        assertEquals(trackingUrl, manifest.items[0].offer.consumerQrUrl)
+        assertEquals(null, manifest.items[1].offer.consumerQrUrl)
+        val restored = ManifestCodec.parse(ManifestCodec.encode(manifest))
+        assertEquals(true, restored.items[0].qrEnabled)
+        assertEquals(false, restored.items[1].qrEnabled)
+        assertEquals(null, restored.items[1].offer.consumerQrUrl)
+    }
+
+    @Test fun missingFlagAndStaleNoncanonicalDestinationCannotCreateCachedQr() {
+        val body = """{"version":1,"screenId":"screen","items":[{"id":"stale","campaignId":"c","creativeId":"cr","type":"IMAGE","url":"https://cdn.example/a.png","offer":{"qrUrl":"https://staging.theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF","ctaUrl":"https://theooro.com/offer"}}]}"""
+        val item = ManifestCodec.parse(body).items.single()
+        assertEquals(null, item.offer.qrEnabled)
+        assertEquals(null, item.offer.consumerQrUrl)
+        assertEquals(false, ManifestCodec.parse(ManifestCodec.encode(DeviceManifest(1, "screen", "UTC", listOf(item), null))).items.single().qrEnabled)
     }
 
     @Test fun layoutVersionDefaultsToV1AndV2RoundTrips() {
@@ -98,7 +119,8 @@ class ManifestCodecTest {
     }
 
     @Test fun `authorized QR destination record ID survives manifest cache round trip`() {
-        val payloadWithDestination = payload.replace("\"qrUrl\":\"https://theooro.com/go/token-a\"", "\"qrUrl\":\"https://theooro.com/go/token-a\",\"authorizedDestinationId\":\"destination-uuid\"")
+        val trackingUrl = "https://theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF"
+        val payloadWithDestination = payload.replace("\"qrUrl\":\"$trackingUrl\"", "\"qrUrl\":\"$trackingUrl\",\"authorizedDestinationId\":\"destination-uuid\"")
         val parsed = ManifestCodec.parse(payloadWithDestination)
         assertEquals("destination-uuid", parsed.items.first().offer.authorizedDestinationId)
         assertEquals("destination-uuid", ManifestCodec.parse(ManifestCodec.encode(parsed)).items.first().offer.authorizedDestinationId)
