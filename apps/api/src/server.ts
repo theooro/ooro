@@ -47,7 +47,7 @@ import { documentScanner } from './domain/document-scanner.js'
 import { driverEmailOtpHash, normalizeDriverEmail, verifyGoogleIdToken } from './domain/driver-auth.js'
 import { sendDriverEmailOtp } from './domain/transactional-email.js'
 import { normalizeIndianPhone } from './domain/phone.js'
-import { creativeTypeMatchesWidget, layoutDraftSchema, standardV3Draft, validateLayoutDraft, type LayoutDraft } from './domain/layout-studio.js'
+import { layoutDraftSchema, standardV3Draft, validateLayoutDraft, type LayoutDraft } from './domain/layout-studio.js'
 import { readTrustedDatabaseTime, trustedServerInstanceId } from './domain/trusted-server-time.js'
 
 const app = Fastify({ logger: true })
@@ -98,40 +98,6 @@ const bodyOf = <T>(request: any, schema: z.ZodType<T>) => {
   const parsed = schema.safeParse(request.body)
   if (!parsed.success) throw new ApiError('VALIDATION_ERROR', parsed.error.issues.map((issue) => issue.message).join('; '), 422)
   return parsed.data
-}
-const validateLayoutBindings = async (draft: LayoutDraft, db: typeof prisma | Prisma.TransactionClient = prisma, requireComplete = false) => {
-  const issues: Array<{ code: string; message: string; zoneId?: string }> = []
-  for (const zone of draft.zones) {
-    if (zone.rotation) for (const item of zone.rotation.items) {
-      const creative = await db.creative.findUnique({ where: { id: item.referenceId }, select: { status: true, type: true, campaign: { select: { deliverySlot: true } }, asset: { select: { active: true, url: true, checksum: true } } } })
-      if (zone.type !== 'IMAGE' || creative?.status !== 'APPROVED' || creative.type.toUpperCase() !== 'IMAGE' || creative.campaign.deliverySlot === 'SPONSORED' || !hasVerifiedAssetMetadata(creative.asset)) {
-        issues.push({ code: 'ROTATION_CONTENT_INELIGIBLE', zoneId: zone.id, message: `${zone.label} rotation items must reference approved, available, non-sponsored image creatives.` })
-      }
-    }
-    const binding = zone.contentBinding
-    if (binding.kind === 'NONE') {
-      if (requireComplete && draft.mode === 'CUSTOM' && !zone.rotation && ['IMAGE', 'VIDEO', 'LOGO', 'BACKGROUND_IMAGE', 'SPONSORED_AD', 'QR_OFFER'].includes(zone.type)) issues.push({ code: 'BINDING_REFERENCE_REQUIRED', zoneId: zone.id, message: `${zone.label} requires an approved media or authorized destination binding before publication.` })
-      continue
-    }
-    if (!binding.referenceId) { issues.push({ code: 'BINDING_REFERENCE_REQUIRED', zoneId: zone.id, message: `${zone.label} needs a valid existing content reference.` }); continue }
-    if ((binding.kind === 'APPROVED_SPONSOR' && zone.type !== 'SPONSORED_AD') || (zone.type === 'SPONSORED_AD' && binding.kind !== 'APPROVED_SPONSOR') || (binding.kind === 'AUTHORIZED_DESTINATION' && !['QR_OFFER', 'STATIC_QR', 'EXTERNAL_DESTINATION'].includes(zone.type))) {
-      issues.push({ code: 'CONTENT_SLOT_MISMATCH', zoneId: zone.id, message: `${zone.label} must use a content binding that matches its independent delivery slot.` }); continue
-    }
-    if (!z.string().uuid().safeParse(binding.referenceId).success) { issues.push({ code: 'INVALID_CONTENT_REFERENCE', zoneId: zone.id, message: `${zone.label} must reference an existing OORO record ID.` }); continue }
-    if (binding.kind === 'AUTHORIZED_DESTINATION') {
-      const link = await db.campaignTrackingLink.findUnique({ where: { id: binding.referenceId }, select: { active: true, expiresAt: true } })
-      if (!link?.active || (link.expiresAt && link.expiresAt <= new Date())) issues.push({ code: 'DESTINATION_NOT_AUTHORIZED', zoneId: zone.id, message: `${zone.label} must reference an active, unexpired authorized destination.` })
-      continue
-    }
-    const creative = await db.creative.findUnique({ where: { id: binding.referenceId }, select: { status: true, type: true, campaign: { select: { deliverySlot: true } }, asset: { select: { active: true, url: true, checksum: true } } } })
-    const approvedAndAvailable = creative?.status === 'APPROVED' && hasVerifiedAssetMetadata(creative.asset)
-    const sponsorSlot = creative?.campaign.deliverySlot === 'SPONSORED'
-    const creativeType = creative?.type ?? ''
-    const slotMatches = binding.kind === 'APPROVED_SPONSOR' ? sponsorSlot : !sponsorSlot
-    const widgetTypeMatches = creativeTypeMatchesWidget(zone.type, creativeType)
-    if (!approvedAndAvailable || !slotMatches || !widgetTypeMatches) issues.push({ code: 'CONTENT_REFERENCE_INELIGIBLE', zoneId: zone.id, message: `${zone.label} must reference an approved, available creative from the matching delivery slot and media type.` })
-  }
-  return issues
 }
 // Capability certification gates validation/publication, not saving work in
 // progress. Draft authors must be able to persist an unsupported profile while
@@ -235,7 +201,7 @@ app.get('/api/admin/layout-studio/content', async (request, reply) => {
 app.post('/api/admin/layout-studio', async (request, reply) => {
   const auth = await requirePermission(request, 'device:write')
   const input = bodyOf(request, z.object({ name: z.string().trim().min(1).max(100), contract: layoutDraftSchema }).strict())
-  const issues = [...layoutDraftSaveIssues(input.contract), ...await validateLayoutBindings(input.contract)]
+  const issues = layoutDraftSaveIssues(input.contract)
   if (issues.length) throw new ApiError('LAYOUT_VALIDATION_FAILED', issues.map(issue => issue.message).join(' '), 422)
   const created = await prisma.$transaction(async tx => {
     const layout = await tx.layoutTemplate.create({ data: { name: input.name, mode: input.contract.mode, preset: input.contract.preset, profileId: input.contract.profileId, draftContract: input.contract as any, createdBy: auth.userId, updatedBy: auth.userId } })
@@ -257,7 +223,7 @@ app.put('/api/admin/layout-studio/:layoutId/draft', async (request, reply) => {
   const { layoutId } = request.params as { layoutId: string }
   if (!z.string().uuid().safeParse(layoutId).success) throw new ApiError('VALIDATION_ERROR', 'Invalid layout ID', 422)
   const input = bodyOf(request, z.object({ expectedRowVersion: z.number().int().positive(), name: z.string().trim().min(1).max(100), contract: layoutDraftSchema }).strict())
-  const issues = [...layoutDraftSaveIssues(input.contract), ...await validateLayoutBindings(input.contract)]
+  const issues = layoutDraftSaveIssues(input.contract)
   if (issues.length) throw new ApiError('LAYOUT_VALIDATION_FAILED', issues.map(issue => issue.message).join(' '), 422)
   const layout = await prisma.$transaction(async tx => {
     const changed = await tx.layoutTemplate.updateMany({ where: { id: layoutId, rowVersion: input.expectedRowVersion, state: { not: 'ARCHIVED' } }, data: { name: input.name, mode: input.contract.mode, preset: input.contract.preset, profileId: input.contract.profileId, draftContract: input.contract as any, state: 'DRAFT', rowVersion: { increment: 1 }, updatedBy: auth.userId } })
@@ -277,7 +243,7 @@ app.post('/api/admin/layout-studio/:layoutId/validate', async (request, reply) =
   if (!layout) throw notFound('Layout not found')
   if (layout.state === 'PUBLISHED' || layout.state === 'ARCHIVED') throw new ApiError('LAYOUT_REVISION_CONFLICT', 'Published layouts are immutable. Save a new draft revision before validating again.', 409)
   const result = validateLayoutDraft(layout.draftContract)
-  const issues = [...result.issues, ...await validateLayoutBindings(layout.draftContract as LayoutDraft, prisma, true)]
+  const issues = result.issues
   if (layout.rowVersion !== input.expectedRowVersion) throw new ApiError('LAYOUT_REVISION_CONFLICT', 'This draft changed during validation. Reload it before continuing.', 409)
   if (issues.length) return ok(request, { valid: false, issues, rowVersion: layout.rowVersion, warnings: ['Publishing a layout does not approve or authorize advertising media. Live screen assignment is disabled by default.'] }, reply)
   if (layout.state === 'VALIDATED') return ok(request, { valid: true, issues: [], rowVersion: layout.rowVersion, state: layout.state, warnings: ['Publishing a layout does not approve or authorize advertising media. Live screen assignment is disabled by default.'] }, reply)
@@ -299,7 +265,7 @@ app.post('/api/admin/layout-studio/:layoutId/publish', async (request, reply) =>
     if (!layout) throw notFound('Layout not found')
     if (layout.rowVersion !== input.expectedRowVersion || layout.state !== 'VALIDATED') throw new ApiError('LAYOUT_REVISION_CONFLICT', 'Validate the current draft before Super Admin approval and publication.', 409)
     const result = validateLayoutDraft(layout.draftContract)
-    const issues = [...result.issues, ...await validateLayoutBindings(layout.draftContract as LayoutDraft, tx, true)]
+    const issues = result.issues
     if (issues.length) throw new ApiError('LAYOUT_VALIDATION_FAILED', issues.map(issue => issue.message).join(' '), 422)
     const contract = JSON.stringify(layout.draftContract)
     const contractHash = createHash('sha256').update(contract).digest('hex')
@@ -1387,7 +1353,7 @@ app.post('/api/admin/deviceos/deployments/:campaignId/resume', async (request, r
 app.post('/api/device/heartbeat', async (request, reply) => {
   const display = await authenticateDisplay(request)
   const coordinate = (value: number | undefined, min: number, max: number) => value === undefined ? undefined : Number.isFinite(value) && value >= min && value <= max ? value : undefined
-  const input = bodyOf(request, z.object({ timestamp: z.coerce.date().optional(), appVersion: z.string().optional(), deviceVersion: z.string().optional(), androidVersion: z.string().optional(), manufacturer: z.string().optional(), model: z.string().optional(), storageFree: z.coerce.bigint().optional(), storageTotal: z.coerce.bigint().optional(), networkType: z.string().optional(), networkConnected: z.boolean().optional(), supportsSponsoredSlot: z.boolean().optional(), supportsDeliveryQuota: z.boolean().optional(), manifestVersion: z.number().int().optional(), activeLayout: z.enum(['FULLSCREEN_AD', 'FOUR_ZONE', 'AD_NAV_OFFER', 'SPLIT_50_25_25', 'FULLSCREEN_SERVICE', 'SPECIAL_CAMPAIGN']).optional(), layoutContractVersion: z.number().int().positive().max(100).optional(), currentCampaignId: z.string().optional(), currentCreativeId: z.string().optional(), currentAssetId: z.string().optional(), playbackState: z.enum(['IDLE', 'LOADING', 'PLAYING', 'PAUSED', 'FAILED', 'READY', 'DEGRADED', 'OFFLINE_PLAYBACK']).optional(), screenState: z.string().optional(), playbackStartedAt: z.coerce.date().optional(), playbackPositionMs: z.number().finite().int().nonnegative().optional(), expectedDurationMs: z.number().finite().int().nonnegative().optional(), latitude: z.number().finite().optional(), longitude: z.number().finite().optional(), accuracyMeters: z.number().finite().nonnegative().optional(), speedMps: z.number().finite().nonnegative().optional(), headingDegrees: z.number().finite().optional(), locationOccurredAt: z.coerce.date().optional(), batteryLevel: z.number().int().min(0).max(100).optional(), chargingState: z.string().optional(), temperature: z.number().finite().optional() }))
+  const input = bodyOf(request, z.object({ timestamp: z.coerce.date().optional(), appVersion: z.string().optional(), deviceVersion: z.string().optional(), androidVersion: z.string().optional(), manufacturer: z.string().optional(), model: z.string().optional(), storageFree: z.coerce.bigint().optional(), storageTotal: z.coerce.bigint().optional(), networkType: z.string().optional(), networkConnected: z.boolean().optional(), supportsSponsoredSlot: z.boolean().optional(), supportsDeliveryQuota: z.boolean().optional(), manifestVersion: z.number().int().optional(), activeLayout: z.enum(['FULLSCREEN_AD', 'FOUR_ZONE', 'AD_NAV_OFFER', 'SPLIT_50_25_25', 'THREE_ZONE_AD_SPONSOR_QR_V1', 'FULLSCREEN_SERVICE', 'SPECIAL_CAMPAIGN']).optional(), layoutContractVersion: z.number().int().positive().max(100).optional(), currentCampaignId: z.string().optional(), currentCreativeId: z.string().optional(), currentAssetId: z.string().optional(), playbackState: z.enum(['IDLE', 'LOADING', 'PLAYING', 'PAUSED', 'FAILED', 'READY', 'DEGRADED', 'OFFLINE_PLAYBACK']).optional(), screenState: z.string().optional(), playbackStartedAt: z.coerce.date().optional(), playbackPositionMs: z.number().finite().int().nonnegative().optional(), expectedDurationMs: z.number().finite().int().nonnegative().optional(), latitude: z.number().finite().optional(), longitude: z.number().finite().optional(), accuracyMeters: z.number().finite().nonnegative().optional(), speedMps: z.number().finite().nonnegative().optional(), headingDegrees: z.number().finite().optional(), locationOccurredAt: z.coerce.date().optional(), batteryLevel: z.number().int().min(0).max(100).optional(), chargingState: z.string().optional(), temperature: z.number().finite().optional() }))
   const latitude = coordinate(input.latitude, -90, 90); const longitude = coordinate(input.longitude, -180, 180)
   const locationCandidate = { latitude, longitude, accuracyMeters: input.accuracyMeters, occurredAt: input.locationOccurredAt ?? input.timestamp ?? new Date() }
   const hasLocation = latitude !== undefined && longitude !== undefined && validDisplayLocation(locationCandidate)
@@ -1404,7 +1370,7 @@ app.post('/api/device/heartbeat', async (request, reply) => {
       const playbackLocation = hasLocation ? { latitude, longitude, locationAccuracy: input.accuracyMeters, locationOccurredAt } : previousLocation ? { latitude: previousLocation.latitude, longitude: previousLocation.longitude, locationAccuracy: previousLocation.accuracyMeters, locationOccurredAt: previousLocation.occurredAt } : {}
       await tx.playbackEvent.create({ data: { eventId: randomSecret(16), displayId: display.id, campaignId: input.currentCampaignId, creativeId: input.currentCreativeId, assetId: input.currentAssetId, eventType: input.playbackState === 'PLAYING' ? 'PLAY_STARTED' : 'PLAY_FAILED', occurredAt: input.playbackStartedAt ?? occurredAt, position: input.playbackPositionMs, duration: input.expectedDurationMs, manifestVersion: input.manifestVersion, playerVersion: input.appVersion, errorCode: input.playbackState === 'FAILED' ? 'DEVICE_PLAYBACK_FAILED' : undefined, ...playbackLocation } as any })
     }
-      await tx.display.update({ where: { id: display.id }, data: { appVersion: input.appVersion, manifestVersion: input.manifestVersion, ...(supportsSponsoredSlot === true ? { supportsSponsoredSlot: true } : {}), ...(supportsDeliveryQuota === true ? { supportsDeliveryQuota: true } : {}), state: ['DISABLED','BLOCKED','MAINTENANCE','UNPAIRED'].includes(display.state) ? display.state : input.screenState ?? input.playbackState ?? 'READY', pairingStatus: nextPairingStatus, pairedAt: nextPairingStatus === 'PAIRED' ? (display.pairedAt ?? authenticatedHeartbeatAt) : null, lastHeartbeatAt: authenticatedHeartbeatAt, ...(hasLocation ? { lastLatitude: latitude, lastLongitude: longitude, lastLocationAccuracy: input.accuracyMeters, lastLocationAt: locationOccurredAt } : {}), currentCampaignId: input.currentCampaignId, currentCreativeId: input.currentCreativeId, currentAssetId: input.currentAssetId, currentPlaybackState: input.playbackState, currentPlaybackStartedAt: input.playbackStartedAt, currentPlaybackPositionMs: input.playbackPositionMs, currentExpectedDurationMs: input.expectedDurationMs, manufacturer: input.manufacturer, model: input.model, androidVersion: input.androidVersion ?? input.deviceVersion, batteryLevel: input.batteryLevel, chargingState: input.chargingState, lastNetworkType: input.networkType } })
+      await tx.display.update({ where: { id: display.id }, data: { appVersion: input.appVersion, manifestVersion: input.manifestVersion, ...(supportsSponsoredSlot !== undefined ? { supportsSponsoredSlot } : {}), ...(supportsDeliveryQuota === true ? { supportsDeliveryQuota: true } : {}), state: ['DISABLED','BLOCKED','MAINTENANCE','UNPAIRED'].includes(display.state) ? display.state : input.screenState ?? input.playbackState ?? 'READY', pairingStatus: nextPairingStatus, pairedAt: nextPairingStatus === 'PAIRED' ? (display.pairedAt ?? authenticatedHeartbeatAt) : null, lastHeartbeatAt: authenticatedHeartbeatAt, ...(hasLocation ? { lastLatitude: latitude, lastLongitude: longitude, lastLocationAccuracy: input.accuracyMeters, lastLocationAt: locationOccurredAt } : {}), currentCampaignId: input.currentCampaignId, currentCreativeId: input.currentCreativeId, currentAssetId: input.currentAssetId, currentPlaybackState: input.playbackState, currentPlaybackStartedAt: input.playbackStartedAt, currentPlaybackPositionMs: input.playbackPositionMs, currentExpectedDurationMs: input.expectedDurationMs, manufacturer: input.manufacturer, model: input.model, androidVersion: input.androidVersion ?? input.deviceVersion, batteryLevel: input.batteryLevel, chargingState: input.chargingState, lastNetworkType: input.networkType } })
     return row
   })
   const latest = await buildDisplayManifest(display.id); if (!['UNPAIRED','DISABLED'].includes(display.state) && latest.manifest.version !== (input.manifestVersion ?? -1)) { try { await prisma.$transaction(async (tx) => { const pending = await tx.displayCommand.findFirst({ where: { displayId: display.id, commandType: { in: ['REFRESH_MANIFEST', 'SYNC_MANIFEST'] }, status: { in: ['QUEUED', 'DELIVERED'] } }, select: { id: true } }); if (!pending) await tx.displayCommand.create({ data: { displayId: display.id, commandType: 'REFRESH_MANIFEST', payload: { manifestVersion: latest.manifest.version }, expiresAt: null } }); }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }); } catch (error) { if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2034') throw error } }
@@ -1424,7 +1390,7 @@ app.get('/api/device/manifest', async (request, reply) => {
   const { manifest, reasons } = await buildDisplayManifest(display.id, authenticatedServerTime)
   reply.header('x-server-instance-id', serverInstanceId).header('cache-control', 'private, no-store')
   request.log.info({ requestId: request.id, displayId: display.id, serverInstanceId, authenticatedServerTime: authenticatedServerTime.toISOString(), generatedAt: manifest.generatedAt, reasons, itemCount: manifest.items.length, hasSponsoredItem: Boolean(manifest.sponsoredItem), hasCustomLayout: Boolean(manifest.layoutStudioContract) }, 'display manifest evaluated')
-  return ok(request, { version: manifest.version, manifestId: manifest.manifestId, screenId: display.id, generatedAt: manifest.generatedAt, authenticatedServerTime: authenticatedServerTime.toISOString(), serverInstanceId, validUntil: manifest.expiresAt, deliveryReasons: reasons, timezone: 'Asia/Kolkata', layout: manifest.layout, ...(manifest.layoutStudioContract ? { layoutStudioContract: manifest.layoutStudioContract } : {}), news: manifest.news, items: manifest.items, ...(manifest.sponsoredItem ? { sponsoredItem: manifest.sponsoredItem } : {}) }, reply)
+  return ok(request, { version: manifest.version, manifestId: manifest.manifestId, screenId: display.id, generatedAt: manifest.generatedAt, authenticatedServerTime: authenticatedServerTime.toISOString(), serverInstanceId, validUntil: manifest.expiresAt, deliveryReasons: reasons, timezone: 'Asia/Kolkata', layout: manifest.layout, ...(manifest.layoutStudioContract ? { layoutStudioContract: manifest.layoutStudioContract } : {}), news: manifest.news, items: manifest.items, ...(manifest.sponsoredItem ? { sponsoredItem: manifest.sponsoredItem } : {}), sponsoredSlotDiagnostic: manifest.sponsoredSlotDiagnostic }, reply)
 })
 app.get('/api/admin/displays/:displayId/manifest-debug', async (request, reply) => { await requireRoles(request, ['ADMIN', 'SUPER_ADMIN', 'OPERATIONS']); const { displayId } = request.params as { displayId: string }; const { manifest, reasons } = await buildDisplayManifest(displayId); return ok(request, { displayId, reasons, selected: manifest.items, manifestVersion: manifest.version }, reply) })
 app.get('/api/device/commands', async (request, reply) => {
@@ -1930,7 +1896,7 @@ app.get('/api/admin/displays/:displayId/fleet-detail', async (request, reply) =>
   const commands = display.commands.map(command => ({ ...command, error: safeCommandError(command.error) ?? null }))
   const latestHeartbeat = display.heartbeats[0]
   const cacheIsFresh = Boolean(latestHeartbeat && getDisplayConnectivity(latestHeartbeat.receivedAt, new Date(), config.heartbeatOnlineSeconds, config.heartbeatDegradedSeconds) === 'ONLINE')
-  const manifestState = { desiredVersion: desiredManifest.version, validUntil: desiredManifest.expiresAt, primaryItems: desiredManifest.items.length, sponsoredItemAvailable: Boolean(desiredManifest.sponsoredItem), deviceCachedVersion: latestHeartbeat?.manifestVersion ?? null, activeLayout: latestHeartbeat?.activeLayout ?? null, layoutContractVersion: latestHeartbeat?.layoutContractVersion ?? null, lastReportedAt: latestHeartbeat?.receivedAt ?? null, layoutReportStatus: !latestHeartbeat?.activeLayout ? 'UNREPORTED' : cacheIsFresh ? 'CURRENT' : 'STALE', cacheMatchesServer: cacheIsFresh ? latestHeartbeat?.manifestVersion === desiredManifest.version : null }
+  const manifestState = { desiredVersion: desiredManifest.version, validUntil: desiredManifest.expiresAt, primaryItems: desiredManifest.items.length, qrItems: desiredManifest.items.filter(item => item.qrEnabled && item.qrTargetUrl?.startsWith('https://theooro.com/go/')).length, sponsoredItemAvailable: Boolean(desiredManifest.sponsoredItem), sponsoredSlotDiagnostic: desiredManifest.sponsoredSlotDiagnostic, requestedLayout: desiredManifest.layout, deviceCachedVersion: latestHeartbeat?.manifestVersion ?? null, activeLayout: latestHeartbeat?.activeLayout ?? null, layoutContractVersion: latestHeartbeat?.layoutContractVersion ?? null, lastReportedAt: latestHeartbeat?.receivedAt ?? null, layoutReportStatus: !latestHeartbeat?.activeLayout ? 'UNREPORTED' : cacheIsFresh ? 'CURRENT' : 'STALE', cacheMatchesServer: cacheIsFresh ? latestHeartbeat?.manifestVersion === desiredManifest.version : null }
   return ok(request, asJson({ ...display, commands, playerManagement, manifestState, connectivityThresholds: { onlineSeconds: config.heartbeatOnlineSeconds, staleSeconds: config.heartbeatDegradedSeconds } }), reply)
 })
 app.get('/api/admin/displays/:displayId/player-releases', async (request, reply) => {

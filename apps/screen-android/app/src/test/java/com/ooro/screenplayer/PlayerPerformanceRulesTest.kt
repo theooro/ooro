@@ -43,8 +43,8 @@ class PlayerPerformanceRulesTest {
         assertTrue(needsIdentityBinding(player, Any()))
     }
 
-    @Test fun mapIsAbsentUnlessNavigationIsActive() {
-        assertFalse(navigationMapIsVisible(active = false))
+    @Test fun fixedMapWidgetIsVisibleWithoutNavigationWhileGuidanceRemainsInactive() {
+        assertTrue(navigationMapIsVisible(active = false))
         assertTrue(navigationMapIsVisible(active = true))
     }
 }

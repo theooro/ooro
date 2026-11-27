@@ -63,6 +63,20 @@ class CreativeRenderRulesTest {
         assertEquals(0.85f, adRegionFraction(DisplayLayout.FOUR_ZONE, LayoutConfig(), 3).height, 0.0001f)
     }
 
+    @Test fun threeZonePresetKeeps65_35ColumnsAnd75_25SidebarAt1280x720() {
+        assertEquals(0.65f, adRegionFraction(DisplayLayout.THREE_ZONE_AD_SPONSOR_QR_V1, LayoutConfig()).width, 0f)
+        assertEquals(1f, adRegionFraction(DisplayLayout.THREE_ZONE_AD_SPONSOR_QR_V1, LayoutConfig()).height, 0f)
+        assertEquals(true, com.ooro.screenplayer.player.threeZoneQrSupported(1280, 720))
+        assertEquals(false, com.ooro.screenplayer.player.threeZoneQrSupported(1279, 720))
+        assertEquals(false, com.ooro.screenplayer.player.threeZoneQrSupported(1920, 700))
+        val width = 1280
+        val height = 720
+        assertEquals(832, (width * 0.65f).toInt())
+        assertEquals(448, width - (width * 0.65f).toInt())
+        assertEquals(540, (height * 0.75f).toInt())
+        assertEquals(180, height - (height * 0.75f).toInt())
+    }
+
     @Test fun localV3PreferenceChangesGeometryOnlyForSupportedLayouts() {
         assertEquals(1, geometryContractVersion(1, DisplayLayout.FOUR_ZONE, PresentationPreference.AUTO_FROM_MANIFEST))
         assertEquals(3, geometryContractVersion(1, DisplayLayout.FOUR_ZONE, PresentationPreference.OORO_V3_PRESENTATION))

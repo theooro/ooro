@@ -20,8 +20,10 @@ export function selectLayoutScreenType(draft: LayoutDraft, type: NonNullable<Lay
 }
 
 export function changeLayoutWidgetType(zone: LayoutZone, type: WidgetType): LayoutZone {
-  const kind = ['IMAGE', 'VIDEO', 'LOGO', 'BACKGROUND_IMAGE'].includes(type) ? 'APPROVED_CREATIVE' : type === 'SPONSORED_AD' ? 'APPROVED_SPONSOR' : type === 'QR_OFFER' ? 'AUTHORIZED_DESTINATION' : 'NONE'
-  return { ...zone, type, fit: 'FIT', contentBinding: { kind }, rotation: undefined }
+  // Layout Studio persists geometry and widget type. Scheduler resolves the
+  // currently authorized creative; QR widgets resolve the eligible campaign
+  // offer. A draft never pins a creative or destination identifier.
+  return { ...zone, type, fit: 'FIT', contentBinding: { kind: 'NONE' }, rotation: undefined }
 }
 
 export function layoutBindingOptions(type: WidgetType): LayoutZone['contentBinding']['kind'][] {

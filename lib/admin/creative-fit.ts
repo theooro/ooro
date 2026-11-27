@@ -1,17 +1,30 @@
-export type PreviewLayout = "FULLSCREEN_AD" | "FOUR_ZONE" | "FOUR_ZONE_V3" | "SPLIT_50_25_25";
+export type PreviewLayout = "SCREEN_ASSIGNED" | "FULLSCREEN_AD" | "FOUR_ZONE" | "FOUR_ZONE_V3" | "SPLIT_50_25_25" | "THREE_ZONE_AD_SPONSOR_QR_V1";
 export type CreativePlacement = { x: number; y: number; width: number; height: number; aspectRatio: number };
+export const THREE_ZONE_AD_SPONSOR_QR_MIN_RESOLUTION = { width: 1280, height: 720 } as const;
 
 export function creativePlacement(layout: PreviewLayout, slot: "MAIN" | "SPONSORED" = "MAIN"): CreativePlacement {
-  const region = layout === "FOUR_ZONE_V3" && slot === "SPONSORED"
+  const region = layout === "SCREEN_ASSIGNED"
+    ? { x: 0, y: 0, width: 1, height: 1 }
+    : layout === "FOUR_ZONE_V3" && slot === "SPONSORED"
     ? { x: 0, y: 0.85, width: 0.8, height: 0.15 }
+    : layout === "THREE_ZONE_AD_SPONSOR_QR_V1" && slot === "SPONSORED"
+      ? { x: 0.65, y: 0.75, width: 0.35, height: 0.25 }
+    : layout === "THREE_ZONE_AD_SPONSOR_QR_V1"
+      ? { x: 0, y: 0, width: 0.65, height: 1 }
     : layout === "FOUR_ZONE_V3"
       ? { x: 0, y: 0, width: 0.8, height: 0.85 }
     : layout === "FOUR_ZONE"
-    ? { x: 0, y: 0, width: 0.67, height: 0.88 }
+    ? { x: 0, y: 0, width: 0.67, height: 0.86 }
     : layout === "SPLIT_50_25_25"
-      ? { x: 0, y: 0, width: 0.75, height: 1 }
+      ? { x: 0, y: 0, width: 0.5, height: 1 }
       : { x: 0, y: 0, width: 1, height: 1 };
   return { ...region, aspectRatio: (16 / 9) * region.width / region.height };
+}
+
+export function threeZoneQrSupportsResolution(width: number, height: number): boolean {
+  const landscapeWidth = Math.max(width, height);
+  const landscapeHeight = Math.min(width, height);
+  return landscapeWidth >= THREE_ZONE_AD_SPONSOR_QR_MIN_RESOLUTION.width && landscapeHeight >= THREE_ZONE_AD_SPONSOR_QR_MIN_RESOLUTION.height;
 }
 
 export function aspectRatioWarning(sourceWidth: number, sourceHeight: number, placementRatio: number, tolerance = 0.15): string | null {

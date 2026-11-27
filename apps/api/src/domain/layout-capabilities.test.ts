@@ -45,9 +45,8 @@ test('profile revision, screen type, resource envelope and missing providers rem
 
 test('manually published or previously published uncertified Custom contracts never enter manifests', () => {
   const draft = candidateDraft()
-  const image = { creativeId: draft.zones[0]!.contentBinding.referenceId!, type: 'IMAGE', checksum: 'a'.repeat(64) }
-  assert.equal(deliverableLayoutContract(draft, [image]), null)
-  assert.equal(deliverableLayoutContract({ ...draft, profileId: 'OORO_PREMIUM' }, [image]), null)
-  assert.equal(deliverableLayoutContract(draft, [{ ...image, checksum: null }]), null)
-  assert.equal(deliverableLayoutContract({}, [image]), null)
+  assert.equal(deliverableLayoutContract(draft), null)
+  assert.equal(deliverableLayoutContract({ ...draft, profileId: 'OORO_PREMIUM' }), null)
+  assert.equal(deliverableLayoutContract({ ...draft, zones: [] }), null)
+  assert.equal(deliverableLayoutContract({}), null)
 })

@@ -37,6 +37,38 @@ class SplitLayoutRendererTest {
         capture("FULLSCREEN_AD", "OFFER_BRAND")
     }
 
+    @Test fun threeZoneBuiltInPresetRendersMainSponsoredAndDecodableQrAt1280x720() {
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        assertEquals(1280, device.displayWidth)
+        assertEquals(720, device.displayHeight)
+        assertEquals("Natural landscape must remain upright", 0, device.displayRotation)
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val intent = Intent(context, RenderTestActivity::class.java)
+            .putExtra("layout", "THREE_ZONE_AD_SPONSOR_QR_V1")
+            .putExtra("scenario", "V3_SPONSORED")
+            .putExtra("asset", "landscape")
+            .putExtra("controls", false).putExtra("map", false).putExtra("qr", true)
+        ActivityScenario.launch<RenderTestActivity>(intent).use {
+            compose.waitUntil(15_000) {
+                compose.onAllNodesWithTag("three-zone-qr").fetchSemanticsNodes().isNotEmpty() &&
+                    compose.onAllNodesWithTag("offer-qr").fetchSemanticsNodes().isNotEmpty()
+            }
+            assertBounds("three-zone-main", Rect(0f, 0f, 832f, 720f))
+            assertBoundsWithin("three-zone-qr", Rect(832f, 0f, 1280f, 540f), 10f)
+            assertBoundsWithin("three-zone-sponsored", Rect(832f, 540f, 1280f, 720f), 10f)
+            compose.onNodeWithContentDescription("Sponsored test advertisement").assertExists()
+            val qr = compose.onNodeWithTag("offer-qr").fetchSemanticsNode().boundsInRoot
+            assertEquals("QR remains square", qr.width, qr.height, 1f)
+            assertTrue("QR keeps minimum scan size in the 448px offer region: $qr", qr.width >= 220f)
+            val screenshot = compose.onRoot().captureToImage().asAndroidBitmap()
+            assertEquals(1280, screenshot.width)
+            assertEquals(720, screenshot.height)
+            assertQr(Bitmap.createBitmap(screenshot, qr.left.toInt(), qr.top.toInt(), qr.width.toInt(), qr.height.toInt()), "https://theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF")
+            val directory = File(context.getExternalFilesDir(null), "split-renderer-screenshots").apply { mkdirs() }
+            File(directory, "THREE_ZONE_AD_SPONSOR_QR_V1.png").outputStream().use { screenshot.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
+    }
+
     @Test fun splitLayoutNeverInventsQrForDisabledMissingOrInvalidDestination() {
         listOf("OFFER_DISABLED_QR", "OFFER_MISSING_QR", "OFFER_INVALID_QR", "OFFER_STALE_QR").forEach { scenario ->
             captureWithoutQr(scenario)
@@ -179,6 +211,14 @@ class SplitLayoutRendererTest {
 
     private fun assertBounds(tag: String, expected: Rect) {
         assertEquals(expected, compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot)
+    }
+
+    private fun assertBoundsWithin(tag: String, expected: Rect, tolerancePx: Float) {
+        val actual = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
+        assertEquals("$tag left", expected.left, actual.left, tolerancePx)
+        assertEquals("$tag top", expected.top, actual.top, tolerancePx)
+        assertEquals("$tag right", expected.right, actual.right, tolerancePx)
+        assertEquals("$tag bottom", expected.bottom, actual.bottom, tolerancePx)
     }
 
     private fun assertQr(bitmap: Bitmap, path: String) {

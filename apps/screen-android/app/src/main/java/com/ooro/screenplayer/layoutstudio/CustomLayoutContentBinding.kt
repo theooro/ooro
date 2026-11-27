@@ -37,8 +37,6 @@ internal fun resolveCustomWidgetContent(
     if (pairedScreenId.isNullOrBlank() || manifest.screenId != pairedScreenId) return CustomWidgetContent.Fallback("screen-identity-mismatch")
     if (authorizationExpired) return CustomWidgetContent.Fallback("manifest-authorization-invalid")
     if (!zone.visible) return CustomWidgetContent.Fallback("hidden")
-    val binding = zone.bindingKind
-    val reference = zone.referenceId
     fun activeAndVerified(item: ManifestItem?) = item?.takeIf {
         it.id in verifiedItemIds && it.hasAuthorizedDeliveryQuota && it.isCampaignDateEligibleAt(now)
     }
@@ -46,30 +44,26 @@ internal fun resolveCustomWidgetContent(
     return when (zone.type) {
         "MAIN_AD" -> {
             val item = activeAndVerified(currentMainItem)
-            if (item != null && (binding == "NONE" || binding == "APPROVED_CREATIVE" && reference == item.creativeId)) CustomWidgetContent.MainAd(item)
+            if (item != null && item.deliverySlot != "SPONSORED") CustomWidgetContent.MainAd(item)
             else CustomWidgetContent.Fallback("no-authorized-main-creative")
         }
         "SPONSORED_AD" -> {
             val sponsor = eligibleSponsoredItem(manifest, now, verifiedItemIds)
-            if (binding == "APPROVED_SPONSOR" && reference != null && sponsor?.creativeId == reference) CustomWidgetContent.Sponsor(sponsor)
+            if (sponsor != null) CustomWidgetContent.Sponsor(sponsor)
             else CustomWidgetContent.Fallback("no-eligible-sponsor")
         }
         "IMAGE", "VIDEO", "LOGO", "BACKGROUND_IMAGE" -> {
-            if (binding != "APPROVED_CREATIVE" || reference == null) return CustomWidgetContent.Fallback("creative-binding-required")
             val expectedType = if (zone.type == "VIDEO") CreativeType.VIDEO else CreativeType.IMAGE
-            val selected = ScheduleEngine().eligible(manifest, now)
-                .firstOrNull { it.creativeId == reference && it.type == expectedType && it.id in verifiedItemIds }
-            if (selected == null) CustomWidgetContent.Fallback("creative-not-eligible-or-verified")
+            val selected = activeAndVerified(ScheduleEngine().eligible(manifest, now)
+                .firstOrNull { it.deliverySlot != "SPONSORED" && it.type == expectedType })
+            if (selected == null) CustomWidgetContent.Fallback("no-scheduler-assigned-eligible-media")
             else CustomWidgetContent.DecorativeMedia(selected.copy(durationSeconds = zone.rotationDurationSeconds ?: selected.durationSeconds))
         }
         "QR_OFFER" -> {
-            if (binding != "AUTHORIZED_DESTINATION" || reference == null) return CustomWidgetContent.Fallback("destination-binding-required")
-            val item = ScheduleEngine().eligible(manifest, now).firstOrNull {
-                it.id in verifiedItemIds && it.offer.authorizedDestinationId == reference && it.offer.authorizedQrUrl != null
-            }
-            if (item == null) CustomWidgetContent.Fallback("destination-not-authorized-or-verified") else CustomWidgetContent.Offer(item)
+            val item = activeAndVerified(currentMainItem)?.takeIf { it.qrEnabled }
+            if (item == null) CustomWidgetContent.Fallback("current-scheduled-offer-has-no-authorized-qr") else CustomWidgetContent.Offer(item)
         }
-        "TEXT" -> if (binding == "NONE") CustomWidgetContent.Text(zone.label) else CustomWidgetContent.Fallback("text-cannot-bind-campaign-content")
+        "TEXT" -> CustomWidgetContent.Text(zone.label)
         "CLOCK", "WEATHER", "TICKER", "NAVIGATION_MAP" -> if (zone.type in enabledCapabilities) {
             CustomWidgetContent.Fallback("capability-enabled-widget-has-no-runtime-provider")
         } else CustomWidgetContent.Fallback("device-capability-unavailable")

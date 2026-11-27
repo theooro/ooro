@@ -11,10 +11,12 @@ type Props = {
   previewOnly?: boolean;
   ctaHref?: string | null;
   showQr?: boolean;
+  /** Physical screen pixels represented by one preview CSS pixel. */
+  previewScale?: number;
   className?: string;
 };
 
-export function BrandedQrOfferCard({ offer: source, qrUrl, previewOnly = false, ctaHref, showQr = true, className = "" }: Props) {
+export function BrandedQrOfferCard({ offer: source, qrUrl, previewOnly = false, ctaHref, showQr = true, previewScale = 1, className = "" }: Props) {
   const offer = useMemo(() => mapBrandedOffer({ ...source, consumerUrl: qrUrl ?? source.consumerUrl ?? source.qrUrl }), [source, qrUrl]);
   const qrSlot = useRef<HTMLDivElement>(null);
   const [slotSize, setSlotSize] = useState({ width: 0, height: 0 });
@@ -31,16 +33,17 @@ export function BrandedQrOfferCard({ offer: source, qrUrl, previewOnly = false, 
     return () => observer.disconnect();
   }, []);
   const qrSize = offerQrSize(slotSize.width, slotSize.height, 0, 4);
+  const representedQrSize = Math.floor(qrSize * Math.max(1, previewScale));
   useEffect(() => {
     let cancelled = false;
     setQrImage(null);
     setQrError(false);
-    if (!showQr || !offer.consumerUrl || qrSize < MIN_CONSUMER_QR_SIZE_PX) return;
-    QRCode.toDataURL(offer.consumerUrl, { width: qrSize, margin: 4, errorCorrectionLevel: "Q", color: { dark: "#101613", light: "#ffffff" } })
+    if (!showQr || !offer.consumerUrl || representedQrSize < MIN_CONSUMER_QR_SIZE_PX) return;
+    QRCode.toDataURL(offer.consumerUrl, { width: representedQrSize, margin: 4, errorCorrectionLevel: "Q", color: { dark: "#101613", light: "#ffffff" } })
       .then(value => { if (!cancelled) setQrImage(value); })
       .catch(() => { if (!cancelled) setQrError(true); });
     return () => { cancelled = true; };
-  }, [offer.consumerUrl, qrSize, showQr]);
+  }, [offer.consumerUrl, representedQrSize, showQr]);
 
   let safeCtaHref: string | null = null;
   try { const parsed = new URL(ctaHref ?? ""); const host = parsed.hostname.toLowerCase(); if (parsed.protocol === "https:" && !parsed.username && !parsed.password && !host.includes(":") && !/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) && host !== "localhost" && !host.endsWith(".localhost") && !host.endsWith(".local") && !host.endsWith(".internal") && !["api.theooro.com", "api-staging.theooro.com", "staging.theooro.com"].includes(host)) safeCtaHref = parsed.toString(); } catch { /* no secure external destination */ }
@@ -54,9 +57,9 @@ export function BrandedQrOfferCard({ offer: source, qrUrl, previewOnly = false, 
     {offer.supportingText && <p className="mt-1 max-w-full shrink-0 text-xs leading-snug text-[#50615c]" data-testid="offer-supporting-copy">{offer.supportingText}</p>}
     {offer.value && <p className="mt-2 shrink-0 text-sm font-extrabold text-[#087b52]" data-testid="offer-value">{offer.value}</p>}
     {showQr && <div ref={qrSlot} className="my-3 flex min-h-0 w-full flex-1 items-center justify-center" data-testid="offer-qr-slot">
-      {offer.consumerUrl && qrSize >= MIN_CONSUMER_QR_SIZE_PX && qrImage && <Image src={qrImage} width={qrSize} height={qrSize} unoptimized alt="Scan the OORO offer QR code" data-testid="offer-qr" className="max-h-full max-w-full rounded-lg bg-white p-2 object-contain"/>}
-      {offer.consumerUrl && qrSize >= MIN_CONSUMER_QR_SIZE_PX && qrError && <p role="alert" className="text-xs text-red-800">QR code could not be generated. Please retry.</p>}
-      {offer.consumerUrl && qrSize < MIN_CONSUMER_QR_SIZE_PX && <p role="status" data-testid="offer-qr-unsupported" className="max-w-[18rem] rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-950">This panel is too small for a scan-safe QR. Use Split 50/25/25.</p>}
+      {offer.consumerUrl && representedQrSize >= MIN_CONSUMER_QR_SIZE_PX && qrImage && <Image src={qrImage} width={qrSize} height={qrSize} unoptimized alt="Scan the OORO offer QR code" data-testid="offer-qr" className="max-h-full max-w-full rounded-lg bg-white p-2 object-contain"/>}
+      {offer.consumerUrl && representedQrSize >= MIN_CONSUMER_QR_SIZE_PX && qrError && <p role="alert" className="text-xs text-red-800">QR code could not be generated. Please retry.</p>}
+      {offer.consumerUrl && representedQrSize < MIN_CONSUMER_QR_SIZE_PX && <p role="status" data-testid="offer-qr-unsupported" className="max-w-[18rem] rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-950">This panel is too small for a scan-safe QR. Use the supported three-zone layout at 1280×720 or larger.</p>}
       {!offer.consumerUrl && previewOnly && <div data-testid="offer-qr-preview-placeholder" className="grid aspect-square max-h-full w-full max-w-[180px] place-items-center rounded-lg border border-dashed border-[#9cac9f] bg-white px-3 text-xs font-medium text-[#50615c]">Campaign tracking QR appears when the campaign is eligible.</div>}
       {!offer.consumerUrl && !previewOnly && <p role="status" data-testid="offer-qr-unavailable" className="text-xs text-[#50615c]">Offer link unavailable.</p>}
     </div>}

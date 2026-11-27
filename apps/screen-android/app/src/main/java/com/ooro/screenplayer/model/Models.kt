@@ -9,7 +9,7 @@ import java.util.UUID
 enum class PlayerStatus { UNPAIRED, SYNCING, READY, PLAYING, OFFLINE, DEGRADED, ERROR }
 enum class CreativeType { IMAGE, VIDEO }
 enum class FitMode { FIT, FILL, CENTER_CROP }
-enum class DisplayLayout { FULLSCREEN_AD, FOUR_ZONE, AD_NAV_OFFER, SPLIT_50_25_25, FULLSCREEN_SERVICE, SPECIAL_CAMPAIGN }
+enum class DisplayLayout { FULLSCREEN_AD, FOUR_ZONE, AD_NAV_OFFER, SPLIT_50_25_25, THREE_ZONE_AD_SPONSOR_QR_V1, FULLSCREEN_SERVICE, SPECIAL_CAMPAIGN }
 enum class CtaType { WEBSITE, MENU, COUPON, WHATSAPP, CALL, DIRECTIONS, APP_DOWNLOAD, LEAD_FORM }
 
 data class OfferMetadata(
@@ -65,14 +65,14 @@ data class DeviceCredentials(val deviceId: String, val screenId: String, val wor
 data class PairRequest(val pairingCode: String, val deviceId: String, val manufacturer: String, val model: String, val androidVersion: String, val appVersion: String)
 data class PairResponse(val credentials: DeviceCredentials)
 data class DeliveryQuota(val id: String, val revision: Int, val remainingPlays: Int?, val unlimited: Boolean)
-data class ManifestItem(val id: String, val campaignId: String, val creativeId: String, val type: CreativeType, val url: String, val checksum: String?, val durationSeconds: Int, val priority: Int, val startAt: Instant?, val endAt: Instant?, val daysOfWeek: Set<DayOfWeek>, val startTime: LocalTime?, val endTime: LocalTime?, val assetId: String? = null, val fitMode: FitMode = FitMode.FIT, val offer: OfferMetadata = OfferMetadata(), val playsPerLoop: Int = 1, val exclusive: Boolean = false, val sequence: Int = 0, val intervalSeconds: Double = 0.0, val scheduleId: String? = null, val deliveryQuota: DeliveryQuota? = null) {
+data class ManifestItem(val id: String, val campaignId: String, val creativeId: String, val type: CreativeType, val url: String, val checksum: String?, val durationSeconds: Int, val priority: Int, val startAt: Instant?, val endAt: Instant?, val daysOfWeek: Set<DayOfWeek>, val startTime: LocalTime?, val endTime: LocalTime?, val assetId: String? = null, val fitMode: FitMode = FitMode.FIT, val offer: OfferMetadata = OfferMetadata(), val playsPerLoop: Int = 1, val exclusive: Boolean = false, val sequence: Int = 0, val intervalSeconds: Double = 0.0, val scheduleId: String? = null, val deliveryQuota: DeliveryQuota? = null, val deliverySlot: String? = null) {
     val qrEnabled: Boolean get() = offer.qrEnabled == true && offer.consumerQrUrl != null
     /** Server-issued UTC half-open window for inclusive campaign calendar dates. */
     fun isCampaignDateEligibleAt(now: Instant): Boolean = startAt != null && endAt != null && !now.isBefore(startAt) && now.isBefore(endAt)
     /** Legacy day/hour fields are parsed for compatibility and never control delivery. */
     val hasAuthorizedDeliveryQuota: Boolean get() = deliveryQuota?.let { it.unlimited || (it.remainingPlays ?: 0) > 0 } == true
 }
-data class LayoutConfig(val primaryWidthPercent: Int = 67, val adHeightPercent: Int = 89, val qrHeightPercent: Int = 32, val newsScrollSpeed: Int = 42) {
+data class LayoutConfig(val primaryWidthPercent: Int = 67, val adHeightPercent: Int = 89, val qrHeightPercent: Int = 32, val newsScrollSpeed: Int = 42, val sponsoredHeightPercent: Int = 25, val minWidthPx: Int = 0, val minHeightPx: Int = 0, val layoutVersion: Int = 1) {
     val safePrimaryWidth: Int get() = primaryWidthPercent.coerceIn(55, 80)
     val safeAdHeight: Int get() = adHeightPercent.coerceIn(88, 92)
     val safeQrHeight: Int get() = qrHeightPercent.coerceIn(30, 35)
