@@ -9,7 +9,7 @@ import { deliverableLayoutContract } from './layout-manifest.js'
 export type ManifestReason = 'NO_ASSIGNMENT' | 'DISPLAY_DISABLED' | 'CLIENT_QUOTA_UNSUPPORTED' | 'CAMPAIGN_INACTIVE' | 'APPROVAL_REQUIRED' | 'FUNDING_REQUIRED' | 'NO_DELIVERY_QUOTA' | 'NO_APPROVED_CREATIVE' | 'ASSET_UNAVAILABLE' | 'NO_ELIGIBLE_CREATIVE'
 export type DeliveryQuota = { id: string; revision: number; remainingPlays: number | null; unlimited: boolean }
 export type DisplayManifestItem = { id: string; campaignId: string; creativeId: string; assetId: string; type: string; url: string; checksum: string; durationSeconds: number; deliverySlot?: string | null; priority: number; startAt: string | null; endAt: string | null; deliveryQuota: DeliveryQuota; fitMode: string; qrEnabled: boolean; qrTargetUrl: string | null; qrLabel: string | null; qrVersion: number; offer: Record<string, unknown> }
-export type DisplayManifest = { manifestId: string; version: number; generatedAt: string; expiresAt: string; deliveryReasons: ManifestReason[]; layout: string | { type: string; contractVersion: number; primaryWidthPercent: number; adHeightPercent: number; qrHeightPercent: number; newsScrollSpeed: number }; layoutStudioContract?: Record<string, unknown> | null; news: { scrollSpeed: number; announcements: Array<{ id: string; text: string; priority: number }> }; items: DisplayManifestItem[]; sponsoredItem?: DisplayManifestItem | null }
+export type DisplayManifest = { manifestId: string; version: number; generatedAt: string; expiresAt: string; deliveryReasons: ManifestReason[]; layout: string | { type: string; contractVersion: number; primaryWidthPercent: number; adHeightPercent: number; qrHeightPercent: number; newsScrollSpeed: number; sponsoredHeightPercent?: number; minWidthPx?: number; minHeightPx?: number }; layoutStudioContract?: Record<string, unknown> | null; news: { scrollSpeed: number; announcements: Array<{ id: string; text: string; priority: number }> }; items: DisplayManifestItem[]; sponsoredItem?: DisplayManifestItem | null }
 export type ManifestCampaignDiagnostic = { status: string; fundingStatus: string; quotaAuthorized: boolean; approvedCreativeCount: number; checksumVerifiedAssetCount: number }
 export function resolveQrConfiguration(input: { qrEnabled: boolean; qrTargetUrl?: unknown; legacyTarget?: unknown }) {
   const target = input.qrEnabled ? input.qrTargetUrl ?? input.legacyTarget : null
@@ -17,12 +17,33 @@ export function resolveQrConfiguration(input: { qrEnabled: boolean; qrTargetUrl?
 }
 export const MANIFEST_AUTHORIZATION_LEASE_MS = 15 * 60_000
 export const manifestValidUntil = (now: Date) => new Date(now.getTime() + MANIFEST_AUTHORIZATION_LEASE_MS)
-export function selectManifestDeliverySlots<T extends { campaignId: string; type: string; priority: number; id: string; deliverySlot?: string | null }>(items: T[], campaigns: Array<{ id: string; deliverySlot?: string | null }>, v3: boolean) {
+export function selectManifestDeliverySlots<T extends { campaignId: string; type: string; priority: number; id: string; deliverySlot?: string | null }>(items: T[], campaigns: Array<{ id: string; deliverySlot?: string | null }>, hasSponsoredSlot: boolean) {
   const slots = new Map(campaigns.map(campaign => [campaign.id, campaign.deliverySlot ?? 'MAIN']))
   const slotFor = (item: T) => item.deliverySlot ?? slots.get(item.campaignId) ?? 'MAIN'
   const mainItems = items.filter(item => slotFor(item) !== 'SPONSORED')
-  const sponsoredItem = v3 ? items.filter(item => slotFor(item) === 'SPONSORED' && item.type.toUpperCase() === 'IMAGE').sort((a,b) => b.priority - a.priority || a.campaignId.localeCompare(b.campaignId) || a.id.localeCompare(b.id))[0] ?? null : null
+  const sponsoredItem = hasSponsoredSlot ? items.filter(item => slotFor(item) === 'SPONSORED' && item.type.toUpperCase() === 'IMAGE').sort((a,b) => b.priority - a.priority || a.campaignId.localeCompare(b.campaignId) || a.id.localeCompare(b.id))[0] ?? null : null
   return { mainItems, sponsoredItem }
+}
+
+export const MBOX_AD_QR_SPONSOR_V1 = 'MBOX_AD_QR_SPONSOR_V1' as const
+export const MBOX_AD_QR_SPONSOR_CONTRACT_V1 = {
+  type: MBOX_AD_QR_SPONSOR_V1,
+  contractVersion: 1,
+  primaryWidthPercent: 65,
+  adHeightPercent: 100,
+  qrHeightPercent: 75,
+  sponsoredHeightPercent: 25,
+  minWidthPx: 1280,
+  minHeightPx: 720,
+} as const
+
+export function resolveCampaignLayout(requested: unknown, assigned: { contractVersion: number; primaryWidthPercent: number; adHeightPercent: number; qrHeightPercent: number; newsScrollSpeed: number }) {
+  if (requested === MBOX_AD_QR_SPONSOR_V1) return { ...MBOX_AD_QR_SPONSOR_CONTRACT_V1, newsScrollSpeed: assigned.newsScrollSpeed }
+  const v3 = assigned.contractVersion >= 3
+  if (requested === 'FULLSCREEN_AD' || requested === 'SPLIT_50_25_25') return requested
+  if (requested === 'FOUR_ZONE') return { ...assigned, type: 'FOUR_ZONE', contractVersion: 2 }
+  if (requested === 'FOUR_ZONE_V3' && v3) return { ...assigned, type: 'FOUR_ZONE', contractVersion: 3 }
+  return { type: 'FOUR_ZONE', ...assigned }
 }
 export function campaignDeliveryQuota(input: { campaignId: string; displayId: string; revision: number; status: string; fundingStatus: string; authorizedPlays: number | null; unlimited: boolean; consumedPlays: number }): DeliveryQuota | null {
   if (input.status !== 'ACTIVE' || !['INTERNAL_TEST', 'PAID', 'FUNDED'].includes(input.fundingStatus)) return null
@@ -123,22 +144,21 @@ export async function buildDisplayManifest(displayId: string, now = new Date()):
   const leadCampaign = leadCampaignId ? eligible.find(({ campaign }) => campaign.id === leadCampaignId)?.campaign : undefined
   const metadata = leadCampaign?.metadata && typeof leadCampaign.metadata === 'object' && !Array.isArray(leadCampaign.metadata) ? leadCampaign.metadata as Record<string, unknown> : {}
   const requestedLayout = metadata.presentationLayout
-  const layout = requestedLayout === 'FULLSCREEN_AD' || requestedLayout === 'SPLIT_50_25_25'
-    ? requestedLayout
-    : requestedLayout === 'FOUR_ZONE'
-      ? { ...assignedLayout, type: 'FOUR_ZONE', contractVersion: 2 }
-      : requestedLayout === 'FOUR_ZONE_V3' && v3
-        ? { ...assignedLayout, type: 'FOUR_ZONE', contractVersion: 3 }
-      : assignedLayout
+  const layout = resolveCampaignLayout(requestedLayout, assignedLayout)
+  const builtInAdQrSponsor = typeof layout !== 'string' && layout.type === MBOX_AD_QR_SPONSOR_V1
+  const hasSponsoredSlot = v3 || builtInAdQrSponsor
   const city = display.vehicle?.city
-  const announcements = v3 ? [] : await prisma.newsAnnouncement.findMany({ where: { active: true, AND: [{ OR: [{ startsAt: null }, { startsAt: { lte: now } }] }, { OR: [{ endsAt: null }, { endsAt: { gt: now } }] }, display.vehicleId ? { OR: [{ vehicleId: null }, { vehicleId: display.vehicleId }] } : { vehicleId: null }, city ? { OR: [{ city: null }, { city }] } : { city: null }] }, orderBy: [{ priority: 'desc' }, { createdAt: 'desc' }], take: 12, select: { id: true, text: true, priority: true } })
-  const { mainItems, sponsoredItem } = selectManifestDeliverySlots(deliveryItems, eligible.map(({ campaign }) => ({ id: campaign.id, deliverySlot: campaign.deliverySlot })), v3)
+  const announcements = v3 || builtInAdQrSponsor ? [] : await prisma.newsAnnouncement.findMany({ where: { active: true, AND: [{ OR: [{ startsAt: null }, { startsAt: { lte: now } }] }, { OR: [{ endsAt: null }, { endsAt: { gt: now } }] }, display.vehicleId ? { OR: [{ vehicleId: null }, { vehicleId: display.vehicleId }] } : { vehicleId: null }, city ? { OR: [{ city: null }, { city }] } : { city: null }] }, orderBy: [{ priority: 'desc' }, { createdAt: 'desc' }], take: 12, select: { id: true, text: true, priority: true } })
+  const { mainItems, sponsoredItem } = selectManifestDeliverySlots(deliveryItems, eligible.map(({ campaign }) => ({ id: campaign.id, deliverySlot: campaign.deliverySlot })), hasSponsoredSlot)
   const assignment = display.layoutAssignments[0]
-  const candidateLayout = assignment?.template.state === 'PUBLISHED' && assignment.template.mode === 'CUSTOM' && assignment.revision.contract && typeof assignment.revision.contract === 'object' && !Array.isArray(assignment.revision.contract) ? assignment.revision.contract as Record<string, unknown> : null
+  // The named first-party preset has a fixed three-zone renderer. A separately
+  // assigned Custom Layout must not silently add widgets to that contract.
+  const candidateLayout = !builtInAdQrSponsor && assignment?.template.state === 'PUBLISHED' && assignment.template.mode === 'CUSTOM' && assignment.revision.contract && typeof assignment.revision.contract === 'object' && !Array.isArray(assignment.revision.contract) ? assignment.revision.contract as Record<string, unknown> : null
   const layoutStudioContract = candidateLayout ? deliverableLayoutContract(candidateLayout, mainItems, sponsoredItem) : null
   const versionItems = mainItems.map((item) => ({ ...item, offer: Object.fromEntries(Object.entries(item.offer).filter(([key]) => key !== 'scanCount')) }))
   const news = { scrollSpeed: configured?.newsScrollSpeed ?? 42, announcements }
-  const digest = createHash('sha256').update(JSON.stringify({ displayId, layout, leadCampaignId, layoutStudioContract, news, deliveryReasons: reasons, items: versionItems, ...(v3 ? { sponsoredItem } : {}) })).digest('hex')
-  return { manifest: { manifestId: `manifest-${digest.slice(0, 24)}`, version: manifestVersionFromDigest(digest), generatedAt: now.toISOString(), expiresAt: manifestValidUntil(now).toISOString(), deliveryReasons: reasons, layout, ...(layoutStudioContract ? { layoutStudioContract } : {}), news, items: mainItems, ...(v3 ? { sponsoredItem } : {}) }, reasons }
+  const manifestNews = news
+  const digest = createHash('sha256').update(JSON.stringify({ displayId, layout, leadCampaignId, layoutStudioContract, news: manifestNews, deliveryReasons: reasons, items: versionItems, ...(hasSponsoredSlot ? { sponsoredItem } : {}) })).digest('hex')
+  return { manifest: { manifestId: `manifest-${digest.slice(0, 24)}`, version: manifestVersionFromDigest(digest), generatedAt: now.toISOString(), expiresAt: manifestValidUntil(now).toISOString(), deliveryReasons: reasons, layout, ...(layoutStudioContract ? { layoutStudioContract } : {}), news: manifestNews, items: mainItems, ...(hasSponsoredSlot ? { sponsoredItem } : {}) }, reasons }
 }
 const emptyManifest = (now: Date): DisplayManifest => ({ manifestId: 'manifest-empty', version: 0, generatedAt: now.toISOString(), expiresAt: manifestValidUntil(now).toISOString(), deliveryReasons: [], layout: { type: 'FOUR_ZONE', contractVersion: 2, primaryWidthPercent: 67, adHeightPercent: 86, qrHeightPercent: 47, newsScrollSpeed: 42 }, news: { scrollSpeed: 42, announcements: [] }, items: [] })

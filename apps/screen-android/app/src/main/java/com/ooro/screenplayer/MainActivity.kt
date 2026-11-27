@@ -409,6 +409,32 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
     Box(rootModifier) {
         if (customLayout != null) {
             CustomLayoutPlayer(vm, manifest, customLayout, item, playbackOffset, verifiedAssetIds, pairedScreenId, preview, manifestExpired, cachedPlaybackAllowed, scheduleClock, emptyPlaybackMessage)
+        } else if (manifest.layout == DisplayLayout.MBOX_AD_QR_SPONSOR_V1) BoxWithConstraints(Modifier.fillMaxSize().clipToBounds()) {
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            val widthPx = with(density) { maxWidth.roundToPx() }
+            val heightPx = with(density) { maxHeight.roundToPx() }
+            val minimumWidth = manifest.layoutConfig.minWidthPx.takeIf { it > 0 } ?: 1280
+            val minimumHeight = manifest.layoutConfig.minHeightPx.takeIf { it > 0 } ?: 720
+            if (!com.ooro.screenplayer.player.supportsMboxAdQrSponsorResolution(widthPx, heightPx) || widthPx < minimumWidth || heightPx < minimumHeight) {
+                Box(Modifier.fillMaxSize().background(Color(0xFF111820)).testTag("mbox-ad-qr-unsupported"), contentAlignment = Alignment.Center) {
+                    Text("This built-in layout needs at least ${minimumWidth}×${minimumHeight} pixels for a scan-safe QR. Choose a supported larger screen layout.", color = Color.White, textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.padding(32.dp))
+                }
+            } else Row(Modifier.fillMaxSize().clipToBounds()) {
+                val primaryWidth = manifest.layoutConfig.primaryWidthPercent.coerceIn(1, 99)
+                val qrHeight = manifest.layoutConfig.qrHeightPercent.coerceIn(1, 99)
+                val sponsoredHeight = manifest.layoutConfig.sponsoredHeightPercent.coerceIn(1, 99)
+                Box(Modifier.weight(primaryWidth.toFloat()).fillMaxHeight().clipToBounds().semantics { contentDescription = "MboxAdQrSponsorRegion:main-ad" }.testTag("mbox-ad-qr-main")) {
+                    PrimaryAdRegion(vm, Modifier.fillMaxSize(), item, playbackOffset, preview, emptyPlaybackMessage)
+                }
+                Column(Modifier.weight((100 - primaryWidth).toFloat()).fillMaxHeight().clipToBounds()) {
+                    Box(Modifier.weight(qrHeight.toFloat()).fillMaxWidth().clipToBounds().semantics { contentDescription = "MboxAdQrSponsorRegion:qr-offer" }.testTag("mbox-ad-qr-offer")) {
+                        OfferPanel(displayedOffer, Modifier.fillMaxSize())
+                    }
+                    Box(Modifier.weight(sponsoredHeight.toFloat()).fillMaxWidth().clipToBounds().semantics { contentDescription = "MboxAdQrSponsorRegion:sponsored-ad" }.testTag("mbox-ad-qr-sponsored")) {
+                        SponsoredAdRegion(vm, sponsoredItem, Modifier.fillMaxSize(), preview?.sponsoredAssetPath)
+                    }
+                }
+            }
         } else if (manifest.layout == DisplayLayout.FOUR_ZONE || manifest.layout == DisplayLayout.AD_NAV_OFFER) Row(Modifier.fillMaxSize().clipToBounds()) {
             val adWidth = if (usesSidebar80(manifest.layout, geometryVersion)) 80 else manifest.layoutConfig.safePrimaryWidth
             val sidebarSplit = if (usesSidebar80(manifest.layout, geometryVersion)) 50 else manifest.layoutConfig.safeQrHeight

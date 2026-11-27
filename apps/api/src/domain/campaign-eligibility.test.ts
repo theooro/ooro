@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { campaignDeliveryQuota, deliveryAssetUrl, hasVerifiedAssetMetadata, manifestDeliveryReasons, manifestValidUntil, MANIFEST_AUTHORIZATION_LEASE_MS, manifestVersionFor, manifestVersionFromDigest, resolveQrConfiguration, selectManifestDeliverySlots } from './campaign-eligibility.js'
+import { campaignDeliveryQuota, deliveryAssetUrl, hasVerifiedAssetMetadata, manifestDeliveryReasons, manifestValidUntil, MANIFEST_AUTHORIZATION_LEASE_MS, manifestVersionFor, manifestVersionFromDigest, MBOX_AD_QR_SPONSOR_CONTRACT_V1, MBOX_AD_QR_SPONSOR_V1, resolveCampaignLayout, resolveQrConfiguration, selectManifestDeliverySlots } from './campaign-eligibility.js'
 import { safeDestination } from './qr-destination.js'
 
 test('manifest versions fit persisted signed INT4 fields', () => {
@@ -30,6 +30,29 @@ test('sponsored creative is selected independently and never promoted from a mai
   const v2 = selectManifestDeliverySlots(items, campaigns, false)
   assert.deepEqual(v2.mainItems.map(item => item.id), ['main-a'])
   assert.equal(v2.sponsoredItem, null)
+})
+
+test('built-in MBOX ad/QR/sponsor preset emits a versioned map-free contract and independently authorized sponsor slot', () => {
+  const assigned = { contractVersion: 2, primaryWidthPercent: 67, adHeightPercent: 86, qrHeightPercent: 47, newsScrollSpeed: 42 }
+  const layout = resolveCampaignLayout(MBOX_AD_QR_SPONSOR_V1, assigned)
+  assert.deepEqual(layout, { ...MBOX_AD_QR_SPONSOR_CONTRACT_V1, newsScrollSpeed: 42 })
+  const slots = selectManifestDeliverySlots([
+    { id: 'main', campaignId: 'main', type: 'IMAGE', priority: 1, deliverySlot: 'MAIN' },
+    { id: 'sponsor', campaignId: 'sponsor', type: 'IMAGE', priority: 1, deliverySlot: 'SPONSORED' },
+    { id: 'sponsor-video', campaignId: 'video', type: 'VIDEO', priority: 99, deliverySlot: 'SPONSORED' },
+  ], [], layout.type === MBOX_AD_QR_SPONSOR_V1)
+  assert.deepEqual(slots.mainItems.map(item => item.id), ['main'])
+  assert.equal(slots.sponsoredItem?.id, 'sponsor')
+  assert.equal('map' in layout, false)
+  assert.equal('navigation' in layout, false)
+})
+
+test('built-in MBOX preset does not change legacy FOUR_ZONE or Standard V3 contract selection', () => {
+  const assignedV2 = { contractVersion: 2, primaryWidthPercent: 67, adHeightPercent: 86, qrHeightPercent: 47, newsScrollSpeed: 42 }
+  const assignedV3 = { ...assignedV2, contractVersion: 3, primaryWidthPercent: 80, adHeightPercent: 85, qrHeightPercent: 50 }
+  assert.deepEqual(resolveCampaignLayout('FOUR_ZONE', assignedV2), { ...assignedV2, type: 'FOUR_ZONE', contractVersion: 2 })
+  assert.deepEqual(resolveCampaignLayout('FOUR_ZONE_V3', assignedV3), { ...assignedV3, type: 'FOUR_ZONE', contractVersion: 3 })
+  assert.deepEqual(resolveCampaignLayout('FOUR_ZONE_V3', assignedV2), { ...assignedV2, type: 'FOUR_ZONE' })
 })
 
 test('manifest expiry is refresh metadata, not campaign delivery eligibility', () => {

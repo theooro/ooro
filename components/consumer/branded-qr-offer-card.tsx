@@ -11,10 +11,12 @@ type Props = {
   previewOnly?: boolean;
   ctaHref?: string | null;
   showQr?: boolean;
+  /** Screen pixels represented by one CSS pixel in a scaled layout preview. */
+  previewScale?: number;
   className?: string;
 };
 
-export function BrandedQrOfferCard({ offer: source, qrUrl, previewOnly = false, ctaHref, showQr = true, className = "" }: Props) {
+export function BrandedQrOfferCard({ offer: source, qrUrl, previewOnly = false, ctaHref, showQr = true, previewScale = 1, className = "" }: Props) {
   const offer = useMemo(() => mapBrandedOffer({ ...source, consumerUrl: qrUrl ?? source.consumerUrl ?? source.qrUrl }), [source, qrUrl]);
   const qrSlot = useRef<HTMLDivElement>(null);
   const [slotSize, setSlotSize] = useState({ width: 0, height: 0 });
@@ -30,7 +32,7 @@ export function BrandedQrOfferCard({ offer: source, qrUrl, previewOnly = false, 
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
-  const qrSize = offerQrSize(slotSize.width, slotSize.height, 0, 4);
+  const qrSize = offerQrSize(slotSize.width * previewScale, slotSize.height * previewScale, 0, 4);
   useEffect(() => {
     let cancelled = false;
     setQrImage(null);
@@ -54,7 +56,7 @@ export function BrandedQrOfferCard({ offer: source, qrUrl, previewOnly = false, 
     {offer.supportingText && <p className="mt-1 max-w-full shrink-0 text-xs leading-snug text-[#50615c]" data-testid="offer-supporting-copy">{offer.supportingText}</p>}
     {offer.value && <p className="mt-2 shrink-0 text-sm font-extrabold text-[#087b52]" data-testid="offer-value">{offer.value}</p>}
     {showQr && <div ref={qrSlot} className="my-3 flex min-h-0 w-full flex-1 items-center justify-center" data-testid="offer-qr-slot">
-      {offer.consumerUrl && qrSize >= MIN_CONSUMER_QR_SIZE_PX && qrImage && <Image src={qrImage} width={qrSize} height={qrSize} unoptimized alt="Scan the OORO offer QR code" data-testid="offer-qr" className="max-h-full max-w-full rounded-lg bg-white p-2 object-contain"/>}
+      {offer.consumerUrl && qrSize >= MIN_CONSUMER_QR_SIZE_PX && qrImage && <Image src={qrImage} width={Math.ceil(qrSize / previewScale)} height={Math.ceil(qrSize / previewScale)} unoptimized alt="Scan the OORO offer QR code" data-testid="offer-qr" className="max-h-full max-w-full rounded-lg bg-white p-2 object-contain"/>}
       {offer.consumerUrl && qrSize >= MIN_CONSUMER_QR_SIZE_PX && qrError && <p role="alert" className="text-xs text-red-800">QR code could not be generated. Please retry.</p>}
       {offer.consumerUrl && qrSize < MIN_CONSUMER_QR_SIZE_PX && <p role="status" data-testid="offer-qr-unsupported" className="max-w-[18rem] rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-950">This panel is too small for a scan-safe QR. Use Split 50/25/25.</p>}
       {!offer.consumerUrl && previewOnly && <div data-testid="offer-qr-preview-placeholder" className="grid aspect-square max-h-full w-full max-w-[180px] place-items-center rounded-lg border border-dashed border-[#9cac9f] bg-white px-3 text-xs font-medium text-[#50615c]">Campaign tracking QR appears when the campaign is eligible.</div>}

@@ -18,6 +18,10 @@ internal fun assumeDisposableEmulator() {
 /** Prevent Android's first immersive-mode education overlay from covering UI acceptance fixtures. */
 internal fun prepareDisposableEmulatorUi(device: UiDevice) {
     assumeDisposableEmulator()
+    // A previous screenshot fixture may have failed between `wm size` and its
+    // cleanup. Normalize disposable AVDs before each fixture so test ordering
+    // cannot leak an overridden resolution into the next renderer test.
+    device.executeShellCommand("wm size reset")
     device.executeShellCommand("settings put secure immersive_mode_confirmations confirmed")
     device.waitForIdle()
 }
