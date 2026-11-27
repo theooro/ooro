@@ -245,7 +245,8 @@ private fun RenderTestScreen(
         sponsoredItem = sponsorItem,
         layoutStudioContract = if (customBoundMedia) customBoundContract(selectedAsset.name) else null,
     )
-    val paths = remember(assetDirectory, assets) {
+    val paths = remember(assetDirectory, assets, scenario) {
+        if (scenario == "OFFLINE_MISSING_CACHE") return@remember emptyMap()
         (assets + SponsoredPreviewAsset).associate { asset ->
             val fileName = asset.name + when { asset.video -> ".mp4"; asset.name == "jpeg-exif-rotated" -> ".jpg"; else -> ".png" }
             "render-test-${asset.name}" to File(assetDirectory, fileName).absolutePath

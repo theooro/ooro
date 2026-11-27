@@ -600,7 +600,7 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
         else if (path == null) {
             val retained = lastReadyImage
             if (retained != null) Image(retained.first, "OORO creative", Modifier.fillMaxSize().clipToBounds(), contentScale = retained.second.toContentScale())
-            else Box(Modifier.fillMaxSize().background(Color.Black))
+            else CreativeLoadPlaceholder("Verifying cached creative…", "creative-cache-pending")
         }
         else if (item.type == CreativeType.IMAGE) {
             if (path != null) BoxWithConstraints(Modifier.fillMaxSize().clipToBounds()) {
@@ -633,10 +633,14 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
                 LaunchedEffect(item.id, playbackKey, path, widthPx, heightPx) {
                     val loaded = snapshotFlow { bitmapState.value to doneState.value }.first { it.first != null || it.second }
                     if (preview == null) {
-                        if (recordProof) {
+                        if (loaded.first == null) {
+                            // An undecodable cached file was never rendered. Exclude it from
+                            // this process's verified set and do not create a playback proof.
+                            vm?.markAssetUnavailable(item.id)
+                        } else if (recordProof) {
                             vm?.creativeStarted(item)
-                            if (loaded.first == null) vm?.creativeFinished(item, 0, false, "IMAGE_DECODE_FAILED")
-                            else { kotlinx.coroutines.delay(item.durationSeconds * 1000L); vm?.creativeFinished(item, item.durationSeconds * 1000L, true) }
+                            kotlinx.coroutines.delay(item.durationSeconds * 1000L)
+                            vm?.creativeFinished(item, item.durationSeconds * 1000L, true)
                         }
                     }
                 }
@@ -651,9 +655,10 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
                 else {
                     val retained = lastReadyImage
                     if (retained != null) Image(retained.first, "OORO creative", Modifier.fillMaxSize().clipToBounds(), contentScale = retained.second.toContentScale())
-                    else Box(Modifier.fillMaxSize().background(Color.Black))
+                    else if (doneState.value) CreativeLoadPlaceholder("Cached creative unavailable · waiting for refresh", "creative-cache-invalid")
+                    else CreativeLoadPlaceholder("Loading cached creative…", "creative-cache-pending")
                 }
-            } else Box(Modifier.fillMaxSize().background(Color.Black))
+            } else CreativeLoadPlaceholder("Verifying cached creative…", "creative-cache-pending")
         }
         else {
             val context = LocalContext.current
@@ -738,6 +743,14 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
         }
     }
 }
+
+@Composable
+private fun CreativeLoadPlaceholder(message: String, tag: String) {
+    Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+        Text(message, color = Color.LightGray, fontSize = 20.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.padding(24.dp).testTag(tag))
+    }
+}
+
 private fun captureLastVideoFrame(view: PlayerView?, fitMode: FitMode): Pair<androidx.compose.ui.graphics.ImageBitmap, FitMode>? {
     val surface = view?.videoSurfaceView
     val texture = surface as? TextureView ?: run {

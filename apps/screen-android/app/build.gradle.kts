@@ -7,7 +7,7 @@ plugins {
 kapt { correctErrorTypes = true }
 
 android { namespace = "com.ooro.screenplayer"; compileSdk = 35
-    defaultConfig { applicationId = "com.ooro.screenplayer"; minSdk = 26; targetSdk = 35; versionCode = 7; versionName = "0.3.2-staging.qr-map"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+    defaultConfig { applicationId = "com.ooro.screenplayer"; minSdk = 26; targetSdk = 35; versionCode = 8; versionName = "0.3.3-staging.offline"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true; buildConfig = true }
