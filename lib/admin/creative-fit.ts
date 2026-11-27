@@ -14,7 +14,7 @@ export function creativePlacement(layout: PreviewLayout, slot: "MAIN" | "SPONSOR
     : layout === "FOUR_ZONE_V3"
       ? { x: 0, y: 0, width: 0.8, height: 0.85 }
     : layout === "FOUR_ZONE"
-    ? { x: 0, y: 0, width: 0.67, height: 0.86 }
+    ? { x: 0, y: 0, width: 0.8, height: 0.88 }
     : layout === "SPLIT_50_25_25"
       ? { x: 0, y: 0, width: 0.5, height: 1 }
       : { x: 0, y: 0, width: 1, height: 1 };

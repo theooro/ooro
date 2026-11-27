@@ -12,6 +12,17 @@ export type DeliveryQuota = { id: string; revision: number; remainingPlays: numb
 export type DisplayManifestItem = { id: string; campaignId: string; creativeId: string; assetId: string; type: string; url: string; checksum: string; durationSeconds: number; deliverySlot?: string | null; priority: number; sequence?: number; startAt: string | null; endAt: string | null; deliveryQuota: DeliveryQuota; fitMode: string; qrEnabled: boolean; qrTargetUrl: string | null; qrLabel: string | null; qrVersion: number; offer: Record<string, unknown> }
 export type DisplayManifest = { manifestId: string; version: number; generatedAt: string; expiresAt: string; deliveryReasons: ManifestReason[]; layout: string | { type: string; contractVersion: number; primaryWidthPercent: number; adHeightPercent?: number; qrHeightPercent: number; newsScrollSpeed: number; sponsoredHeightPercent?: number; minWidthPx?: number; minHeightPx?: number }; layoutStudioContract?: Record<string, unknown> | null; news: { scrollSpeed: number; announcements: Array<{ id: string; text: string; priority: number }> }; items: DisplayManifestItem[]; sponsoredItem?: DisplayManifestItem | null; sponsoredSlotDiagnostic?: { code: string; message: string } }
 export type ManifestCampaignDiagnostic = { status: string; fundingStatus: string; quotaAuthorized: boolean; approvedCreativeCount: number; checksumVerifiedAssetCount: number }
+export function defaultFourZoneLayout(configured: { primaryWidthPercent?: number | null; adHeightPercent?: number | null; qrHeightPercent?: number | null; newsScrollSpeed?: number | null } | null | undefined, contractVersion: number) {
+  const version = Math.max(1, contractVersion)
+  return {
+    type: 'FOUR_ZONE',
+    contractVersion: version,
+    primaryWidthPercent: version >= 2 ? 80 : configured?.primaryWidthPercent ?? 67,
+    adHeightPercent: version >= 3 ? 85 : version === 2 ? 88 : configured?.adHeightPercent ?? 86,
+    qrHeightPercent: version >= 2 ? 50 : configured?.qrHeightPercent ?? 47,
+    newsScrollSpeed: configured?.newsScrollSpeed ?? 42,
+  }
+}
 export function resolveQrConfiguration(input: { qrEnabled: boolean; qrTargetUrl?: unknown }) {
   const target = input.qrEnabled ? input.qrTargetUrl : null
   return { enabled: input.qrEnabled, destination: input.qrEnabled ? safeDestination(target, false) : null }
@@ -129,7 +140,9 @@ export async function buildDisplayManifest(displayId: string, now = new Date()):
   const configured = display.zoneConfig
   const contractVersion = configured?.layoutContractVersion ?? 2
   const v3 = contractVersion >= 3
-  const assignedLayout = { type: 'FOUR_ZONE', contractVersion, primaryWidthPercent: v3 ? 80 : configured?.primaryWidthPercent ?? 67, adHeightPercent: v3 ? 85 : configured?.adHeightPercent ?? 86, qrHeightPercent: v3 ? 50 : configured?.qrHeightPercent ?? 47, newsScrollSpeed: configured?.newsScrollSpeed ?? 42 }
+  // Keep older contract geometry intact and serialize contract v2/v3 bounds
+  // exactly as the Android renderer consumes them.
+  const assignedLayout = defaultFourZoneLayout(configured, contractVersion)
   const leadCampaignId = deliveryItems.find(item => item.deliverySlot !== 'SPONSORED')?.campaignId
   const leadCampaign = leadCampaignId ? eligible.find(({ campaign }) => campaign.id === leadCampaignId)?.campaign : undefined
   const metadata = leadCampaign?.metadata && typeof leadCampaign.metadata === 'object' && !Array.isArray(leadCampaign.metadata) ? leadCampaign.metadata as Record<string, unknown> : {}
@@ -178,4 +191,4 @@ export async function buildDisplayManifest(displayId: string, now = new Date()):
   const digest = createHash('sha256').update(JSON.stringify({ displayId, layout, leadCampaignId, layoutStudioContract, news, deliveryReasons: reasons, items: versionItems, ...(includeSponsoredSlot ? { sponsoredItem } : {}), sponsoredSlotDiagnostic: sponsorDiagnostic })).digest('hex')
   return { manifest: { manifestId: `manifest-${digest.slice(0, 24)}`, version: manifestVersionFromDigest(digest), generatedAt: now.toISOString(), expiresAt: manifestValidUntil(now).toISOString(), deliveryReasons: reasons, layout, ...(layoutStudioContract ? { layoutStudioContract } : {}), news, items: mainItems, ...(includeSponsoredSlot ? { sponsoredItem } : {}), sponsoredSlotDiagnostic: sponsorDiagnostic }, reasons }
 }
-const emptyManifest = (now: Date): DisplayManifest => ({ manifestId: 'manifest-empty', version: 0, generatedAt: now.toISOString(), expiresAt: manifestValidUntil(now).toISOString(), deliveryReasons: [], layout: { type: 'FOUR_ZONE', contractVersion: 2, primaryWidthPercent: 67, adHeightPercent: 86, qrHeightPercent: 47, newsScrollSpeed: 42 }, news: { scrollSpeed: 42, announcements: [] }, items: [] })
+const emptyManifest = (now: Date): DisplayManifest => ({ manifestId: 'manifest-empty', version: 0, generatedAt: now.toISOString(), expiresAt: manifestValidUntil(now).toISOString(), deliveryReasons: [], layout: { type: 'FOUR_ZONE', contractVersion: 2, primaryWidthPercent: 80, adHeightPercent: 88, qrHeightPercent: 50, newsScrollSpeed: 42 }, news: { scrollSpeed: 42, announcements: [] }, items: [] })

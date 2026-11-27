@@ -13,6 +13,8 @@ test("placement geometry fits the supported screen layouts", () => {
   assert.equal(creativePlacement("FOUR_ZONE_V3").height, 0.85);
   assert.equal(creativePlacement("FOUR_ZONE_V3", "SPONSORED").y, 0.85);
   assert.equal(creativePlacement("FOUR_ZONE_V3", "SPONSORED").height, 0.15);
+  assert.equal(creativePlacement("FOUR_ZONE").width, 0.8);
+  assert.equal(creativePlacement("FOUR_ZONE").height, 0.88);
   assert.deepEqual(creativePlacement("THREE_ZONE_AD_SPONSOR_QR_V1"), { x: 0, y: 0, width: 0.65, height: 1, aspectRatio: 1.1555555555555554 });
   assert.equal(creativePlacement("THREE_ZONE_AD_SPONSOR_QR_V1", "SPONSORED").aspectRatio, (16 / 9) * 1.4);
   assert.deepEqual(THREE_ZONE_AD_SPONSOR_QR_MIN_RESOLUTION, { width: 1280, height: 720 });
