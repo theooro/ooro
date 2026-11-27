@@ -25,22 +25,32 @@ import org.junit.runner.RunWith
 class OfferPanelScreenshotTest {
     @Test fun capturesRequestedOfferAndFallbackStatesAt1280Landscape() {
         val cases = listOf(
+            // The current four-zone offer pane cannot reserve a scan-safe QR
+            // and keep its copy/CTA inside the short 20% × 50% region.
             "OFFER_BRAND" to true,
             "OFFER_LONG_BRAND" to true,
             "OFFER_LONG_TITLE" to true,
             "OFFER_BRAND_ONLY" to true,
+            "OFFER_MINIMAL_FIELDS" to true,
             "OFFER_MISSING_QR" to false,
             "OFFER_INVALID_QR" to false,
             "OFFER_EXPIRED" to false,
             "OFFER_FALLBACK" to false
         )
-        cases.forEach { (scenario, brandOffer) -> capture(scenario, brandOffer, "offer-$scenario-1280x720.png") }
+        cases.forEach { (scenario, brandOffer) ->
+            capture(
+                scenario,
+                brandOffer,
+                "offer-$scenario-1280x720.png",
+                expectUnsupportedQr = brandOffer,
+            )
+        }
     }
 
-    @Test fun v1ManifestKeepsLegacyOfferPanelBehavior() =
+    @Test fun v1ManifestUsesSharedBrandedOfferCardInLegacyGeometry() =
         capture("OFFER_V1_LEGACY", true, "offer-v1-legacy-1280x720.png", expectedLegacy = true)
 
-    @Test fun v2ManifestKeepsLegacyOfferPanelBehavior() =
+    @Test fun v2ManifestUsesSharedBrandedOfferCardInV3Geometry() =
         capture("OFFER_V2_LEGACY", true, "offer-v2-legacy-1280x720.png", expectedLegacy = true, expectedSidebar80 = true)
 
     @Test fun adaptsOfferCardAndLongTextToSmallerLandscapeResolution() {
@@ -52,7 +62,7 @@ class OfferPanelScreenshotTest {
         try {
             device.executeShellCommand("wm size 854x480")
             android.os.SystemClock.sleep(900)
-            capture("OFFER_LONG_TITLE", true, "offer-OFFER_LONG_TITLE-854x480.png")
+            capture("OFFER_LONG_TITLE", true, "offer-OFFER_LONG_TITLE-854x480.png", expectUnsupportedQr = true)
             capture("OFFER_FALLBACK", false, "offer-OFFER_FALLBACK-854x480.png")
         } finally {
             device.executeShellCommand("wm size ${oldWidth}x${oldHeight}")
@@ -75,7 +85,7 @@ class OfferPanelScreenshotTest {
         assertEquals(destination, decoded.text)
     }
 
-    private fun capture(scenario: String, expectedBrandOffer: Boolean, fileName: String, expectedLegacy: Boolean = false, expectedSidebar80: Boolean = false) {
+    private fun capture(scenario: String, expectedBrandOffer: Boolean, fileName: String, expectedLegacy: Boolean = false, expectedSidebar80: Boolean = false, expectUnsupportedQr: Boolean = false) {
         assumeDisposableEmulator()
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
@@ -89,14 +99,26 @@ class OfferPanelScreenshotTest {
             .putExtra("ticker", false)
             .putExtra("qr", true)
         ActivityScenario.launch<RenderTestActivity>(intent).use {
-            val state = when { expectedLegacy -> "OoroOfferState:legacy"; expectedBrandOffer -> "OoroOfferState:brand"; else -> "OoroOfferState:fallback" }
+            val state = when {
+                expectedBrandOffer -> "OoroOfferState:brand"
+                scenario in setOf("OFFER_FALLBACK", "OFFER_EXPIRED") -> "OoroOfferState:fallback"
+                else -> "OoroOfferState:destination-unavailable"
+            }
             assertTrue("offer state missing for $scenario", device.wait(Until.hasObject(By.desc(state)), 10_000))
             if (expectedBrandOffer) {
-                val qrDescription = if (expectedLegacy) "Advertisement QR code" else "Brand offer QR code"
-                assertTrue("brand QR missing for $scenario", device.wait(Until.hasObject(By.desc(qrDescription)), 10_000))
+                if (expectUnsupportedQr) {
+                    assertTrue("undersized QR must explain the limitation", device.wait(Until.hasObject(By.desc("QR unsupported at this panel size")), 10_000))
+                    assertTrue("unsupported QR must recommend split layout", device.hasObject(By.textContains("Use split 50/25/25")))
+                } else {
+                    assertTrue("brand QR missing for $scenario", device.wait(Until.hasObject(By.desc("Brand offer QR code")), 10_000))
+                }
             } else {
-                assertTrue("OORO fallback headline missing for $scenario", device.wait(Until.hasObject(By.text("Advertise your business here")), 5_000))
-                if (scenario == "OFFER_FALLBACK") assertTrue("OORO advertising contact is incorrect", device.hasObject(By.text("+91 7981399132")))
+                if (scenario in setOf("OFFER_FALLBACK", "OFFER_EXPIRED")) {
+                    assertTrue("OORO fallback headline missing for $scenario", device.wait(Until.hasObject(By.text("Advertise your business here")), 5_000))
+                    if (scenario == "OFFER_FALLBACK") assertTrue("OORO advertising contact is incorrect", device.hasObject(By.text("+91 7981399132")))
+                } else {
+                    assertTrue("missing QR destination must be clear", device.wait(Until.hasObject(By.text("Offer link unavailable")), 5_000))
+                }
                 assertTrue("fallback must not invent a QR", device.findObject(By.desc("Brand offer QR code")) == null)
             }
             device.wait(Until.findObject(By.text("Got it")), 500)?.click()

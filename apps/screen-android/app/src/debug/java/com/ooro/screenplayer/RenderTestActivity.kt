@@ -197,14 +197,15 @@ private fun RenderTestScreen(
         assets.map { asset ->
             val fileName = asset.name + when { asset.video -> ".mp4"; asset.name == "jpeg-exif-rotated" -> ".jpg"; else -> ".png" }
             val offer = when (scenario) {
-                "OFFER_LONG_BRAND" -> OfferMetadata(brandName = "THE EXTRAORDINARILY LONG SYNTHETIC BRAND NAME", promotionalText = "Sample message for layout verification", ctaLabel = "TEST LINK", qrUrl = "https://example.invalid/long-brand")
-                "OFFER_LONG_TITLE" -> OfferMetadata(brandName = "OORO TEST PARTNER", offerTitle = "A deliberately long synthetic promotional title that must truncate safely in the offer panel", ctaLabel = "TEST LINK", qrUrl = "https://example.invalid/long-title")
-                "OFFER_LONG_CTA" -> OfferMetadata(brandName = "SYNTHETIC TEST BRAND", promotionalText = "Synthetic offer message", ctaLabel = "SCAN THIS SYNTHETIC TEST LINK FOR MORE DETAILS AND INFORMATION", qrUrl = "https://example.invalid/long-cta")
-                "OFFER_BRAND_ONLY" -> OfferMetadata(brandName = "SYNTHETIC BRAND ONLY", ctaLabel = "VISIT BRAND", qrUrl = "https://example.invalid/brand-only")
+                "OFFER_LONG_BRAND" -> OfferMetadata(brandName = "THE EXTRAORDINARILY LONG SYNTHETIC BRAND NAME", offerTitle = "Find your next favourite", promotionalText = "Sample message for layout verification", offerValue = "10% OFF", ctaLabel = "SCAN TO GET 10% OFF", qrUrl = "https://theooro.com/long-brand")
+                "OFFER_LONG_TITLE" -> OfferMetadata(brandName = "OORO TEST PARTNER", offerTitle = "A deliberately long synthetic promotional title that must truncate safely in the offer panel", promotionalText = "A small supporting line for layout verification", offerValue = "15% OFF", ctaLabel = "SCAN TO GET 15% OFF", qrUrl = "https://theooro.com/long-title")
+                "OFFER_LONG_CTA" -> OfferMetadata(brandName = "OORO TEST PARTNER", offerTitle = "Find your next favourite", promotionalText = "Synthetic offer for the CTA fit check", offerValue = "10% OFF", ctaLabel = "SCAN TO GET TEN PERCENT OFF TODAY", qrUrl = "https://theooro.com/long-cta")
+                "OFFER_BRAND_ONLY" -> OfferMetadata(brandName = "SYNTHETIC BRAND ONLY", offerTitle = "Find your next favourite", offerValue = "20% OFF", ctaLabel = "VISIT BRAND", qrUrl = "https://theooro.com/brand-only")
+                "OFFER_MINIMAL_FIELDS" -> OfferMetadata(qrUrl = "https://theooro.com")
                 "OFFER_MISSING_QR" -> OfferMetadata(brandName = "SYNTHETIC BRAND", promotionalText = "No authorized destination", ctaLabel = "TEST ONLY")
                 "OFFER_INVALID_QR" -> OfferMetadata(brandName = "SYNTHETIC BRAND", promotionalText = "Invalid destination fixture", qrUrl = "javascript:alert(1)")
                 "OFFER_EXPIRED" -> OfferMetadata(brandName = "EXPIRED TEST BRAND", promotionalText = "This offer must not be shown", qrUrl = "https://example.invalid/expired")
-                else -> OfferMetadata(brandName = "SYNTHETIC TEST BRAND", promotionalText = "Synthetic offer message", offerTitle = "Synthetic offer", ctaLabel = "TEST LINK", qrUrl = if (qrEnabled) "https://example.invalid/offer" else null, authorizedDestinationId = if (customBoundMedia) "local-authorized-destination" else null)
+                else -> OfferMetadata(brandName = "SYNTHETIC TEST BRAND", promotionalText = "Try something made for you", offerTitle = "Find your next favourite", offerValue = "10% OFF", ctaLabel = "SCAN TO GET 10% OFF", qrUrl = if (qrEnabled) "https://theooro.com" else null, authorizedDestinationId = if (customBoundMedia) "local-authorized-destination" else null)
             }
             ManifestItem(
                 id = "render-test-${asset.name}", campaignId = "local-render-test", creativeId = "local-${asset.name}",

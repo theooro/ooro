@@ -36,6 +36,13 @@ data class OfferMetadata(
     val authorizedQrUrl: String? get() = normalizedWebUrl(qrUrl)
     /** Legacy offer UI may use a CTA URL; custom bound QR zones require authorizedQrUrl. */
     val validQrUrl: String? get() = authorizedQrUrl ?: normalizedWebUrl(ctaUrl)
+    /** Never encode OORO API/staging hosts as consumer destinations; prefer the approved campaign QR URL, then its CTA destination. */
+    val consumerQrUrl: String? get() = sequenceOf(qrUrl, ctaUrl)
+        .mapNotNull(::normalizedWebUrl)
+        .firstOrNull { value ->
+            val host = runCatching { URI(value).host?.lowercase() }.getOrNull()
+            host !in setOf("api.theooro.com", "api-staging.theooro.com", "staging.theooro.com")
+        }
     val hasOffer: Boolean get() = listOf(brandName, offerTitle, offerValue, offerSubtitle, ctaLabel).any { !it.isNullOrBlank() }
 }
 

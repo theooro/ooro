@@ -5,7 +5,7 @@ import { MBOX_PROFILE_ID, mboxProfile, profileOptions } from '../../apps/api/src
 export const layoutCatalogSchema = z.object({
   creatives: z.array(z.object({ id: z.string().uuid(), name: z.string(), type: z.enum(['IMAGE', 'VIDEO']), previewUrl: z.string().url().optional(), mimeType: z.string().nullable().optional(), campaign: z.object({ id: z.string().uuid(), name: z.string(), deliverySlot: z.string() }) })),
   unavailableCreatives: z.array(z.object({ id: z.string().uuid(), name: z.string(), reason: z.string() })).optional(),
-  destinations: z.array(z.object({ id: z.string().uuid(), ctaType: z.string(), campaign: z.object({ name: z.string() }) })),
+  destinations: z.array(z.object({ id: z.string().uuid(), ctaType: z.string(), consumerUrl: z.string().url().optional(), destinationUrl: z.string().url().optional(), brandName: z.string().nullable().optional(), offerTitle: z.string().nullable().optional(), promotionalText: z.string().nullable().optional(), offerSubtitle: z.string().nullable().optional(), offerValue: z.string().nullable().optional(), ctaLabel: z.string().nullable().optional(), campaign: z.object({ id: z.string().uuid().optional(), name: z.string() }), creative: z.object({ id: z.string().uuid(), name: z.string(), brandName: z.string().nullable().optional(), promotionalText: z.string().nullable().optional(), qrLabel: z.string().nullable().optional() }).optional() })),
 })
 export type LayoutCatalog = z.infer<typeof layoutCatalogSchema>
 

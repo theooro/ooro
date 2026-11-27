@@ -69,7 +69,9 @@ async function trackingUrlFor(displayId: string, campaignId: string, creativeId:
   let link = await prisma.campaignTrackingLink.findFirst({ where: { campaignId, creativeId, displayId, active: true, OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] }, orderBy: { createdAt: 'asc' } })
   if (!link) link = await prisma.campaignTrackingLink.create({ data: { token: trackingToken(), campaignId, creativeId, displayId, destinationUrl, ctaType } })
   else if (link.destinationUrl !== destinationUrl || link.ctaType !== ctaType) link = await prisma.campaignTrackingLink.update({ where: { id: link.id }, data: { destinationUrl, ctaType } })
-  return { id: link.id, url: `${config.trackingBaseUrl}/go/${link.token}` }
+  // Consumer QRs always enter on the canonical public OORO website. The API
+  // origin (including staging) must never become a consumer QR destination.
+  return { id: link.id, url: `https://theooro.com/go/${link.token}` }
 }
 
 export async function buildDisplayManifest(displayId: string, now = new Date()): Promise<{ manifest: DisplayManifest; reasons: ManifestReason[] }> {

@@ -75,6 +75,7 @@ import com.google.zxing.MultiFormatWriter
 import com.ooro.screenplayer.kiosk.OoroDeviceAdminReceiver
 import com.ooro.screenplayer.model.*
 import com.ooro.screenplayer.player.Media3CreativePlayer
+import com.ooro.screenplayer.player.BrandedQrOfferCard
 import com.ooro.screenplayer.player.CreativeScaleBehavior
 import com.ooro.screenplayer.player.creativeScaleBehavior
 import com.ooro.screenplayer.player.decodeCreativeImage
@@ -416,14 +417,14 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
                 }
             }
             Column(Modifier.weight((100 - adWidth).toFloat()).fillMaxHeight().clipToBounds()) {
-                Box(Modifier.weight(sidebarSplit.toFloat()).fillMaxWidth().clipToBounds().then(if (preview == null) Modifier else Modifier.semantics { contentDescription = "OoroV3Region:qr-offer" }.onSizeChanged { Log.i("OoroRenderTest", "region=qr-offer boundsPx=${it.width}x${it.height}") })) { OfferPanel(displayedOffer, Modifier.fillMaxSize(), verticalV3 = geometryVersion >= 3) }
+                Box(Modifier.weight(sidebarSplit.toFloat()).fillMaxWidth().clipToBounds().then(if (preview == null) Modifier else Modifier.semantics { contentDescription = "OoroV3Region:qr-offer" }.onSizeChanged { Log.i("OoroRenderTest", "region=qr-offer boundsPx=${it.width}x${it.height}") })) { OfferPanel(displayedOffer, Modifier.fillMaxSize()) }
                 Box(Modifier.weight((100 - sidebarSplit).toFloat()).fillMaxWidth().clipToBounds().then(if (preview == null) Modifier else Modifier.semantics { contentDescription = "OoroV3Region:navigation" }.onSizeChanged { Log.i("OoroRenderTest", "region=navigation boundsPx=${it.width}x${it.height}") })) { NavigationPanel(vm, preview, Modifier.fillMaxSize()) }
             }
         } else if (manifest.layout == DisplayLayout.SPLIT_50_25_25) Row(Modifier.fillMaxSize().clipToBounds()) {
             Box(Modifier.weight(2f).fillMaxHeight().clipToBounds().testTag("split-main")) { PrimaryAdRegion(vm, Modifier.fillMaxSize(), item, playbackOffset, preview, emptyPlaybackMessage) }
             Box(Modifier.weight(1f).fillMaxHeight().clipToBounds().testTag("split-navigation")) { NavigationPanel(vm, preview, Modifier.fillMaxSize()) }
             // This is a tall quarter-width column, not the legacy short horizontal offer strip.
-            Box(Modifier.weight(1f).fillMaxHeight().clipToBounds().testTag("split-offer")) { OfferPanel(displayedOffer, Modifier.fillMaxSize(), verticalV3 = true) }
+            Box(Modifier.weight(1f).fillMaxHeight().clipToBounds().testTag("split-offer")) { OfferPanel(displayedOffer, Modifier.fillMaxSize()) }
         } else PrimaryAdRegion(vm, Modifier.fillMaxSize().clipToBounds(), item, playbackOffset, preview, emptyPlaybackMessage)
     }
 }
@@ -472,7 +473,7 @@ internal fun locationPermissionStatus(granted: Boolean, fixAvailable: Boolean): 
             vm, Modifier.fillMaxSize(), content.item, playbackKey, preview,
             emptyMessage = "Content unavailable", recordProof = false, fitModeOverride = fit,
         )
-        is CustomWidgetContent.Offer -> OfferPanel(content.item, Modifier.fillMaxSize(), verticalV3 = true)
+        is CustomWidgetContent.Offer -> OfferPanel(content.item, Modifier.fillMaxSize())
         is CustomWidgetContent.Text -> Box(Modifier.fillMaxSize().background(Color.Transparent).padding(8.dp), contentAlignment = Alignment.Center) {
             Text(content.value, color = Color.White, fontSize = 20.sp, maxLines = 4, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         }
@@ -913,129 +914,8 @@ private fun distanceMeters(start: LatLng, end: LatLng): Double {
     return earthRadius * 2 * kotlin.math.atan2(kotlin.math.sqrt(a), kotlin.math.sqrt(1 - a))
 }
 
-@Composable private fun OfferPanel(item: ManifestItem?, modifier: Modifier, verticalV3: Boolean = false) {
-    if (verticalV3) V3OfferPanel(item, modifier) else LegacyOfferPanel(item, modifier)
-}
-
-@Composable private fun LegacyOfferPanel(item: ManifestItem?, modifier: Modifier) {
-    SideEffect { RuntimeDiagnostics.increment(RuntimeDiagnostics.Counter.OFFER_COMPOSITION) }
-    val offer = item?.offer ?: OfferMetadata()
-    val brand = offer.brandName?.trim()?.takeIf(String::isNotBlank)
-    val message = (offer.promotionalText ?: offer.offerTitle ?: offer.offerSubtitle)?.trim()?.takeIf(String::isNotBlank)
-    BoxWithConstraints(modifier.background(Color(0xFF20252B)).clipToBounds().semantics { contentDescription = "OoroOfferState:legacy" }.padding(horizontal = 10.dp, vertical = 6.dp)) {
-        val size = minOf(maxWidth * 0.46f, maxHeight * 0.88f)
-        val pixels = with(androidx.compose.ui.platform.LocalDensity.current) { size.roundToPx().coerceIn(64, 512) }
-        val destination = offer.validQrUrl
-        val bitmap by produceState<Bitmap?>(null, destination, pixels) {
-            value = if (destination == null) null else withContext(Dispatchers.IO) { qrBitmap(destination, pixels) }
-        }
-        val image = remember(bitmap) { bitmap?.asImageBitmap() }
-        Row(Modifier.fillMaxSize().clipToBounds(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(0.48f).padding(end = 8.dp), verticalArrangement = Arrangement.Center) {
-                if (message != null) Text(message, color = Yellow, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                if (brand != null) Text(brand, color = Color.White, fontSize = 14.sp, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                if (image != null && !offer.ctaLabel.isNullOrBlank()) Text(offer.ctaLabel!!.trim(), color = Color(0xFFB8C0C8), fontSize = 11.sp, maxLines = 2, modifier = Modifier.padding(top = 5.dp))
-                if (brand == null && message == null) Text("OORO", color = Yellow, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-            }
-            Box(Modifier.weight(0.52f).fillMaxHeight(), contentAlignment = Alignment.CenterEnd) {
-                if (image != null) Image(image, "Advertisement QR code", Modifier.size(size).background(Color.White).padding(5.dp), contentScale = ContentScale.Fit)
-            }
-        }
-    }
-}
-
-@Composable private fun V3OfferPanel(item: ManifestItem?, modifier: Modifier) {
-    SideEffect { RuntimeDiagnostics.increment(RuntimeDiagnostics.Counter.OFFER_COMPOSITION) }
-    val offer = item?.offer
-    val brandName = offer?.brandName?.trim()?.takeIf(String::isNotBlank)
-    val qrUrl = offer?.validQrUrl
-    // Brand content is shown only with a valid, server-supplied destination. No QR or offer is invented.
-    val hasAuthorizedOffer = item != null && brandName != null && qrUrl != null
-    val offerCopy = sequenceOf(offer?.promotionalText, offer?.offerTitle, offer?.offerSubtitle, offer?.offerValue)
-        .mapNotNull { it?.trim()?.takeIf(String::isNotBlank) }.firstOrNull()
-    BoxWithConstraints(
-        modifier.background(Color(0xFF101418)).clipToBounds().semantics {
-            contentDescription = if (hasAuthorizedOffer) "OoroOfferState:brand" else "OoroOfferState:fallback"
-        }
-    ) {
-        val compact = maxWidth < 200.dp || maxHeight < 300.dp
-        val contentPadding = if (compact) 7.dp else 10.dp
-        val density = androidx.compose.ui.platform.LocalDensity.current
-        val brandLine = if (compact) 18 else 22
-        val copyLine = if (compact) 14 else 18
-        val ctaLine = if (compact) 12 else 14
-        val copyLines = if (compact) 2 else 3
-        // Reserve the maximum text height (including font scaling) before sizing the QR.
-        // A fraction of panel height alone overflows short four-zone panels with long copy.
-        val textHeight = ((brandLine * 2 + (if (offerCopy != null) copyLine * copyLines else 0) + ctaLine * 2) * density.fontScale).dp
-        val gaps = (if (offerCopy != null) (if (compact) 3 else 5) else 0).dp + (if (compact) 9 else 15).dp
-        val qrSize = minOf(maxWidth - contentPadding * 2, maxHeight - contentPadding * 2 - textHeight - gaps).coerceAtLeast(0.dp)
-        val quietPadding = minOf(if (compact) 5.dp else 8.dp, qrSize / 8)
-        val qrPixels = with(density) { (qrSize - quietPadding * 2).roundToPx().coerceIn(1, 512) }
-        val qrState = produceState<Bitmap?>(null, if (hasAuthorizedOffer) qrUrl else null, qrPixels) {
-            value = null
-            if (hasAuthorizedOffer && qrUrl != null && qrPixels >= 64) value = withContext(Dispatchers.IO) { qrBitmap(qrUrl, qrPixels) }
-        }
-        val qr = qrState.value
-        val qrImage = remember(qr) { qr?.asImageBitmap() }
-        val showBrand = hasAuthorizedOffer
-        Column(
-            modifier = Modifier.fillMaxSize().clipToBounds().padding(contentPadding),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            if (showBrand) {
-                Text(
-                    brandName.orEmpty(), color = Yellow,
-                    fontSize = if (compact) 15.sp else 18.sp,
-                    fontWeight = FontWeight.Bold, maxLines = 2, lineHeight = brandLine.sp,
-                    modifier = Modifier.testTag("offer-brand"),
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                )
-                if (offerCopy != null) {
-                    Spacer(Modifier.height(if (compact) 3.dp else 5.dp))
-                    Text(
-                        offerCopy, color = Color.White,
-                        fontSize = if (compact) 11.sp else 14.sp,
-                        fontWeight = FontWeight.Medium, maxLines = copyLines, lineHeight = copyLine.sp,
-                        modifier = Modifier.testTag("offer-copy"),
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                    )
-                }
-                Spacer(Modifier.height(if (compact) 5.dp else 8.dp))
-                if (qrImage != null) {
-                    Image(
-                        bitmap = qrImage,
-                        contentDescription = "Brand offer QR code",
-                        modifier = Modifier.size(qrSize).testTag("offer-qr").background(Color.White).padding(quietPadding),
-                        contentScale = ContentScale.Fit,
-                        filterQuality = androidx.compose.ui.graphics.FilterQuality.None
-                    )
-                } else {
-                    Text("QR unavailable", color = Color(0xFFD7DDE3), fontSize = if (compact) 9.sp else 11.sp, modifier = Modifier.size(qrSize).background(Color.White), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                }
-                Spacer(Modifier.height(if (compact) 4.dp else 7.dp))
-                if (qrImage != null) Text(
-                    offer?.ctaLabel?.trim()?.takeIf(String::isNotBlank) ?: "SCAN FOR DETAILS",
-                    color = Color(0xFFD7DDE3), fontSize = if (compact) 9.sp else 11.sp,
-                    fontWeight = FontWeight.SemiBold, maxLines = 2, lineHeight = ctaLine.sp,
-                    modifier = Modifier.testTag("offer-cta"),
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                )
-            } else {
-                Text("OORO", color = Yellow, fontSize = if (compact) 22.sp else 28.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1)
-                Spacer(Modifier.height(if (compact) 5.dp else 9.dp))
-                Text("Advertise your business here", color = Color.White, fontSize = if (compact) 12.sp else 15.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                Spacer(Modifier.height(if (compact) 7.dp else 12.dp))
-                Text("+91 7981399132", color = Yellow, fontSize = if (compact) 14.sp else 18.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                Spacer(Modifier.height(if (compact) 2.dp else 4.dp))
-                Text("For advertisements", color = Color(0xFFD7DDE3), fontSize = if (compact) 10.sp else 12.sp, maxLines = 1)
-            }
-        }
-    }
+@Composable private fun OfferPanel(item: ManifestItem?, modifier: Modifier) {
+    BrandedQrOfferCard(item, modifier.fillMaxSize().clipToBounds())
 }
 
 private val qrBitmapCache = object : LruCache<String, Bitmap>(768) {

@@ -3,10 +3,12 @@
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import { aspectRatioWarning, creativePlacement, type PreviewLayout } from "@/lib/admin/creative-fit";
+import { BrandedQrOfferCard } from "@/components/consumer/branded-qr-offer-card";
+import type { ConsumerOfferFields } from "@/lib/consumer/offer-model";
 
-type Props = { file: File | null; layout: PreviewLayout; slot?: "MAIN" | "SPONSORED"; onLayoutChange: (layout: PreviewLayout) => void };
+type Props = { file: File | null; layout: PreviewLayout; slot?: "MAIN" | "SPONSORED"; offer?: ConsumerOfferFields; onLayoutChange: (layout: PreviewLayout) => void };
 
-export function CreativeFitPreview({ file, layout, slot = "MAIN", onLayoutChange }: Props) {
+export function CreativeFitPreview({ file, layout, slot = "MAIN", offer = {}, onLayoutChange }: Props) {
   const [url, setUrl] = useState<string | null>(null);
   const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null);
   const [videoPreviewError, setVideoPreviewError] = useState(false);
@@ -38,6 +40,7 @@ export function CreativeFitPreview({ file, layout, slot = "MAIN", onLayoutChange
       {layout === "FOUR_ZONE" && <><div className="absolute right-0 top-0 h-[32%] w-[33%] border-b border-l bg-[#20252b]"/><div className="absolute bottom-0 left-0 h-[12%] w-[67%] border-t bg-[#1c232a]"/><div className="absolute bottom-0 right-0 h-[68%] w-[33%] border-l border-t bg-[#121820]"/></>}
       {layout === "FOUR_ZONE_V3" && <><div className="absolute bottom-0 left-0 h-[15%] w-[80%] border-t bg-[#20252b]"/><div className="absolute right-0 top-0 h-1/2 w-[20%] border-b border-l bg-[#20252b]"/><div className="absolute bottom-0 right-0 h-1/2 w-[20%] border-l border-t bg-[#121820]"/></>}
       {layout === "SPLIT_50_25_25" && <><div className="absolute right-0 top-0 h-1/2 w-1/4 border-b border-l bg-[#121820]"/><div className="absolute bottom-0 right-0 h-1/2 w-1/4 border-l border-t bg-[#20252b]"/></>}
+      {(layout === "FOUR_ZONE" || layout === "FOUR_ZONE_V3" || layout === "SPLIT_50_25_25") && <div data-testid="preview-qr-offer-slot" className="absolute overflow-hidden" style={layout === "SPLIT_50_25_25" ? { left: "75%", top: 0, width: "25%", height: "50%" } : layout === "FOUR_ZONE_V3" ? { left: "80%", top: 0, width: "20%", height: "50%" } : { left: "67%", top: 0, width: "33%", height: "32%" }}><BrandedQrOfferCard offer={offer} previewOnly className="rounded-none border-0 p-1 sm:p-1"/></div>}
       <div className="absolute overflow-hidden bg-black" style={{ left: `${placement.x * 100}%`, top: `${placement.y * 100}%`, width: `${placement.width * 100}%`, height: `${placement.height * 100}%` }}>
         {file && url && file.type.startsWith("image/") && <Image src={url} alt="Creative preview with contain fit" fill unoptimized className="object-contain"/>}
         {file && url && file.type.startsWith("video/") && <video src={url} aria-label="Video creative preview with contain fit" autoPlay loop controls muted playsInline onError={() => setVideoPreviewError(true)} className="h-full w-full object-contain"/>}

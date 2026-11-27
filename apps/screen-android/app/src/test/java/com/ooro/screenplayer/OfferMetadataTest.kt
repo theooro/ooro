@@ -22,4 +22,20 @@ class OfferMetadataTest {
             OfferMetadata(qrUrl = "javascript:alert(1)", ctaUrl = "https://offers.example/cta").validQrUrl
         )
     }
+
+    @Test fun consumerQrPrefersConfiguredQrAndFallsBackToCampaignCtaNotTheStagingApi() {
+        assertEquals("https://theooro.com", OfferMetadata(
+            qrUrl = "https://api-staging.theooro.com/go/not-a-consumer-destination",
+            ctaUrl = "https://theooro.com",
+        ).consumerQrUrl)
+        assertEquals("https://theooro.com/go/signed-tracking-link", OfferMetadata(
+            qrUrl = "https://theooro.com/go/signed-tracking-link",
+            ctaUrl = "https://theooro.com",
+        ).consumerQrUrl)
+    }
+
+    @Test fun consumerQrRejectsStagingWebAndProductionApiHostsWhenNoCampaignDestinationExists() {
+        assertNull(OfferMetadata(qrUrl = "https://staging.theooro.com/go/signed-token").consumerQrUrl)
+        assertNull(OfferMetadata(qrUrl = "https://api.theooro.com/go/signed-token").consumerQrUrl)
+    }
 }
