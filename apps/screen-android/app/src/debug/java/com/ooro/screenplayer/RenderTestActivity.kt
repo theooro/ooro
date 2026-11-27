@@ -68,6 +68,14 @@ class RenderTestActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val fixtureWindowWidthPx = intent.getIntExtra("renderWindowWidthPx", 0)
+        val fixtureWindowHeightPx = intent.getIntExtra("renderWindowHeightPx", 0)
+        if (fixtureWindowWidthPx > 0 && fixtureWindowHeightPx > 0) {
+            // Exercise resolution fail-closed behavior in a bounded app window.
+            // Avoid `wm size`, which can disconnect this disposable emulator's
+            // display service during instrumentation and cannot model a real window.
+            window.setLayout(fixtureWindowWidthPx, fixtureWindowHeightPx)
+        }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).hide(WindowInsetsCompat.Type.systemBars())
@@ -80,7 +88,7 @@ class RenderTestActivity : ComponentActivity() {
                 RenderTestScreen(
                     previewDirectory.absolutePath,
                     initialAsset = intent.getStringExtra("asset"),
-                    initialLayout = intent.getStringExtra("layout") ?: if (scenario in setOf("TICKER_OVERFLOW", "V3_SPONSORED", "V3_EXPIRED_SPONSOR", "V1_LOCAL_V3", "LAYOUT_STUDIO_BOUND_MEDIA") || scenario.startsWith("OFFER_")) DisplayLayout.FOUR_ZONE.name else null,
+                    initialLayout = intent.getStringExtra("layout") ?: if (scenario in setOf("TICKER_OVERFLOW", "V3_SPONSORED", "V3_EXPIRED_SPONSOR", "V1_LOCAL_V3", "LAYOUT_STUDIO_BOUND_MEDIA", "MBOX_AD_QR_SPONSOR" ) || scenario.startsWith("OFFER_")) DisplayLayout.FOUR_ZONE.name else null,
                     controlsInitiallyVisible = intent.getBooleanExtra("controls", false),
                     initialMapEnabled = intent.getBooleanExtra("map", false),
                     initialTickerEnabled = intent.getBooleanExtra("ticker", scenario == "TICKER_OVERFLOW"),
@@ -185,13 +193,14 @@ private fun RenderTestScreen(
     val offerFallback = scenario == "OFFER_FALLBACK"
     val offerFixture = scenario.startsWith("OFFER_")
     val customBoundMedia = scenario == "LAYOUT_STUDIO_BOUND_MEDIA"
+    val mboxAdQrSponsor = scenario == "MBOX_AD_QR_SPONSOR"
     var layout by remember { mutableStateOf(DisplayLayout.entries.firstOrNull { it.name == initialLayout } ?: DisplayLayout.FULLSCREEN_AD) }
     val v3Sponsored = scenario == "V3_SPONSORED" || scenario == "V3_EXPIRED_SPONSOR"
     val localV3Presentation = scenario == "V1_LOCAL_V3"
     val controlsAllowed = !idleOnly
     var mapEnabled by remember { mutableStateOf(initialMapEnabled && !idleOnly) }
     var tickerEnabled by remember { mutableStateOf(initialTickerEnabled && !idleOnly) }
-    var qrEnabled by remember { mutableStateOf((initialQrEnabled || v3Sponsored || offerFixture || customBoundMedia) && !idleOnly) }
+    var qrEnabled by remember { mutableStateOf((initialQrEnabled || v3Sponsored || offerFixture || customBoundMedia || mboxAdQrSponsor) && !idleOnly) }
     var controlsVisible by remember { mutableStateOf(controlsInitiallyVisible && controlsAllowed) }
     val selectedAsset = assets[selected]
     val itemList = remember(assets, qrEnabled, scenario) {
@@ -225,7 +234,7 @@ private fun RenderTestScreen(
     } else "SYNTHETIC TICKER · OFFLINE TEST"
     val news = if ((tickerEnabled || localV3Presentation) && !idleOnly) NewsConfig(42, listOf(NewsAnnouncement("render-test-news", tickerText, 1))) else NewsConfig()
     val sponsorItemId = "render-test-sponsored-strip"
-    val sponsorItem = if (v3Sponsored || customBoundMedia) ManifestItem(
+    val sponsorItem = if (v3Sponsored || customBoundMedia || mboxAdQrSponsor) ManifestItem(
         id = sponsorItemId, campaignId = "local-sponsored-test", creativeId = "local-sponsored-image",
         type = CreativeType.IMAGE, url = "render-test://sponsor-strip.png", checksum = null,
         durationSeconds = 60, priority = 1, startAt = if (scenario == "V3_EXPIRED_SPONSOR") Instant.now().minusSeconds(60) else Instant.now().minusSeconds(1),
@@ -237,11 +246,12 @@ private fun RenderTestScreen(
     ) else null
     val manifest = DeviceManifest(
         version = 0, screenId = "LOCAL_RENDER_TEST", timezone = "UTC", items = if (idleOnly || offerFallback) emptyList() else itemList,
-        validUntil = Instant.now().plusSeconds(15 * 60), layout = layout, layoutConfig = LayoutConfig(67, 89, 32, 42),
+        validUntil = Instant.now().plusSeconds(15 * 60), layout = layout, layoutConfig = if (mboxAdQrSponsor) LayoutConfig(65, 100, 75, 42, 25, 1280, 720) else LayoutConfig(67, 89, 32, 42),
         news = if (v3Sponsored || offerFixture) NewsConfig() else news,
         layoutContractVersion = when (scenario) {
             "OFFER_V2_LEGACY" -> 2
             "OFFER_V1_LEGACY" -> 1
+            "MBOX_AD_QR_SPONSOR" -> 1
             else -> if (v3Sponsored || offerFixture || customBoundMedia) 3 else 1
         },
         sponsoredItem = sponsorItem,

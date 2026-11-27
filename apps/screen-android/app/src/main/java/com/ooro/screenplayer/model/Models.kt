@@ -9,7 +9,7 @@ import java.util.UUID
 enum class PlayerStatus { UNPAIRED, SYNCING, READY, PLAYING, OFFLINE, DEGRADED, ERROR }
 enum class CreativeType { IMAGE, VIDEO }
 enum class FitMode { FIT, FILL, CENTER_CROP }
-enum class DisplayLayout { FULLSCREEN_AD, FOUR_ZONE, AD_NAV_OFFER, SPLIT_50_25_25, FULLSCREEN_SERVICE, SPECIAL_CAMPAIGN }
+enum class DisplayLayout { FULLSCREEN_AD, FOUR_ZONE, AD_NAV_OFFER, SPLIT_50_25_25, MBOX_AD_QR_SPONSOR_V1, FULLSCREEN_SERVICE, SPECIAL_CAMPAIGN }
 enum class CtaType { WEBSITE, MENU, COUPON, WHATSAPP, CALL, DIRECTIONS, APP_DOWNLOAD, LEAD_FORM }
 
 data class OfferMetadata(
@@ -72,7 +72,7 @@ data class ManifestItem(val id: String, val campaignId: String, val creativeId: 
     /** Legacy day/hour fields are parsed for compatibility and never control delivery. */
     val hasAuthorizedDeliveryQuota: Boolean get() = deliveryQuota?.let { it.unlimited || (it.remainingPlays ?: 0) > 0 } == true
 }
-data class LayoutConfig(val primaryWidthPercent: Int = 67, val adHeightPercent: Int = 89, val qrHeightPercent: Int = 32, val newsScrollSpeed: Int = 42) {
+data class LayoutConfig(val primaryWidthPercent: Int = 67, val adHeightPercent: Int = 89, val qrHeightPercent: Int = 32, val newsScrollSpeed: Int = 42, val sponsoredHeightPercent: Int = 25, val minWidthPx: Int = 0, val minHeightPx: Int = 0) {
     val safePrimaryWidth: Int get() = primaryWidthPercent.coerceIn(55, 80)
     val safeAdHeight: Int get() = adHeightPercent.coerceIn(88, 92)
     val safeQrHeight: Int get() = qrHeightPercent.coerceIn(30, 35)

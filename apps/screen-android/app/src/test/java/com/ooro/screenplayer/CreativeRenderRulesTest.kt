@@ -63,6 +63,20 @@ class CreativeRenderRulesTest {
         assertEquals(0.85f, adRegionFraction(DisplayLayout.FOUR_ZONE, LayoutConfig(), 3).height, 0.0001f)
     }
 
+    @Test fun mboxAdQrSponsorV1UsesThreeZonesAndBlocksTargetsBelowMinimumScanResolution() {
+        val bounds = com.ooro.screenplayer.player.mboxAdQrSponsorGeometry(1280, 720)
+        assertEquals(832, bounds.mainAdWidth)
+        assertEquals(448, bounds.sidebarWidth)
+        assertEquals(540, bounds.qrHeight)
+        assertEquals(180, bounds.sponsoredHeight)
+        assertEquals(0.65f, adRegionFraction(DisplayLayout.MBOX_AD_QR_SPONSOR_V1, LayoutConfig()).width, 0f)
+        assertEquals(1f, adRegionFraction(DisplayLayout.MBOX_AD_QR_SPONSOR_V1, LayoutConfig()).height, 0f)
+        assertTrue(com.ooro.screenplayer.player.supportsMboxAdQrSponsorResolution(1280, 720))
+        assertTrue(com.ooro.screenplayer.player.supportsMboxAdQrSponsorResolution(1920, 1080))
+        assertTrue(!com.ooro.screenplayer.player.supportsMboxAdQrSponsorResolution(854, 480))
+        assertTrue(!com.ooro.screenplayer.player.supportsMboxAdQrSponsorResolution(1280, 600))
+    }
+
     @Test fun localV3PreferenceChangesGeometryOnlyForSupportedLayouts() {
         assertEquals(1, geometryContractVersion(1, DisplayLayout.FOUR_ZONE, PresentationPreference.AUTO_FROM_MANIFEST))
         assertEquals(3, geometryContractVersion(1, DisplayLayout.FOUR_ZONE, PresentationPreference.OORO_V3_PRESENTATION))

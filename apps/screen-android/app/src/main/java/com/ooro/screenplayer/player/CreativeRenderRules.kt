@@ -19,8 +19,15 @@ data class AdRegionFraction(val width: Float, val height: Float) {
 data class FittedContentBounds(val width: Int, val height: Int)
 data class Sidebar80Geometry(val adWidth: Int, val sidebarWidth: Int, val offerHeight: Int, val navigationHeight: Int, val mediaHeight: Int, val tickerHeight: Int)
 data class SponsoredLayoutGeometry(val mainAdWidth: Int, val sidebarWidth: Int, val mainAdHeight: Int, val sponsoredHeight: Int, val qrHeight: Int, val mapHeight: Int)
+data class MboxAdQrSponsorGeometry(val mainAdWidth: Int, val sidebarWidth: Int, val qrHeight: Int, val sponsoredHeight: Int)
 fun usesSidebar80(layout: DisplayLayout, version: Int) = version >= 2 && (layout == DisplayLayout.FOUR_ZONE || layout == DisplayLayout.AD_NAV_OFFER)
 fun usesSponsoredLayout(layout: DisplayLayout, version: Int) = version >= 3 && (layout == DisplayLayout.FOUR_ZONE || layout == DisplayLayout.AD_NAV_OFFER)
+fun supportsMboxAdQrSponsorResolution(widthPx: Int, heightPx: Int) = widthPx >= 1280 && heightPx >= 720
+fun mboxAdQrSponsorGeometry(width: Int, height: Int): MboxAdQrSponsorGeometry {
+    val main = (width * 0.65f).toInt()
+    val qr = (height * 0.75f).toInt()
+    return MboxAdQrSponsorGeometry(main, width - main, qr, height - qr)
+}
 fun shouldRenderNewsTicker(layout: DisplayLayout, version: Int) =
     layout in setOf(DisplayLayout.FOUR_ZONE, DisplayLayout.AD_NAV_OFFER) && !usesSponsoredLayout(layout, version)
 fun sponsoredLayoutGeometry(width: Int, height: Int): SponsoredLayoutGeometry {
@@ -48,6 +55,7 @@ fun fittedContentBounds(sourceWidth: Int, sourceHeight: Int, regionWidth: Int, r
 }
 
 fun adRegionFraction(layout: DisplayLayout, config: LayoutConfig, contractVersion: Int = 1): AdRegionFraction = when {
+    layout == DisplayLayout.MBOX_AD_QR_SPONSOR_V1 -> AdRegionFraction(0.65f, 1f)
     usesSponsoredLayout(layout, contractVersion) -> AdRegionFraction(0.8f, 0.85f)
     usesSidebar80(layout, contractVersion) -> AdRegionFraction(0.8f, config.safeAdHeight / 100f)
     layout == DisplayLayout.FOUR_ZONE || layout == DisplayLayout.AD_NAV_OFFER -> AdRegionFraction(config.safePrimaryWidth / 100f, config.safeAdHeight / 100f)

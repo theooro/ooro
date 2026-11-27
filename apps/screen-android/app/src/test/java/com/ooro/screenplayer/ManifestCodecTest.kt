@@ -18,6 +18,29 @@ class ManifestCodecTest {
         }
     }
 
+    @Test fun builtInMboxPresetContractSurvivesCacheRoundTripWhileLegacyLayoutsKeepDefaults() {
+        val body = """{"version":9,"screenId":"screen","timezone":"UTC","layout":{"type":"MBOX_AD_QR_SPONSOR_V1","contractVersion":1,"primaryWidthPercent":65,"adHeightPercent":100,"qrHeightPercent":75,"sponsoredHeightPercent":25,"minWidthPx":1280,"minHeightPx":720},"items":[],"sponsoredItem":{"id":"s","campaignId":"sc","creativeId":"sc","type":"IMAGE","url":"https://cdn.example/s.png","durationSeconds":10}}"""
+        val parsed = ManifestCodec.parse(body)
+        assertEquals(DisplayLayout.MBOX_AD_QR_SPONSOR_V1, parsed.layout)
+        assertEquals(1, parsed.layoutContractVersion)
+        assertEquals(65, parsed.layoutConfig.primaryWidthPercent)
+        assertEquals(100, parsed.layoutConfig.adHeightPercent)
+        assertEquals(75, parsed.layoutConfig.qrHeightPercent)
+        assertEquals(25, parsed.layoutConfig.sponsoredHeightPercent)
+        assertEquals(1280, parsed.layoutConfig.minWidthPx)
+        assertEquals(720, parsed.layoutConfig.minHeightPx)
+        assertEquals("s", parsed.sponsoredItem?.id)
+        val cached = ManifestCodec.parse(ManifestCodec.encode(parsed))
+        assertEquals(parsed.layout, cached.layout)
+        assertEquals(parsed.layoutConfig, cached.layoutConfig)
+        assertEquals("s", cached.sponsoredItem?.id)
+
+        val legacy = ManifestCodec.parse("""{"version":1,"screenId":"old","timezone":"UTC","layout":"FOUR_ZONE","items":[]}""")
+        assertEquals(DisplayLayout.FOUR_ZONE, legacy.layout)
+        assertEquals(0, legacy.layoutConfig.minWidthPx)
+        assertEquals(0, legacy.layoutConfig.minHeightPx)
+    }
+
     private val payload = """{"version":42,"screenId":"screen-1","timezone":"Asia/Kolkata","layout":{"type":"FOUR_ZONE","primaryWidthPercent":67,"adHeightPercent":86,"qrHeightPercent":47,"newsScrollSpeed":42},"news":{"scrollSpeed":42,"announcements":[{"id":"news-a","text":"Service update","priority":5}]},"items":[{"id":"item-a","campaignId":"campaign-a","creativeId":"creative-a","assetId":"asset-a","type":"IMAGE","url":"https://cdn.example/a.png","checksum":"aaa","durationSeconds":10,"priority":2,"playsPerLoop":1,"daysOfWeek":[1,2],"fitMode":"FIT","qrEnabled":true,"offer":{"brandName":"Brand A","promotionalText":"10% OFF","offerTitle":"Offer A","ctaUrl":"https://example.com/a","qrUrl":"https://theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF"}},{"id":"item-b","campaignId":"campaign-b","creativeId":"creative-b","assetId":"asset-b","type":"VIDEO","url":"https://cdn.example/b.mp4","checksum":"bbb","durationSeconds":15,"priority":1,"playsPerLoop":2,"qrEnabled":true,"offer":{"brandName":"Brand B","offerTitle":"Offer B","qrUrl":"https://theooro.com/go/bcdefghijklmnopqrstuvwxyzABCDEFG"}}]}"""
 
     @Test fun parsesImageVideoOfferAndQrAtomically() {
