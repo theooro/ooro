@@ -34,6 +34,9 @@ class OfferPanelScreenshotTest {
             "OFFER_MINIMAL_FIELDS" to true,
             "OFFER_MISSING_QR" to false,
             "OFFER_INVALID_QR" to false,
+            "OFFER_STALE_QR" to false,
+            "OFFER_DISABLED_QR" to false,
+            "OFFER_DISABLED_QR" to false,
             "OFFER_EXPIRED" to false,
             "OFFER_FALLBACK" to false
         )

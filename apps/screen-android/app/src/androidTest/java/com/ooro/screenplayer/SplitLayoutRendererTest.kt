@@ -37,6 +37,29 @@ class SplitLayoutRendererTest {
         capture("FULLSCREEN_AD", "OFFER_BRAND")
     }
 
+    @Test fun splitLayoutNeverInventsQrForDisabledMissingOrInvalidDestination() {
+        listOf("OFFER_DISABLED_QR", "OFFER_MISSING_QR", "OFFER_INVALID_QR", "OFFER_STALE_QR").forEach { scenario ->
+            captureWithoutQr(scenario)
+        }
+    }
+
+    private fun captureWithoutQr(scenario: String) {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        assertEquals(1280, device.displayWidth); assertEquals(720, device.displayHeight); assertEquals(0, device.displayRotation)
+        val intent = Intent(context, RenderTestActivity::class.java)
+            .putExtra("layout", "SPLIT_50_25_25").putExtra("scenario", scenario).putExtra("asset", "landscape")
+            .putExtra("controls", false).putExtra("map", false).putExtra("qr", true)
+        ActivityScenario.launch<RenderTestActivity>(intent).use {
+            compose.waitUntil(12_000) { compose.onAllNodesWithTag("offer-qr-error").fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithTag("offer-qr").assertDoesNotExist()
+            compose.onNodeWithTag("offer-qr-error").assertTextEquals("Offer link unavailable")
+            assertBounds("split-main", Rect(0f, 0f, 640f, 720f))
+            assertBounds("split-navigation", Rect(640f, 0f, 960f, 720f))
+            assertBounds("split-offer", Rect(960f, 0f, 1280f, 720f))
+        }
+    }
+
     private fun capture(layout: String, scenario: String) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
@@ -172,11 +195,11 @@ class SplitLayoutRendererTest {
     }
 
     private fun qrDestination(scenario: String): String = when (scenario) {
-        "OFFER_LONG_BRAND" -> "https://theooro.com/long-brand"
-        "OFFER_LONG_TITLE" -> "https://theooro.com/long-title"
-        "OFFER_LONG_CTA" -> "https://theooro.com/long-cta"
-        "OFFER_BRAND_ONLY" -> "https://theooro.com/brand-only"
-        else -> "https://theooro.com"
+        "OFFER_LONG_BRAND" -> "https://theooro.com/go/bcdefghijklmnopqrstuvwxyzABCDEFG"
+        "OFFER_LONG_TITLE" -> "https://theooro.com/go/cdefghijklmnopqrstuvwxyzABCDEFGH"
+        "OFFER_LONG_CTA" -> "https://theooro.com/go/defghijklmnopqrstuvwxyzABCDEFGHI"
+        "OFFER_BRAND_ONLY" -> "https://theooro.com/go/efghijklmnopqrstuvwxyzABCDEFGHIJ"
+        else -> "https://theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF"
     }
 
     private fun isOfferGreen(bitmap: Bitmap, bounds: Rect): Boolean {

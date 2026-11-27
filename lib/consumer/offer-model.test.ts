@@ -12,6 +12,7 @@ test("QR targets accept only canonical public OORO tracking URLs", () => {
   const valid = "https://theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF";
   assert.equal(canonicalConsumerQrUrl(valid), valid);
   assert.equal(canonicalConsumerQrUrl("https://api-staging.theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF"), null);
+  assert.equal(canonicalConsumerQrUrl("https://staging.theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF"), null);
   assert.equal(canonicalConsumerQrUrl("https://theooro.com.evil.test/go/abcdefghijklmnopqrstuvwxyzABCDEF"), null);
   assert.equal(canonicalConsumerQrUrl("https://theooro.com/go/not-a-token"), null);
 });

@@ -11,6 +11,10 @@ export type DeliveryQuota = { id: string; revision: number; remainingPlays: numb
 export type DisplayManifestItem = { id: string; campaignId: string; creativeId: string; assetId: string; type: string; url: string; checksum: string; durationSeconds: number; deliverySlot?: string | null; priority: number; startAt: string | null; endAt: string | null; deliveryQuota: DeliveryQuota; fitMode: string; qrEnabled: boolean; qrTargetUrl: string | null; qrLabel: string | null; qrVersion: number; offer: Record<string, unknown> }
 export type DisplayManifest = { manifestId: string; version: number; generatedAt: string; expiresAt: string; deliveryReasons: ManifestReason[]; layout: string | { type: string; contractVersion: number; primaryWidthPercent: number; adHeightPercent: number; qrHeightPercent: number; newsScrollSpeed: number }; layoutStudioContract?: Record<string, unknown> | null; news: { scrollSpeed: number; announcements: Array<{ id: string; text: string; priority: number }> }; items: DisplayManifestItem[]; sponsoredItem?: DisplayManifestItem | null }
 export type ManifestCampaignDiagnostic = { status: string; fundingStatus: string; quotaAuthorized: boolean; approvedCreativeCount: number; checksumVerifiedAssetCount: number }
+export function resolveQrConfiguration(input: { qrEnabled: boolean; qrTargetUrl?: unknown; legacyTarget?: unknown }) {
+  const target = input.qrEnabled ? input.qrTargetUrl ?? input.legacyTarget : null
+  return { enabled: input.qrEnabled, destination: input.qrEnabled ? safeDestination(target, false) : null }
+}
 export const MANIFEST_AUTHORIZATION_LEASE_MS = 15 * 60_000
 export const manifestValidUntil = (now: Date) => new Date(now.getTime() + MANIFEST_AUTHORIZATION_LEASE_MS)
 export function selectManifestDeliverySlots<T extends { campaignId: string; type: string; priority: number; id: string; deliverySlot?: string | null }>(items: T[], campaigns: Array<{ id: string; deliverySlot?: string | null }>, v3: boolean) {
@@ -93,9 +97,8 @@ export async function buildDisplayManifest(displayId: string, now = new Date()):
     const metadata = campaign.metadata && typeof campaign.metadata === 'object' && !Array.isArray(campaign.metadata) ? campaign.metadata as Record<string, unknown> : {}
     const offer = metadata.offer && typeof metadata.offer === 'object' && !Array.isArray(metadata.offer) ? metadata.offer as Record<string, unknown> : metadata
     const legacyOffer = metadata.offer && typeof metadata.offer === 'object' && !Array.isArray(metadata.offer) ? metadata.offer as Record<string, unknown> : metadata
-    const qrEnabled = creative.qrEnabled || Boolean(legacyOffer.ctaUrl ?? metadata.ctaUrl)
-    const qrTarget = creative.qrTargetUrl ?? legacyOffer.ctaUrl ?? metadata.ctaUrl
-    const trackingLink = qrEnabled ? await trackingUrlFor(displayId, campaign.id, creative.id, qrTarget, legacyOffer.ctaType ?? metadata.ctaType, now) : null
+    const qr = resolveQrConfiguration({ qrEnabled: creative.qrEnabled === true, qrTargetUrl: creative.qrTargetUrl, legacyTarget: legacyOffer.ctaUrl ?? metadata.ctaUrl })
+    const trackingLink = qr.destination ? await trackingUrlFor(displayId, campaign.id, creative.id, qr.destination, legacyOffer.ctaType ?? metadata.ctaType, now) : null
     const trackingUrl = trackingLink?.url ?? null
     const indiaDayStart = new Date(`${now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })}T00:00:00+05:30`)
     const scanCount = trackingUrl ? await prisma.qrScan.count({ where: { campaignId: campaign.id, creativeId: creative.id, displayId, occurredAt: { gte: indiaDayStart } } }) : null

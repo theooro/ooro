@@ -14,6 +14,7 @@ export type ConsumerOfferFields = {
   ctaLabel?: string | null;
   qrLabel?: string | null;
   qrUrl?: string | null;
+  qrEnabled?: boolean;
   consumerUrl?: string | null;
   state?: string;
 };
@@ -63,7 +64,7 @@ export function mapBrandedOffer(input: ConsumerOfferFields): BrandedOffer {
     supportingText,
     value,
     cta: text(input.ctaLabel, input.qrLabel) ?? (value ? "SCAN TO CLAIM OFFER" : "SCAN TO EXPLORE"),
-    consumerUrl: canonicalConsumerQrUrl(input.consumerUrl ?? input.qrUrl),
+    consumerUrl: input.qrEnabled === false ? null : canonicalConsumerQrUrl(input.consumerUrl ?? input.qrUrl),
     state: input.state ?? "ACTIVE",
   };
 }

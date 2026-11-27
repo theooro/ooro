@@ -66,13 +66,13 @@ class CustomLayoutContentBindingTest {
     }
 
     @Test fun `QR requires matching authorized destination metadata and verified active manifest content`() {
-        val offer = item("offer", "creative-offer", CreativeType.IMAGE, OfferMetadata(qrUrl = "https://track.example/go/x", authorizedDestinationId = "destination-1"))
+        val offer = item("offer", "creative-offer", CreativeType.IMAGE, OfferMetadata(qrUrl = "https://theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF", qrEnabled = true, authorizedDestinationId = "destination-1"))
         val withOffer = manifest.copy(items = manifest.items + offer)
         val resolved = resolveCustomWidgetContent(zone("QR_OFFER", "AUTHORIZED_DESTINATION", "destination-1"), withOffer, "screen-a", verified + "offer", main, now)
         assertEquals(CustomWidgetContent.Offer(offer), resolved)
         assertNull(resolved.proofSlot)
         assertTrue(resolveCustomWidgetContent(zone("QR_OFFER", "AUTHORIZED_DESTINATION", "destination-2"), withOffer, "screen-a", verified + "offer", main, now) is CustomWidgetContent.Fallback)
-        val ctaOnly = item("cta-only", "creative-cta", CreativeType.IMAGE, OfferMetadata(ctaUrl = "https://track.example/go/x", authorizedDestinationId = "destination-3"))
+        val ctaOnly = item("cta-only", "creative-cta", CreativeType.IMAGE, OfferMetadata(ctaUrl = "https://theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF", authorizedDestinationId = "destination-3"))
         assertTrue(resolveCustomWidgetContent(zone("QR_OFFER", "AUTHORIZED_DESTINATION", "destination-3"), withOffer.copy(items = withOffer.items + ctaOnly), "screen-a", verified + "cta-only", main, now) is CustomWidgetContent.Fallback)
     }
 

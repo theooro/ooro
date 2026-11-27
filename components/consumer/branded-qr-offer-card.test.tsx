@@ -16,3 +16,9 @@ test("shared card never makes the staging API a consumer CTA or QR destination",
   assert.equal(html.includes("api-staging.theooro.com"), false);
   assert.ok(html.includes("data-testid=\"offer-qr-unavailable\""));
 });
+
+test("an explicitly disabled campaign QR stays absent even if stale tracking data remains", () => {
+  const html = renderToStaticMarkup(React.createElement(BrandedQrOfferCard, { offer: { qrEnabled: false, consumerUrl: "https://theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF" } }));
+  assert.ok(html.includes("data-testid=\"offer-qr-unavailable\""));
+  assert.ok(!html.includes("data-testid=\"offer-qr\""));
+});

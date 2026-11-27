@@ -49,7 +49,7 @@ private val CardInk = Color(0xFF182A27)
 private val CardMuted = Color(0xFF50615C)
 private val CardPale = Color(0xFFF4F4E9)
 private val OfferGreen = Color(0xFF087B52)
-private const val MIN_QR_SYMBOL_PIXELS = 150
+private const val MIN_QR_SYMBOL_PIXELS = 160
 
 /** Compact, reusable offer composition for the existing QR offer zone. */
 @Composable

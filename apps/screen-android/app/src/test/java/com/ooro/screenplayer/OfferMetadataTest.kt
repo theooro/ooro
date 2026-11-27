@@ -6,36 +6,23 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class OfferMetadataTest {
-    @Test fun acceptsHttpAndHttpsDestinationsWithHost() {
-        assertEquals("https://offers.example/path", OfferMetadata(qrUrl = " https://offers.example/path ").validQrUrl)
-        assertEquals("http://offers.example", OfferMetadata(ctaUrl = "http://offers.example").validQrUrl)
+    private val validTrackingUrl = "https://theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF"
+
+    @Test fun acceptsOnlyEnabledCanonicalPublicTrackingQr() {
+        assertEquals(validTrackingUrl, OfferMetadata(qrUrl = " $validTrackingUrl ", qrEnabled = true).consumerQrUrl)
+        assertNull(OfferMetadata(qrUrl = validTrackingUrl, qrEnabled = false).consumerQrUrl)
     }
 
-    @Test fun rejectsMalformedOrNonWebDestinations() {
-        listOf("javascript:alert(1)", "https://", "https:///path", "https://user:pass@example.com", "ftp://offers.example", "not a url")
-            .forEach { assertNull("accepted $it", OfferMetadata(qrUrl = it).validQrUrl) }
+    @Test fun missingDisabledAndInvalidQrNeverFallsBackToCta() {
+        assertNull(OfferMetadata(ctaUrl = validTrackingUrl).consumerQrUrl)
+        assertNull(OfferMetadata(qrUrl = validTrackingUrl).consumerQrUrl)
+        assertNull(OfferMetadata(qrUrl = validTrackingUrl, qrEnabled = false, ctaUrl = validTrackingUrl).consumerQrUrl)
+        assertNull(OfferMetadata(qrUrl = "javascript:alert(1)", qrEnabled = true, ctaUrl = validTrackingUrl).consumerQrUrl)
+        assertNull(OfferMetadata(qrUrl = "https://merchant.example/offer", qrEnabled = true).consumerQrUrl)
     }
 
-    @Test fun fallsBackToValidCtaWhenQrDestinationIsInvalid() {
-        assertEquals(
-            "https://offers.example/cta",
-            OfferMetadata(qrUrl = "javascript:alert(1)", ctaUrl = "https://offers.example/cta").validQrUrl
-        )
-    }
-
-    @Test fun consumerQrPrefersConfiguredQrAndFallsBackToCampaignCtaNotTheStagingApi() {
-        assertEquals("https://theooro.com", OfferMetadata(
-            qrUrl = "https://api-staging.theooro.com/go/not-a-consumer-destination",
-            ctaUrl = "https://theooro.com",
-        ).consumerQrUrl)
-        assertEquals("https://theooro.com/go/signed-tracking-link", OfferMetadata(
-            qrUrl = "https://theooro.com/go/signed-tracking-link",
-            ctaUrl = "https://theooro.com",
-        ).consumerQrUrl)
-    }
-
-    @Test fun consumerQrRejectsStagingWebAndProductionApiHostsWhenNoCampaignDestinationExists() {
-        assertNull(OfferMetadata(qrUrl = "https://staging.theooro.com/go/signed-token").consumerQrUrl)
-        assertNull(OfferMetadata(qrUrl = "https://api.theooro.com/go/signed-token").consumerQrUrl)
+    @Test fun apiAndStagingDestinationsAreNeverQrPayloads() {
+        listOf("https://api.theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF", "https://api-staging.theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF", "https://staging.theooro.com/go/abcdefghijklmnopqrstuvwxyzABCDEF")
+            .forEach { assertNull("accepted forbidden QR destination", OfferMetadata(qrUrl = it, qrEnabled = true).consumerQrUrl) }
     }
 }

@@ -785,7 +785,7 @@ private fun creativeDuration(item: ManifestItem) = item.durationSeconds * 1000L
     if (styleUri == null) {
         LaunchedEffect(Unit) { onMapHealth(false, "Map provider is not configured") }
         Box(modifier.background(Color(0xFF263238)), contentAlignment = Alignment.Center) {
-            Text("Map unavailable · ads continue", color = Color.LightGray, fontSize = 13.sp)
+            Text("Map unavailable · configure map style", color = Color.LightGray, fontSize = 13.sp)
         }
         return
     }
